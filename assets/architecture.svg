@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 740">
+  <style>text{font-family:Helvetica,Arial,sans-serif}</style>
+  <defs>
+    <marker id="ab" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L10,3.5 L0,7 z" fill="#2563eb"/></marker>
+    <marker id="ap" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L10,3.5 L0,7 z" fill="#7c3aed"/></marker>
+    <marker id="ag" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L10,3.5 L0,7 z" fill="#059669"/></marker>
+    <marker id="agr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L10,3.5 L0,7 z" fill="#6b7280"/></marker>
+  </defs>
+  <rect width="960" height="740" fill="#ffffff"/>
+  <text x="40" y="34" font-size="18" font-weight="bold" fill="#111827">chamfer - codegen with a deterministic finish line</text>
+  <rect x="628" y="48" width="292" height="96" rx="6" fill="#f9fafb" stroke="#e5e7eb"/>
+  <rect x="642" y="60" width="14" height="14" fill="#fff7ed" stroke="#ea580c"/>
+  <text x="664" y="72" font-size="12" fill="#374151">non-deterministic (LLM synthesizes)</text>
+  <rect x="642" y="84" width="14" height="14" fill="#eff6ff" stroke="#2563eb"/>
+  <text x="664" y="96" font-size="12" fill="#374151">deterministic (measured, gated)</text>
+  <line x1="642" y1="122" x2="656" y2="122" stroke="#7c3aed" stroke-width="2"/>
+  <text x="664" y="126" font-size="12" fill="#374151">repair loop (measured failures)</text>
+  <rect x="40" y="66" width="150" height="56" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="115" y="90" font-size="14" font-weight="bold" fill="#1e3a8a" text-anchor="middle">brief.yaml</text>
+  <text x="115" y="108" font-size="11" fill="#3b82f6" text-anchor="middle">or a bare prompt</text>
+  <rect x="250" y="56" width="330" height="76" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="262" y="74" font-size="13" font-weight="bold" fill="#9a3412">Enrichment (--enrich, optional)</text>
+  <rect x="262" y="84" width="94" height="34" rx="6" fill="#ffffff" stroke="#ea580c"/>
+  <text x="309" y="105" font-size="11" fill="#9a3412" text-anchor="middle">LLM proposes</text>
+  <rect x="368" y="84" width="88" height="34" rx="6" fill="#ffffff" stroke="#2563eb"/>
+  <text x="412" y="105" font-size="11" fill="#1e3a8a" text-anchor="middle">schema gate</text>
+  <rect x="468" y="84" width="98" height="34" rx="6" fill="#ffffff" stroke="#2563eb"/>
+  <text x="517" y="105" font-size="11" fill="#1e3a8a" text-anchor="middle">human approves</text>
+  <line x1="356" y1="101" x2="366" y2="101" stroke="#6b7280" stroke-width="1"/>
+  <line x1="456" y1="101" x2="466" y2="101" stroke="#6b7280" stroke-width="1"/>
+  <line x1="190" y1="94" x2="248" y2="94" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <path d="M 415,132 L 415,188" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#ab)"/>
+  <rect x="424" y="148" width="176" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="430" y="161" font-size="11" fill="#374151">every named part measurable</text>
+  <rect x="40" y="192" width="880" height="330" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="56" y="216" font-size="14" font-weight="bold" fill="#1e3a8a">CodegenExecutor - outer rounds 1..N (deterministic shell)</text>
+  <rect x="64" y="232" width="410" height="240" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="78" y="254" font-size="13" font-weight="bold" fill="#9a3412">AgentLoop - inner turns 1..M</text>
+  <text x="78" y="270" font-size="11" fill="#c2410c">the LLM free-writes adsk Python; one tool call per turn</text>
+  <rect x="84" y="286" width="180" height="52" rx="6" fill="#ffffff" stroke="#ea580c"/>
+  <text x="174" y="306" font-size="12" font-weight="bold" fill="#9a3412" text-anchor="middle">fusion_script</text>
+  <text x="174" y="322" font-size="10" fill="#c2410c" text-anchor="middle">critical - human-gated</text>
+  <rect x="278" y="286" width="180" height="52" rx="6" fill="#ffffff" stroke="#ea580c"/>
+  <text x="368" y="306" font-size="12" font-weight="bold" fill="#9a3412" text-anchor="middle">fusion_api_docs</text>
+  <text x="368" y="322" font-size="10" fill="#c2410c" text-anchor="middle">real signatures, on demand</text>
+  <rect x="84" y="352" width="180" height="52" rx="6" fill="#ffffff" stroke="#ea580c"/>
+  <text x="174" y="372" font-size="12" font-weight="bold" fill="#9a3412" text-anchor="middle">fusion_measure</text>
+  <text x="174" y="388" font-size="10" fill="#c2410c" text-anchor="middle">kernel ground truth</text>
+  <rect x="278" y="352" width="180" height="52" rx="6" fill="#ffffff" stroke="#ea580c"/>
+  <text x="368" y="372" font-size="12" font-weight="bold" fill="#9a3412" text-anchor="middle">read + skills</text>
+  <text x="368" y="388" font-size="10" fill="#c2410c" text-anchor="middle">fusion-mcp-usage discipline</text>
+  <text x="78" y="440" font-size="10" fill="#c2410c">repair signals: full tracebacks (code), measurements (design)</text>
+  <rect x="520" y="262" width="170" height="70" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="605" y="288" font-size="13" font-weight="bold" fill="#1e3a8a" text-anchor="middle">atomic probe</text>
+  <text x="605" y="306" font-size="10" fill="#3b82f6" text-anchor="middle">boxes - volumes - cavities</text>
+  <text x="605" y="320" font-size="10" fill="#3b82f6" text-anchor="middle">one script, one snapshot</text>
+  <rect x="732" y="262" width="164" height="70" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="814" y="288" font-size="13" font-weight="bold" fill="#1e3a8a" text-anchor="middle">run_checks</text>
+  <text x="814" y="306" font-size="10" fill="#3b82f6" text-anchor="middle">acceptance contract vs</text>
+  <text x="814" y="320" font-size="10" fill="#3b82f6" text-anchor="middle">measured snapshot</text>
+  <line x1="474" y1="297" x2="518" y2="297" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <rect x="466" y="274" width="60" height="16" fill="#eff6ff" opacity="0.95"/>
+  <text x="496" y="286" font-size="10" fill="#374151" text-anchor="middle">done</text>
+  <line x1="690" y1="297" x2="730" y2="297" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <rect x="762" y="430" width="106" height="44" rx="8" fill="#dcfce7" stroke="#059669" stroke-width="1.5"/>
+  <text x="815" y="457" font-size="14" font-weight="bold" fill="#065f46" text-anchor="middle">PASS</text>
+  <line x1="843" y1="332" x2="843" y2="428" stroke="#059669" stroke-width="2" marker-end="url(#ag)"/>
+  <rect x="850" y="368" width="44" height="16" fill="#eff6ff" opacity="0.95"/>
+  <text x="872" y="380" font-size="10" fill="#065f46" text-anchor="middle">all ok</text>
+  <path d="M 748,332 L 748,498 L 276,498 L 276,474" stroke="#7c3aed" stroke-width="2" fill="none" marker-end="url(#ap)"/>
+  <rect x="380" y="489" width="260" height="18" fill="#eff6ff" opacity="0.95"/>
+  <text x="510" y="502" font-size="11" fill="#5b21b6" text-anchor="middle">measured failures + coordinates = round N+1</text>
+  <path d="M 350,522 L 350,566" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#ab)"/>
+  <rect x="358" y="534" width="130" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="364" y="547" font-size="11" fill="#374151">scripts + probe (MCP)</text>
+  <rect x="250" y="568" width="210" height="60" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="355" y="593" font-size="13" font-weight="bold" fill="#1e3a8a" text-anchor="middle">FusionMcpBackend</text>
+  <text x="355" y="611" font-size="10" fill="#3b82f6" text-anchor="middle">session handshake - envelopes - retry</text>
+  <line x1="460" y1="598" x2="616" y2="598" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <rect x="500" y="578" width="78" height="16" fill="#ffffff" opacity="0.95"/>
+  <text x="539" y="590" font-size="10" fill="#374151" text-anchor="middle">MCP / HTTP</text>
+  <rect x="620" y="568" width="210" height="60" rx="8" fill="#1e3a8a"/>
+  <text x="725" y="593" font-size="13" font-weight="bold" fill="#ffffff" text-anchor="middle">Autodesk Fusion</text>
+  <text x="725" y="611" font-size="10" fill="#bfdbfe" text-anchor="middle">native, editable geometry</text>
+  <path d="M 460,614 L 540,614 L 540,682 L 616,682" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4,2" fill="none" marker-end="url(#agr)"/>
+  <rect x="620" y="658" width="210" height="48" rx="8" fill="#ffffff" stroke="#6b7280" stroke-dasharray="4,2"/>
+  <text x="725" y="678" font-size="12" font-weight="bold" fill="#374151" text-anchor="middle">mcp_sim</text>
+  <text x="725" y="694" font-size="10" fill="#6b7280" text-anchor="middle">offline stand-in (dev + tests)</text>
+</svg>

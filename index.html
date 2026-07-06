@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chamfer — type what you want, get a verified CAD part</title>
+<meta name="description" content="A small, plain-Python CAD agent harness: an LLM drives an external CAD MCP server to build a part from a prompt, and a deterministic kernel verifier decides PASS." />
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f6f7f9; --ink: #1a1d21; --muted: #5b6470;
+    --accent: #ea580c; --accent2: #2563eb; --ok: #059669; --line: #e4e7ec;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.6; }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+  header { padding: 72px 0 40px; text-align: center; }
+  .logo { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: .18em;
+          text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: clamp(30px, 6vw, 52px); line-height: 1.1; margin: 18px 0 10px; letter-spacing: -.02em; }
+  h1 .g { background: linear-gradient(90deg, var(--accent), #f59e0b); -webkit-background-clip: text;
+          background-clip: text; color: transparent; }
+  .sub { color: var(--muted); font-size: clamp(16px, 2.4vw, 20px); max-width: 640px; margin: 0 auto; }
+  .cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 11px 20px; border-radius: 10px; font-weight: 600; font-size: 15px; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.ghost { border: 1px solid var(--line); color: var(--ink); background: #fff; }
+  .btn:hover { text-decoration: none; opacity: .92; }
+  figure { margin: 40px 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 14px; border: 1px solid var(--line);
+               box-shadow: 0 1px 3px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06); }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  section { padding: 24px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 22px; margin: 8px 0 16px; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+        padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 14px; color: #24292f; }
+  pre .c { color: var(--muted); }
+  code { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-family: var(--mono); font-size: .92em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .pass { color: var(--ok); font-weight: 700; }
+  footer { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0 60px; }
+  footer p { margin: 6px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">chamfer</div>
+    <h1>Type what you want.<br /><span class="g">Get a verified CAD part.</span></h1>
+    <p class="sub">A small, plain-Python agent harness. The LLM drives an external CAD MCP
+      server to build a part from your prompt — then a deterministic kernel verifier decides
+      <span class="pass">PASS</span>, never the model's own word.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/SmartAI/Chamfer">View on GitHub</a>
+      <a class="btn ghost" href="https://pypi.org/project/chamfer-cad/">Install from PyPI</a>
+    </div>
+  </header>
+
+  <figure>
+    <img src="assets/hero.gif" alt="The agent building a part step by step, measuring its own work and self-correcting" />
+    <figcaption>One real run, replayed frame by frame — the agent builds, measures its own geometry, catches mistakes, and rebuilds before the independent verifier passes it. <em>(From an earlier Fusion-backed version; the current harness targets an external build123d MCP server.)</em></figcaption>
+  </figure>
+
+  <section>
+    <h2>Install &amp; run</h2>
+    <pre><span class="c"># install the CLI (the command is `chamfer`)</span>
+uv tool install chamfer-cad     <span class="c"># or: pip install chamfer-cad</span>
+
+<span class="c"># build a part from a prompt (needs a provider key in your env)</span>
+chamfer run "a 2 L electric kettle with a rounded rim" --provider anthropic
+
+<span class="c"># deliver the verified STEP to a path of your choice</span>
+chamfer run "a desk lamp" --provider openai -o out/lamp.step</pre>
+    <p style="color:var(--muted);font-size:14px">On first run chamfer seeds <code>~/.chamfer</code> with default skills and an
+      MCP config (build123d). Drop a <code>CHAMFER.md</code> or <code>.chamfer/skills/</code> in your project to extend it.</p>
+  </section>
+
+  <section>
+    <h2>Why it's different</h2>
+    <div class="grid">
+      <div class="card"><h3>Measured, not claimed</h3><p>After the agent says "done", a fixed kernel probe re-measures every solid and grades the checklist itself. No self-reported success.</p></div>
+      <div class="card"><h3>Plain Python, no framework</h3><p>The whole loop — agent, tools, verifier — reads top to bottom. Flat <code>src/*.py</code>, no magic.</p></div>
+      <div class="card"><h3>CAD is external</h3><p>Capabilities come from an MCP server + skills, not baked in. The harness itself is CAD-agnostic.</p></div>
+      <div class="card"><h3>Any LLM</h3><p>Anthropic, OpenAI, OpenRouter, or the Claude Code / Codex CLIs — one plain-text protocol.</p></div>
+    </div>
+  </section>
+
+  <figure>
+    <img src="assets/architecture.svg" alt="Chamfer architecture: agent loop over an MCP server, with a deterministic verifier deciding PASS" />
+    <figcaption>Where determinism lives: the LLM writes CAD freely; fixed code decides what is true.</figcaption>
+  </figure>
+
+  <footer>
+    <p><a href="https://github.com/SmartAI/Chamfer">github.com/SmartAI/Chamfer</a> · <a href="https://pypi.org/project/chamfer-cad/">pypi.org/project/chamfer-cad</a> · Apache-2.0</p>
+    <p>An independent open-source project — not affiliated with, endorsed by, or sponsored by Autodesk, Inc.</p>
+  </footer>
+</div>
+</body>
+</html>
