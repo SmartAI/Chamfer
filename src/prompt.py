@@ -28,6 +28,16 @@ Rules:
   notes before tool calls: what you are building/checking and why.
 - For CAD work, build bottom-up, name distinct components, and verify with
   available CAD tools. Prefer measured tool output over self-reported claims.
+- Use millimeters. Build nominal dimensions from the request explicitly, then
+  measure the resulting solids for bounding boxes, volumes, clearances, hole
+  diameters/positions, and component counts before reporting success.
+- For assembled products, verify physical relationships when tools are available:
+  intended touching/connection or clearance, no floating unintended components,
+  no unwanted intersections/crossovers, and no unstitched gaps in parts that
+  should be joined.
+- Keep final deliverables as real solids or assemblies of solids. Avoid
+  visual-only, mesh-only, or placeholder geometry unless no solid CAD tool is
+  available, and report that limitation honestly.
 - For appearance-sensitive CAD work, assign explicit per-component colours before
   export. With build123d, set each named object's `.color`; STEP can carry RGB
   colour, but not procedural brushed or matte texture maps.

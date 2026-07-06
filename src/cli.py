@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 from agent import AgentSession
 from evidence import EvidenceLedger
@@ -35,7 +37,7 @@ from prompt import build_system_prompt
 from resources import ProjectInstruction, ResourceLoader, Sanitizer
 from tools import build_local_tool_registry
 from verify.tool import register_verify_tools
-from workflow import WorkflowContext, text_to_cad_workflow
+from workflow import StageResult, WorkflowContext, text_to_cad_workflow
 
 
 def default_runtime_root() -> Path:
@@ -96,7 +98,19 @@ def main(argv: list[str] | None = None) -> int:
     # Deprecated alias for --model.
     run.add_argument("--codex-model", default=None, help=argparse.SUPPRESS)
     run.add_argument("--llm-timeout", type=float, default=900.0)
-    run.add_argument("--max-turns", type=int, default=8)
+    run.add_argument("--max-turns", type=int, default=50)
+    run.add_argument(
+        "--verbose",
+        nargs="?",
+        const=True,
+        default=True,
+        type=_parse_bool,
+        metavar="{true,false}",
+        help=(
+            "print user-facing progress and summary (default: true); "
+            "pass --verbose false or --verbose 0 for quiet stdout"
+        ),
+    )
     run.add_argument("--skills-dir", action="append", default=[])
     sandbox_group = run.add_mutually_exclusive_group()
     sandbox_group.add_argument(
@@ -126,12 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         llm = _make_llm(args)
     except LLMError as e:
-        print(f"error: {e}", file=sys.stderr)
+        _print_error(args, e)
         return 2
 
     out_root = Path(args.out).expanduser() if args.out else default_runtime_root()
-    if not args.sandbox:
-        print("note: sandbox disabled (--no-sandbox is the current default)", file=sys.stderr)
     evidence = EvidenceLedger(out_root / "evidence.jsonl")
     tools = build_local_tool_registry(
         ActionPolicy.auto(),
@@ -148,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         register_verify_tools(tools)
     except Exception as e:
-        print(f"error: MCP configuration failed: {e}", file=sys.stderr)
+        _print_error(args, f"MCP configuration failed: {e}")
         return 2
     skill_dirs = (
         *default_skill_dirs(Path.cwd()),
@@ -167,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
         cwd=str(Path.cwd()),
         workflow_name="text_to_cad",
     )
+    if args.verbose:
+        _print_mcp_status(mcp_servers)
+    reporter = CliRunReporter() if args.verbose else None
     agent_session = AgentSession.create(
         out_root=out_root,
         task=args.task,
@@ -175,27 +190,200 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=system_prompt,
         mode="workflow",
         max_turns=args.max_turns,
-        echo=lambda text: print(text, flush=True),
     )
     results = text_to_cad_workflow(tools).run(WorkflowContext(
         task=args.task,
         agent_session=agent_session,
         tools=tools,
+        reporter=reporter,
     ))
     ok = all(result.ok for result in results)
+    delivered: list[Path] | None = None
+    delivered_outputs: list[Path] | None = None
     if ok and args.output:
         try:
-            dest = _deliver_output(agent_session.workspace, args.output)
+            delivered = _deliver_output(agent_session.workspace, args.output)
         except LLMError as e:
-            print(f"error: {e}", file=sys.stderr)
+            _print_error(args, e)
             return 1
-        print(f"output: {dest}")
-    print(f"{'DONE' if ok else 'FAILED'}: {agent_session.workspace.dir}")
+    elif ok:
+        try:
+            delivered_outputs = _deliver_default_outputs(agent_session.workspace, Path.cwd())
+        except LLMError as e:
+            _print_error(args, e)
+            return 1
+    if args.verbose:
+        _print_run_summary(
+            ok=ok,
+            results=results,
+            workspace=agent_session.workspace,
+            delivered=delivered,
+            delivered_outputs=delivered_outputs,
+        )
     return 0 if ok else 1
 
 
-def _deliver_output(workspace, output: str) -> Path:
-    """Copy the run's final CAD artifact to a user-chosen path, creating dirs."""
+def _parse_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true/false or 1/0")
+
+
+def _print_error(args, error: object) -> None:
+    if args.verbose:
+        print(f"error: {error}", file=sys.stderr)
+
+
+class CliRunReporter:
+    _labels: ClassVar[dict[str, str]] = {
+        "requirements": "Capturing requirements",
+        "plan": "Planning workflow",
+        "develop": "Building CAD",
+        "verify": "Verifying output",
+        "output": "Preparing summary",
+    }
+
+    def stage_start(self, name: str) -> None:
+        print(f"{self._label(name)}...", flush=True)
+
+    def stage_end(self, result: StageResult) -> None:
+        status = "OK" if result.ok else "FAILED"
+        print(f"{self._label(result.name)}: {status}", flush=True)
+
+    def _label(self, name: str) -> str:
+        return self._labels.get(name, name.replace("_", " ").title())
+
+
+def _print_mcp_status(servers: list[McpServerConfig]) -> None:
+    if not servers:
+        return
+    names = ", ".join(server.name for server in servers)
+    print(f"Using MCP: {names}", flush=True)
+
+
+def _print_run_summary(
+    *,
+    ok: bool,
+    results: list[StageResult],
+    workspace,
+    delivered: list[Path] | None,
+    delivered_outputs: list[Path] | None,
+) -> None:
+    if ok:
+        print("DONE")
+        if delivered is not None:
+            output_paths = delivered
+        elif delivered_outputs is not None:
+            output_paths = delivered_outputs
+        else:
+            output_paths = _generated_output_paths(workspace)
+        summary = _success_summary(results, workspace, output_paths)
+        if summary:
+            print("Summary:")
+            print(summary)
+        if output_paths:
+            print("Output:")
+            for path in output_paths:
+                print(f"  {path}")
+        else:
+            print("Output: no CAD file was produced")
+        verification = _verification_status(results)
+        if verification:
+            print(f"Verification: {verification}")
+    else:
+        failure = next((result for result in results if not result.ok), None)
+        reason = _user_failure_detail(failure.detail if failure else "")
+        print(f"FAILED: {reason}")
+
+
+def _generated_output_paths(workspace) -> list[Path]:
+    paths: list[Path] = []
+    for entry in workspace.manifest().get("generated_files", []):
+        if not isinstance(entry, dict) or not entry.get("path"):
+            continue
+        paths.append(_manifest_path(workspace, str(entry["path"])))
+    return paths
+
+
+def _success_summary(
+    results: list[StageResult],
+    workspace,
+    output_paths: list[Path],
+) -> str:
+    for result in results:
+        if result.name == "develop" and result.ok:
+            return _rewrite_summary_paths(
+                _user_summary(result.detail),
+                workspace,
+                output_paths,
+            )
+    return ""
+
+
+def _verification_status(results: list[StageResult]) -> str | None:
+    for result in results:
+        if result.name == "verify":
+            if "skipped" in result.detail.lower():
+                return result.detail
+            return "PASS" if result.ok else "FAILED"
+    return None
+
+
+def _user_summary(detail: str) -> str:
+    text = detail.strip()
+    if not text or "```tool_call" in text:
+        return ""
+    return text
+
+
+def _user_failure_detail(detail: str) -> str:
+    text = " ".join(detail.strip().split())
+    if not text:
+        return "The workflow stopped before producing a completed CAD output."
+    lowered = text.lower()
+    if "max turns" in lowered:
+        return (
+            "Agent reached max turns before completing the CAD workflow. "
+            "Try increasing --max-turns or simplifying the request."
+        )
+    if "```tool_call" in text:
+        return "The agent produced an invalid internal tool request before completing the CAD workflow."
+    if len(text) > 300:
+        return text[:297].rstrip() + "..."
+    return text
+
+
+def _rewrite_summary_paths(summary: str, workspace, output_paths: list[Path]) -> str:
+    if not summary or not output_paths:
+        return summary
+    generated = _generated_output_paths(workspace)
+    if not generated:
+        return summary
+    replacements: dict[str, str] = {}
+    if len(generated) == len(output_paths):
+        replacements = {
+            str(src): str(dest)
+            for src, dest in zip(generated, output_paths, strict=True)
+            if src != dest
+        }
+    elif len(output_paths) == 1:
+        replacements = {
+            str(src): str(output_paths[0])
+            for src in generated
+            if src != output_paths[0]
+        }
+    for src, dest in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+        summary = summary.replace(src, dest)
+    return summary
+
+
+def _deliver_output(workspace, output: str) -> list[Path]:
+    """Copy generated CAD artifact(s) to a user-chosen file or directory."""
     manifest = workspace.manifest()
     generated = [
         entry for entry in manifest.get("generated_files", [])
@@ -204,6 +392,11 @@ def _deliver_output(workspace, output: str) -> Path:
     if not generated:
         raise LLMError("no generated CAD file to copy to the requested output path")
     dest = Path(output).expanduser()
+    if _output_is_directory(output, dest):
+        delivered = _deliver_entries_to_directory(workspace, generated, dest)
+        if not delivered:
+            raise LLMError("generated CAD files were recorded but missing on disk")
+        return delivered
     suffix = dest.suffix.lower().lstrip(".")
 
     def _matches(entry: dict) -> bool:
@@ -219,7 +412,91 @@ def _deliver_output(workspace, output: str) -> Path:
         raise LLMError(f"generated file recorded but missing on disk: {src}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dest)
-    return dest
+    return [dest]
+
+
+def _output_is_directory(raw_output: str, dest: Path) -> bool:
+    return (
+        raw_output.endswith((os.sep, "/"))
+        or (os.altsep is not None and raw_output.endswith(os.altsep))
+        or dest.is_dir()
+        or dest.suffix == ""
+    )
+
+
+def _deliver_entries_to_directory(workspace, entries: list[dict], output_dir: Path) -> list[Path]:
+    delivered: list[Path] = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        src = _manifest_path(workspace, str(entry["path"]))
+        if not src.is_file():
+            continue
+        dest = _unique_destination(output_dir / src.name, src.resolve())
+        shutil.copyfile(src, dest)
+        delivered.append(dest)
+    return delivered
+
+
+def _deliver_default_outputs(workspace, cwd: Path) -> list[Path]:
+    """Expose generated files in the invocation directory by default.
+
+    The run workspace remains an internal log/artifact area. When a CAD backend
+    records a file under that workspace, copy it into the directory where the
+    user invoked Chamfer so normal output points at user-visible deliverables.
+    """
+    delivered: list[Path] = []
+    cwd = cwd.resolve()
+    for entry in workspace.manifest().get("generated_files", []):
+        if not isinstance(entry, dict) or not entry.get("path"):
+            continue
+        src = _manifest_path(workspace, str(entry["path"]))
+        if not src.is_file():
+            continue
+        src = src.resolve()
+        if _is_relative_to(src, workspace.dir.resolve()):
+            dest = _unique_destination(cwd / src.name, src)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+            delivered.append(dest)
+            continue
+        if _is_relative_to(src, cwd):
+            delivered.append(src.resolve())
+            continue
+        dest = _unique_destination(cwd / src.name, src)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+        delivered.append(dest)
+    return delivered
+
+
+def _manifest_path(workspace, path: str) -> Path:
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = workspace.dir / p
+    return p.resolve()
+
+
+def _unique_destination(dest: Path, src: Path) -> Path:
+    dest = dest.resolve()
+    if dest.exists() and dest.samefile(src):
+        return dest
+    if not dest.exists():
+        return dest
+    stem = dest.stem
+    suffix = dest.suffix
+    for index in range(1, 1000):
+        candidate = dest.with_name(f"{stem}-{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise LLMError(f"could not choose a free output path for {src.name}")
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _discover_mcp_servers(

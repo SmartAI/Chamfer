@@ -191,3 +191,10 @@ def test_text_to_cad_workflow_contract_requires_named_coloured_step_export_and_r
     assert "object_name=\"*\"" in develop_prompt
     assert "preserve product names and per-component colours" in develop_prompt
     assert "do not export only an aggregate compound" in develop_prompt
+    assert "stable semantic name" in develop_prompt
+    assert "hole diameters and positions" in develop_prompt
+    assert "floating parts" in develop_prompt
+    assert "unwanted intersections/crossovers" in develop_prompt
+    assert "unstitched gaps" in develop_prompt
+    assert "repair the CAD before export" in develop_prompt
+    assert "measured bounding boxes" in develop_prompt

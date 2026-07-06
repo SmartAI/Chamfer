@@ -86,7 +86,8 @@ uv run --group dev pytest -q
 - `-o, --output <path>` — copy the final verified CAD artifact to this path (parent dirs created).
 - `--out <dir>` — run root for workspaces/evidence (default `~/.chamfer/runs`).
 - `--sandbox` / `--no-sandbox` — filesystem discipline for tool calls (disabled by default for now).
-- `--max-turns <n>` — agent turn budget.
+- `--max-turns <n>` — agent turn budget (default `50`).
+- `--verbose {true,false}` — print clean user-facing progress and summary (default `true`); use `--verbose false` or `--verbose 0` for quiet output.
 
 ## Configuration & skills
 

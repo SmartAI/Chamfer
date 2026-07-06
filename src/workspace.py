@@ -12,7 +12,7 @@ from pathlib import Path
 
 class WorkspaceManager:
     def __init__(self, run_dir: str | Path, workspace_id: str) -> None:
-        self.dir = Path(run_dir)
+        self.dir = Path(run_dir).expanduser().resolve()
         self.workspace_id = workspace_id
         self.artifacts_dir = self.dir / "artifacts"
         self.generated_dir = self.dir / "generated"

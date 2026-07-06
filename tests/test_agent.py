@@ -127,3 +127,17 @@ def test_agent_loop_rejects_premature_final_after_failed_tool(tmp_path) -> None:
 
     assert result.ok is False
     assert "previous tool call failed" in llm.calls[2][1]
+
+
+def test_agent_loop_reports_max_turns_as_failure(tmp_path) -> None:
+    (tmp_path / "note.txt").write_text("hello")
+    llm = ScriptedLLM([
+        '```tool_call\n{"tool": "read", "params": {"path": "note.txt"}}\n```',
+    ])
+    registry = build_local_tool_registry(ActionPolicy.auto(), tmp_path)
+
+    result = AgentLoop(llm, registry, max_turns=1).run("read the note")
+
+    assert result.ok is False
+    assert result.reply == "Agent reached max turns (1) before completing the stage"
+    assert result.events[-1].kind == "max_turns"

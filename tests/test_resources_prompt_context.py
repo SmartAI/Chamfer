@@ -161,6 +161,10 @@ def test_prompt_renders_skill_summaries_not_bodies_and_cache_key_is_stable(tmp_p
     assert '"required": ["path"]' in prompt
     assert "assign explicit per-component colours" in prompt
     assert "object_name=\"*\"" in prompt
+    assert "bounding boxes, volumes, clearances" in prompt
+    assert "real solids or assemblies of solids" in prompt
+    assert "no unwanted intersections/crossovers" in prompt
+    assert "no unstitched gaps" in prompt
     assert "render before" in prompt
     assert strategy1.key == strategy2.key
     assert strategy1.key != strategy3.key

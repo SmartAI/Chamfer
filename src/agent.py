@@ -44,7 +44,6 @@ class AgentLoop:
         system_prompt: str = "",
         max_turns: int = 40,
         echo: Callable[[str], None] | None = None,
-        event_sink: Callable[[AgentEvent], None] | None = None,
         session: SessionManager | None = None,
     ) -> None:
         self._llm = llm
@@ -52,7 +51,6 @@ class AgentLoop:
         self._system = system_prompt
         self._max_turns = max_turns
         self._echo = echo or (lambda text: None)
-        self._event_sink = event_sink
         self._session = session
 
     def run(self, task: str) -> AgentResult:
@@ -67,8 +65,6 @@ class AgentLoop:
         def emit(kind: str, **data) -> None:
             event = AgentEvent(kind=kind, data=data)
             events.append(event)
-            if self._event_sink is not None:
-                self._event_sink(event)
 
         for turn in range(1, self._max_turns + 1):
             start = time.time()
@@ -207,9 +203,13 @@ class AgentLoop:
             transcript.append(f"[tool result for {call.tool}]\n{result.output}")
             pending = transcript[-1]
 
+        detail = f"Agent reached max turns ({self._max_turns}) before completing the stage"
+        emit("max_turns", turns=self._max_turns, detail=detail)
+        if self._session is not None:
+            self._session.append("max_turns", turns=self._max_turns, detail=detail)
         return AgentResult(
             ok=False,
-            reply=f"stopped: max turns ({self._max_turns}) reached before completion",
+            reply=detail,
             turns=self._max_turns,
             events=tuple(events),
         )

@@ -24,6 +24,7 @@ class WorkflowContext:
     task: str
     agent_session: AgentSession
     tools: ToolRegistry
+    reporter: WorkflowReporter | None = None
 
     @property
     def workspace(self) -> WorkspaceManager:
@@ -37,6 +38,14 @@ class Stage(Protocol):
         ...
 
 
+class WorkflowReporter(Protocol):
+    def stage_start(self, name: str) -> None:
+        ...
+
+    def stage_end(self, result: StageResult) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class FunctionStage:
     name: str
@@ -44,6 +53,8 @@ class FunctionStage:
 
     def run(self, context: WorkflowContext) -> StageResult:
         context.agent_session.session.append("stage_start", stage=self.name)
+        if context.reporter is not None:
+            context.reporter.stage_start(self.name)
         result = self.fn(context)
         context.agent_session.session.append(
             "stage_end",
@@ -52,6 +63,8 @@ class FunctionStage:
             artifact=result.artifact,
             detail=result.detail,
         )
+        if context.reporter is not None:
+            context.reporter.stage_end(result)
         return result
 
 
@@ -132,12 +145,23 @@ def _develop_stage(context: WorkflowContext) -> StageResult:
             "CAD workflow contract:\n"
             "- Emit short user-facing progress notes before tool calls.\n"
             "- Build bottom-up as distinct named components when the request names components.\n"
+            "- Give each final component a stable semantic name matching the requested "
+            "part, not generic names such as shape1, solid, or result.\n"
+            "- Use millimeters and encode requested nominal dimensions directly in the "
+            "CAD model before measuring the result.\n"
             "- For appearance requests, assign explicit per-component CAD colours before "
             "export; for build123d set each named object's `.color` (for example black "
             "plastic parts black and metal parts steel-grey). STEP can preserve colour, "
             "but not procedural brushed or matte texture maps.\n"
-            "- Use measured CAD tools for dimensions, capacity, clearances, and validity checks.\n"
+            "- Use measured CAD tools for bounding boxes, volumes, hole diameters and "
+            "positions, capacity, clearances, component counts, and validity checks.\n"
+            "- For assemblies or multi-component parts, check connectivity/contact, "
+            "intended clearances, unwanted intersections/crossovers, floating parts, "
+            "and unstitched gaps when the MCP exposes suitable tools.\n"
             "- Validate each final solid or the full assembly when validation tools are available.\n"
+            "- If measurement or validation shows an invalid solid, missing feature, "
+            "wrong size, wrong component count, disconnected part, unintended "
+            "intersection, or bad clearance, repair the CAD before export.\n"
             "- If render_view is available and the request mentions appearance, colour, "
             "material, finish, or visual quality, render the assembly before export and "
             "use the render to catch obvious appearance or placement errors.\n"
@@ -150,8 +174,9 @@ def _develop_stage(context: WorkflowContext) -> StageResult:
             "ending in .step; if an output directory is missing, use a simple "
             "workspace-root filename or create the directory first.\n"
             "- Finish with a concise report listing deliverable paths, component geometry, "
-            "measured verification evidence, rendered appearance checks when performed, "
-            "and known limitations.\n"
+            "measured bounding boxes, volumes/capacities, clearances, validation/export "
+            "evidence, connectivity/intersection checks when available, rendered "
+            "appearance checks when performed, and known limitations.\n"
             "If no CAD execution tool is available, create useful local plan/script files "
             "and report that geometry execution is unavailable.\n\n"
             f"Request: {context.task}"
