@@ -13,6 +13,11 @@ chamfer is a small, plain-Python CAD agent harness. The LLM drives an external
 CAD MCP server (build123d by default) to build geometry from a prompt, and a
 deterministic verifier decides PASS. No agent framework.
 
+For human-facing contributor guidelines — environment setup, the required lint +
+test checks, code style, and how to run a fresh end-to-end test locally — see
+**[`CONTRIBUTING.md`](CONTRIBUTING.md)**. The rules below are the quick reference
+for agents editing this repo.
+
 ## Layout (flat `src/`)
 
 - `src/cli.py` — entry point (`chamfer run`); wires providers, MCP discovery,
@@ -44,7 +49,8 @@ deterministic verifier decides PASS. No agent framework.
 - `src/tools.py` is the tool-vocabulary source of truth; prompts render from it.
 - Consequential/critical actions go through `ActionPolicy` (`src/policy.py`).
 - Agent-facing dimensions are millimeters.
-- Run `uv run --group dev pytest` before claiming code changes work. The suite
-  is offline (no key, no network); `tests/conftest.py` isolates `~/.chamfer`.
+- Before claiming code changes work, run both `uv run ruff check .` (lint; CI
+  gates on it) and `uv run --group dev pytest` (offline: no key, no network;
+  `tests/conftest.py` isolates `~/.chamfer`).
 - Do not commit, push, delete branches, or revert unrelated changes unless the
   user explicitly asks.

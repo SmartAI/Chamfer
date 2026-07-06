@@ -24,7 +24,7 @@ class SandboxProfile:
     process_limit: int | None = None
     cleanup: str = "none"
 
-    def normalized(self) -> "SandboxProfile":
+    def normalized(self) -> SandboxProfile:
         return replace(
             self,
             cwd=self.cwd.resolve(),

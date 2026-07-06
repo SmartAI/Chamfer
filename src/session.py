@@ -41,13 +41,13 @@ class SessionManager:
         mode: str = "agent",
         task: str = "",
         metadata: dict | None = None,
-    ) -> "SessionManager":
+    ) -> SessionManager:
         session = cls(path, session_id or uuid.uuid4().hex[:12])
         session.header(workspace_id=workspace_id, mode=mode, task=task, metadata=metadata or {})
         return session
 
     @classmethod
-    def open(cls, path: str | Path) -> "SessionManager":
+    def open(cls, path: str | Path) -> SessionManager:
         records = read_records(path)
         if not records:
             raise ValueError(f"session log is empty: {path}")

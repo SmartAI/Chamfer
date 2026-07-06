@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from protocol import ProtocolError, parse_reply
 from session import SessionManager
@@ -249,7 +250,7 @@ class AgentSession:
         max_turns: int = 40,
         metadata: dict | None = None,
         echo: Callable[[str], None] | None = None,
-    ) -> "AgentSession":
+    ) -> AgentSession:
         workspace = WorkspaceManager.create(out_root, task, mode=mode)
         session = SessionManager.create(
             workspace.session_path,

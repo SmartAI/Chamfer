@@ -28,7 +28,7 @@ class WorkspaceManager:
         *,
         mode: str = "agent",
         session_id: str | None = None,
-    ) -> "WorkspaceManager":
+    ) -> WorkspaceManager:
         workspace_id = _make_workspace_id(task)
         ws = cls(Path(out_root) / workspace_id, workspace_id)
         ws.artifacts_dir.mkdir(parents=True, exist_ok=True)

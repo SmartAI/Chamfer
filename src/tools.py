@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
 
+from evidence import EvidenceLedger, classify_command, summarize_output
 from policy import ALLOW, SKIP, ActionPolicy
 from sandbox import (
     SandboxProfile,
@@ -14,7 +15,6 @@ from sandbox import (
     permissive_profiles,
     truncate_head,
 )
-from evidence import EvidenceLedger, classify_command, summarize_output
 
 MAX_LINES = 2000
 MAX_BYTES = 50 * 1024
@@ -31,11 +31,11 @@ class ToolResult:
     execution_context: dict | None = None
 
     @classmethod
-    def success(cls, output: str, artifact_path: Path | None = None) -> "ToolResult":
+    def success(cls, output: str, artifact_path: Path | None = None) -> ToolResult:
         return cls(ok=True, output=output, artifact_path=artifact_path)
 
     @classmethod
-    def error(cls, output: str, artifact_path: Path | None = None) -> "ToolResult":
+    def error(cls, output: str, artifact_path: Path | None = None) -> ToolResult:
         prefix = output if output.startswith("error:") else f"error: {output}"
         return cls(ok=False, output=prefix, artifact_path=artifact_path)
 

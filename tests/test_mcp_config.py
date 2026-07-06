@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from mcp_config import discover_project_mcp_configs, load_mcp_config
 

@@ -1,5 +1,11 @@
 # chamfer
 
+[![CI](https://github.com/SmartAI/Chamfer/actions/workflows/ci.yml/badge.svg)](https://github.com/SmartAI/Chamfer/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/chamfer-cad.svg)](https://pypi.org/project/chamfer-cad/)
+[![Python](https://img.shields.io/pypi/pyversions/chamfer-cad.svg)](https://pypi.org/project/chamfer-cad/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Homepage](https://img.shields.io/badge/home-smartai.github.io%2FChamfer-ea580c.svg)](https://smartai.github.io/Chamfer/)
+
 **Type what you want. Get a real, verified CAD part.**
 
 Describe a product in plain words — a kettle, a desk lamp, a bracket — and an AI agent designs it as real, editable, correctly-sized geometry. It builds the part step by step through a CAD engine, measures its own work, fixes its own mistakes, and only claims success when a deterministic kernel check proves every requirement is met.

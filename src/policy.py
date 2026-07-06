@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 Approver = Callable[[str, dict], bool]
 
@@ -25,15 +25,15 @@ class ActionPolicy:
     approver: Approver | None = None
 
     @classmethod
-    def auto(cls, approver: Approver | None = None) -> "ActionPolicy":
+    def auto(cls, approver: Approver | None = None) -> ActionPolicy:
         return cls(mode="auto", approver=approver)
 
     @classmethod
-    def gated(cls, approver: Approver | None = None) -> "ActionPolicy":
+    def gated(cls, approver: Approver | None = None) -> ActionPolicy:
         return cls(mode="gated", approver=approver)
 
     @classmethod
-    def dry_run(cls) -> "ActionPolicy":
+    def dry_run(cls) -> ActionPolicy:
         return cls(mode="dry_run")
 
     def decide(self, risk: str, tool: str, params: dict) -> str:

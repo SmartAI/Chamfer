@@ -34,7 +34,17 @@ chamfer = "cli:main"
 dev = [
     "pillow>=12.3.0",
     "pytest>=8.0",
+    "ruff>=0.9",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Real-bug + hygiene rules (pyflakes, pycodestyle, import sorting, pyupgrade).
+select = ["E", "F", "W", "I", "UP"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
