@@ -1,0 +1,81 @@
+[project]
+# Distribution name on PyPI (the CLI command and imports remain `chamfer`).
+name = "chamfer-cad"
+dynamic = ["version"]
+description = "A small, plain-Python CAD agent harness: the LLM drives an external CAD MCP server to build a part from a prompt, and a deterministic kernel verifier decides PASS."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "Min Liu" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://smartai.github.io/Chamfer/"
+Repository = "https://github.com/SmartAI/Chamfer"
+Issues = "https://github.com/SmartAI/Chamfer/issues"
+
+[project.optional-dependencies]
+# Real LLM planning. Without this (or without ANTHROPIC_API_KEY) the agent
+# runs in scripted-replay mode, which is also the regression-eval mode.
+llm = ["anthropic>=0.40"]
+# Opt-in OpenTelemetry export (CHAMFER_OTEL=1 / --otel). Local JSONL
+# session logs work without this.
+otel = [
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp-proto-http>=1.25",
+]
+
+[project.scripts]
+chamfer = "cli:main"
+
+[dependency-groups]
+dev = [
+    "pillow>=12.3.0",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+# Version is derived from git tags (e.g. tag v1.2.3 -> version 1.2.3).
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# Fall back to 0.0.0 when built from a checkout with no version tag yet
+# (e.g. before the first release, or from a fresh single-commit history).
+version_scheme = "guess-next-dev"
+fallback_version = "0.0.0"
+# Never emit a PEP 440 local version (+g<hash>.d<date>); PyPI rejects those.
+local_scheme = "no-local-version"
+
+[tool.hatch.build.targets.sdist]
+# Keep the sdist lean: ship what's needed to build/run/test, not the docs GIFs.
+include = [
+    "src",
+    "skills",
+    "tests",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+# Flat src layout: modules live directly under src/ (no package dir). Map the
+# src/ root onto the wheel root so `cli`, `agent`, ... and the `verify`
+# sub-package install as top-level importables.
+sources = ["src"]
+only-include = ["src"]
+
+# Ship the default skills as package data so an installed `chamfer` can seed
+# ~/.chamfer/skills on first run (home.bundled_skills_dir looks here).
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "chamfer_skills"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

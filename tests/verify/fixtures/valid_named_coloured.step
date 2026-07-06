@@ -1,0 +1,17 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Chamfer test fixture'),'2;1');
+FILE_NAME('valid_named_coloured.step','2026-07-06',('Chamfer'),('Chamfer'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN_CC2'));
+ENDSEC;
+DATA;
+#1=PRODUCT('body','body','',(#10));
+#2=PRODUCT('power_base','power_base','',(#10));
+#3=COLOUR_RGB('stainless',0.65,0.65,0.62);
+#4=COLOUR_RGB('matte black',0.01,0.01,0.01);
+#5=STYLED_ITEM('body style',(#3),#1);
+#6=STYLED_ITEM('base style',(#4),#2);
+#10=PRODUCT_CONTEXT('',#11,'mechanical');
+#11=APPLICATION_CONTEXT('configuration controlled 3d designs of mechanical parts and assemblies');
+ENDSEC;
+END-ISO-10303-21;

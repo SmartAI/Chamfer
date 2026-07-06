@@ -1,0 +1,6 @@
+Design a desk lamp as distinct components:
+
+base: a heavy round base about 180 mm diameter and 30 mm tall, its top edge rounded with a 3 mm fillet.
+stem: a slim vertical column rising about 350 mm from the back half of the base.
+arm: a horizontal arm reaching forward from the top of the stem, overhanging the front of the base.
+shade: a downward-opening cone or bell at the end of the arm, hollow inside, aimed at the desk. Layout rules: the light zone under the shade must stay open - at least 250 mm of clear vertical space between the base top and the shade rim - and the shade must overhang past the front edge of the base so light lands in front of the lamp, not on it. Appearance matters: matte black base and stem, brass-colored shade.

@@ -1,0 +1,7 @@
+Design an electric kettle as distinct components:
+
+power_base: a low round base on the counter, about 170 mm diameter and 25 mm tall.
+body: a cylindrical vessel sitting on the power base, about 150 mm diameter and 200 mm tall, holding at least 1.5 L of water. Round its top rim with a 4 mm fillet.
+handle: a C-shaped or bar handle on the side of the body, big enough for a hand (at least 30 mm clearance between handle and body).
+spout: a short pouring spout at the rim, on the side opposite the handle.
+lid: a domed lid capping the body. Appearance matters: give the body a brushed stainless steel appearance, and the power base, handle and lid a matte black plastic appearance.

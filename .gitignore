@@ -1,0 +1,7 @@
+.venv/
+.superpowers/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+.mcp.json

@@ -1,0 +1,5 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('truncated'),'2;1');
+DATA;
+#1=PRODUCT('body','body','',());
