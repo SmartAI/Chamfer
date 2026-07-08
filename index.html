@@ -91,6 +91,19 @@ chamfer run "a desk lamp" --provider openai -o out/lamp.step</pre>
     </div>
   </section>
 
+  <section>
+    <h2>Gallery</h2>
+    <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Each GIF is a script-for-script replay of a real session log — actual geometry states, not illustrations. <em>(These runs are from an earlier Fusion-backed version; the current release drives an external build123d MCP server through the same measured loop.)</em></p>
+    <figure>
+      <img src="assets/electric-kettle-build.gif" alt="The agent building an electric kettle step by step, catching an upside-down spout and rebuilding it" />
+      <figcaption>Electric kettle — a cylindrical body on a power base, a C-handle with measured hand clearance, a domed lid and a spout, with one live self-correction: the spout first extruded upside-down, the agent saw it in its own measurement and rebuilt it at the rim.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/desk-lamp-build.gif" alt="The agent building a desk lamp with a weighted base, verifying a kept-clear light zone and stability" />
+      <figcaption>Desk lamp — a weighted base, a slim stem, an overhanging arm and a hollow shade, with a kept-clear light zone verified at a measured 258 mm and stability confirmed from the center of mass sitting inside the base edge.</figcaption>
+    </figure>
+  </section>
+
   <figure>
     <img src="assets/architecture.svg" alt="Chamfer architecture: agent loop over an MCP server, with a deterministic verifier deciding PASS" />
     <figcaption>Where determinism lives: the LLM writes CAD freely; fixed code decides what is true.</figcaption>
