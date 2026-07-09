@@ -71,23 +71,6 @@
   </figure>
 
   <section>
-    <h2>Install &amp; run</h2>
-    <pre><span class="c"># install the CLI (the command is `chamfer`)</span>
-uv tool install chamfer-cad     <span class="c"># or: pip install chamfer-cad</span>
-
-<span class="c"># build a part from a prompt (any litellm provider; key from your env or .env)</span>
-chamfer run "a 2 L electric kettle with a rounded rim" --model anthropic/claude-opus-4-8
-
-<span class="c"># deliver the verified STEP to a path of your choice</span>
-chamfer run "a desk lamp" --model openai/gpt-5 -o out/lamp.step
-
-<span class="c"># Claude Code subscribers: reuse your local login, no API key</span>
-chamfer run "a mounting bracket" --model claude-sub</pre>
-    <p style="color:var(--muted);font-size:14px">On first run chamfer seeds <code>~/.chamfer</code> with default skills and an
-      MCP config (build123d). Drop a <code>CHAMFER.md</code> or <code>.chamfer/skills/</code> in your project to extend it.</p>
-  </section>
-
-  <section>
     <h2>From a photo to a part<span class="new">new</span></h2>
     <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Attach reference images with <code>--image</code>: a requirements stage
       first describes each image in CAD-engineering terms, and during the build the agent compares its own
