@@ -114,18 +114,6 @@ chamfer run "a mounting bracket" --model claude-sub</pre>
   </section>
 
   <section>
-    <h2>Why it's different</h2>
-    <div class="grid">
-      <div class="card"><h3>Measured, not claimed</h3><p>After the agent says "done", its measurement tools re-run one final time and a fixed kernel probe grades the checklist. No self-reported success.</p></div>
-      <div class="card"><h3>Symmetric feedback</h3><p>Numbers come back as numbers, renders come back as images the model actually sees — its own render calls included. Visual drift gets caught mid-loop.</p></div>
-      <div class="card"><h3>Plain Python, no framework</h3><p>The whole loop — agent, tools, verifier, viewer — reads top to bottom. Flat <code>src/*.py</code>, no magic.</p></div>
-      <div class="card"><h3>CAD is external</h3><p>Capabilities come from an MCP server + skills, not baked in. The harness itself is CAD-agnostic.</p></div>
-      <div class="card"><h3>Any LLM</h3><p>OpenAI, Anthropic, Gemini, OpenRouter, a local endpoint — one litellm model string. Claude Code subscribers can reuse their login.</p></div>
-      <div class="card"><h3>Fully auditable</h3><p>Every prompt, tool call, and render persists to <code>session.jsonl</code>; Langfuse tracing is one env var away.</p></div>
-    </div>
-  </section>
-
-  <section>
     <h2>Gallery</h2>
     <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Each GIF is a script-for-script replay of a real session log — actual geometry states, not illustrations. <em>(These runs are from an earlier Fusion-backed version; the current release drives an external build123d MCP server through the same measured loop.)</em></p>
     <figure>
