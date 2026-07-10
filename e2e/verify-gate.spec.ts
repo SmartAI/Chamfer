@@ -20,7 +20,9 @@ test("a failing verify gate is reported on the tool card", async ({ page }) => {
   await expect(gate).toHaveAttribute("data-status", "failed");
   await expect(gate).toContainText("GATE FAILED");
   await expect(gate).toContainText("bbox_mm");
-  // Ambient trust indicators mirror the failure.
+  // Ambient trust indicators mirror the failure. Conversations are listed
+  // newest-first, so the active conversation's dot is the first one (earlier
+  // specs in the serial battery leave their own dotted conversations behind).
   await expect(page.getByTestId("verify-chip")).toHaveAttribute("data-status", "failed");
-  await expect(page.getByTestId("convo-gate-dot")).toHaveAttribute("data-status", "failed");
+  await expect(page.getByTestId("convo-gate-dot").first()).toHaveAttribute("data-status", "failed");
 });

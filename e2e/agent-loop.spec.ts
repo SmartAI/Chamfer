@@ -20,7 +20,7 @@ test("full agent loop with fake LLM", async ({ page }) => {
   // Ambient trust indicators: header chip and sidebar dot reflect the verdict.
   await expect(page.getByTestId("verify-chip")).toHaveAttribute("data-status", "passed");
   await expect(page.getByTestId("verify-chip")).toContainText("Verified");
-  await expect(page.getByTestId("convo-gate-dot")).toHaveAttribute("data-status", "passed");
+  await expect(page.getByTestId("convo-gate-dot").first()).toHaveAttribute("data-status", "passed");
   await page.reload();
   // Replay path re-fetches conversations, messages, and artifacts; give it the
   // same headroom as the rest of the spec instead of the 5s default, which
