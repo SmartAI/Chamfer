@@ -29,7 +29,7 @@ describe("ToolCallCard status", () => {
     expect(screen.queryByText("Failed")).toBeNull();
   });
 
-  it("renders a passed verify-gate row", () => {
+  it("renders a passed verification receipt with every check and its diagnostic", () => {
     render(
       <ToolCallCard
         call={call}
@@ -37,16 +37,30 @@ describe("ToolCallCard status", () => {
           content: [],
           isError: false,
           details: {
-            gate: { status: "passed", checks: [{ name: "valid", passed: true, detail: "B-rep validity" }] },
+            gate: {
+              status: "passed",
+              checks: [
+                { name: "valid", passed: true, detail: "B-rep validity" },
+                { name: "bbox", passed: true, detail: "expected [10, 20, 30] ±0.5, measured [10, 20, 30]" },
+              ],
+            },
           },
         }}
       />,
     );
 
-    expect(screen.getByTestId("tool-gate").textContent).toContain("passed");
+    const gate = screen.getByTestId("tool-gate");
+    expect(gate.dataset.status).toBe("passed");
+    // Showing the work: passing checks are listed too, with their diagnostics.
+    expect(gate.textContent).toContain("valid");
+    expect(gate.textContent).toContain("B-rep validity");
+    expect(gate.textContent).toContain("measured [10, 20, 30]");
+    expect(gate.textContent).toContain("GATE PASSED");
+    expect(gate.textContent).toContain("2 checks");
+    expect(gate.textContent?.toLowerCase()).not.toContain("correct");
   });
 
-  it("lists failing checks on a failed verify gate", () => {
+  it("renders a failed receipt with the fail tally and all checks visible", () => {
     render(
       <ToolCallCard
         call={call}
@@ -67,9 +81,33 @@ describe("ToolCallCard status", () => {
     );
 
     const gate = screen.getByTestId("tool-gate");
-    expect(gate.textContent).toContain("failed");
+    expect(gate.dataset.status).toBe("failed");
     expect(gate.textContent).toContain("bodies: expected 1, found 2");
-    expect(gate.textContent).not.toContain("B-rep validity");
+    expect(gate.textContent).toContain("B-rep validity");
+    expect(gate.textContent).toContain("GATE FAILED — 1 of 2 checks failed");
+  });
+
+  it("renders an errored gate as unavailable with the evaluator detail", () => {
+    render(
+      <ToolCallCard
+        call={call}
+        result={{
+          content: [],
+          isError: false,
+          details: {
+            gate: {
+              status: "error",
+              checks: [{ name: "gate", passed: false, detail: "gate evaluator failed: boom" }],
+            },
+          },
+        }}
+      />,
+    );
+
+    const gate = screen.getByTestId("tool-gate");
+    expect(gate.dataset.status).toBe("error");
+    expect(gate.textContent).toContain("Verification unavailable");
+    expect(gate.textContent).toContain("boom");
   });
 
   it("omits the gate row when the result carries no gate", () => {
