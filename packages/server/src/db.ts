@@ -43,5 +43,14 @@ export function openDb(path: string): DatabaseSync {
       value TEXT NOT NULL
     );
   `);
+  migrateDb(db);
   return db;
+}
+
+/** Additive migrations for databases created before a column existed. */
+export function migrateDb(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(conversations)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "last_gate_status")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN last_gate_status TEXT");
+  }
 }

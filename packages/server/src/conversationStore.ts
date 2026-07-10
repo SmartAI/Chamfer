@@ -1,11 +1,27 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { AttachmentDto, ConversationDto, MessageDto } from "@chamfer/shared";
+import type { AttachmentDto, ConversationDto, Gate, MessageDto } from "@chamfer/shared";
 
 interface ConversationRow {
   id: string;
   title: string;
   created_at: number;
   updated_at: number;
+  last_gate_status: string | null;
+}
+
+const GATE_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "error"]);
+
+/** Verify-gate verdict carried by a toolResult message's contentJson, or undefined.
+ * Tolerates any malformed input: rollup extraction must never block persistence. */
+function gateStatusOf(role: string, contentJson: string): Gate["status"] | undefined {
+  if (role !== "toolResult") return undefined;
+  try {
+    const parsed = JSON.parse(contentJson) as { details?: { gate?: { status?: unknown } } };
+    const status = parsed?.details?.gate?.status;
+    return typeof status === "string" && GATE_STATUSES.has(status) ? (status as Gate["status"]) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 interface MessageRow {
@@ -26,7 +42,15 @@ interface AttachmentRow {
 }
 
 function toConversationDto(row: ConversationRow): ConversationDto {
-  return { id: row.id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at };
+  return {
+    id: row.id,
+    title: row.title,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_gate_status && GATE_STATUSES.has(row.last_gate_status)
+      ? { lastGateStatus: row.last_gate_status as Gate["status"] }
+      : {}),
+  };
 }
 
 function toMessageDto(row: MessageRow): MessageDto {
@@ -115,6 +139,10 @@ export function createMessage(
     "INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
   ).run(message.id, conversationId, message.seq, message.role, message.contentJson, now);
   db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(now, conversationId);
+  const gateStatus = gateStatusOf(message.role, message.contentJson);
+  if (gateStatus) {
+    db.prepare("UPDATE conversations SET last_gate_status = ? WHERE id = ?").run(gateStatus, conversationId);
+  }
   return {
     id: message.id,
     conversationId,
