@@ -39,11 +39,18 @@ Everything stays on your computer.
 Requires Node.js >= 22.19.
 
 ```bash
-npm install
-npm run dev
+npx chamfer
 ```
 
 Open the printed URL, add your API key in Settings, and describe a part or click one of the preset prompts.
+Your conversations and settings live in `~/.chamfer`.
+
+### Developing
+
+```bash
+npm install
+npm run dev
+```
 
 ## License
 

@@ -1,0 +1,25 @@
+{
+  "name": "chamfer",
+  "version": "2.0.0",
+  "description": "AI CAD designer that runs entirely in your browser — describe a part in plain words and export STEP, STL, or 3MF.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "chamfer": "bin/chamfer.js" },
+  "files": ["bin", "dist", "NOTICE"],
+  "engines": { "node": ">=22.19.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/SmartAI/Chamfer.git" },
+  "homepage": "https://smartai.github.io/Chamfer/",
+  "keywords": ["cad", "ai", "text-to-cad", "image-to-3d", "build123d", "3d-printing", "step", "stl", "3mf"],
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.80.3",
+    "@earendil-works/pi-ai": "^0.80.3",
+    "@hono/node-server": "^1.13.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
