@@ -79,4 +79,10 @@ copied in at build time. `@chamfer/*` workspace packages stay private.
 
 ## Deviations
 
-- (log here as they occur)
+- esbuild `packages: "external"` also externalized `@chamfer/shared` →
+  ERR_MODULE_NOT_FOUND from the installed tarball. Switched to an explicit
+  `external` list derived from the cli package's `dependencies`. Caught by the
+  tarball smoke test — keep that check for future packaging changes.
+- First CI run failed: `packages/cli/scripts/build.mjs` never got committed
+  because the repo-local `.git/info/exclude` ignores `scripts/`. Force-added
+  (`git add -f`); the local exclude file was left untouched.
