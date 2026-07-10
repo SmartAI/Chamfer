@@ -6,5 +6,8 @@ data/
 playwright-report/
 test-results/
 py-tests/.venv/
+packages/cli/NOTICE
+packages/cli/LICENSE
+*.tgz
 *.tsbuildinfo
 __pycache__/
