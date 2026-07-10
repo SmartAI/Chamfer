@@ -52,7 +52,7 @@ export function createRunBuild123dTool(deps: {
     measurements: Measurements;
     sheetPng: Blob;
   }) => Promise<void>;
-}): AgentTool<typeof parameters, { measurements: Measurements }> {
+}): AgentTool<typeof parameters, { measurements: Measurements; gate?: Gate }> {
   return {
     name: "run_build123d",
     label: "Run build123d",
@@ -73,7 +73,7 @@ export function createRunBuild123dTool(deps: {
           },
           { type: "image", data, mimeType: "image/png" },
         ],
-        details: { measurements },
+        details: { measurements, gate },
       };
     },
   };
