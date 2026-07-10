@@ -1,0 +1,39 @@
+name: Release
+
+# Publishes the `chamfer` npm package when a v* tag is pushed.
+# Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN secret. The trusted
+# publisher (repo SmartAI/Chamfer, workflow release.yml) must be configured
+# in the package settings on npmjs.com; the very first publish is manual.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+      # Trusted Publishing needs npm >= 11.5.1; node 22 bundles npm 10.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - name: Check tag matches package version
+        run: |
+          PKG_VERSION="v$(node -p "require('./packages/cli/package.json').version")"
+          if [ "$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match packages/cli version $PKG_VERSION" >&2
+            exit 1
+          fi
+      - run: npm run typecheck --workspaces --if-present
+      - run: npm run test --workspaces --if-present
+      - run: npm run build
+      - run: npm publish -w chamfer --provenance --access public
