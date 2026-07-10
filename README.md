@@ -10,6 +10,11 @@
   <a href="https://youtu.be/n72PvB1WUfw">Image-to-3D demo</a>
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/chamfer"><img src="https://img.shields.io/npm/v/chamfer?color=cb3837&label=npm" alt="chamfer on npm"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+</p>
+
 ![The Chamfer workspace: a finished part in the 3D viewer with the conversation that built it](docs/media/hero.png)
 
 ## What is Chamfer
