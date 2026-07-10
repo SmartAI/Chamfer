@@ -16,6 +16,8 @@ export interface ConversationDto {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** Verdict of the most recent verify-gate-bearing run in this conversation. */
+  lastGateStatus?: Gate["status"];
 }
 
 export interface MessageDto {

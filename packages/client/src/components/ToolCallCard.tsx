@@ -118,25 +118,71 @@ export function ToolCallCard({ call, result, resultMessageId }: ToolCallCardProp
             </div>
           )}
           {gate && (
-            <div data-testid="tool-gate" className="space-y-1 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Verify gate</span>
+            <div
+              data-testid="tool-gate"
+              data-status={gate.status}
+              className="overflow-hidden rounded-md border text-xs"
+            >
+              <div className="flex items-center gap-2 border-b bg-muted/40 px-2 py-1.5 font-medium">
                 <span
+                  aria-hidden="true"
                   className={cn(
-                    "font-medium",
-                    gate.status === "passed" && "text-muted-foreground",
-                    gate.status === "failed" && "text-destructive",
+                    "h-1.5 w-1.5 rounded-full",
+                    gate.status === "passed" && "bg-emerald-500",
+                    gate.status === "failed" && "bg-red-500",
+                    gate.status === "error" && "bg-muted-foreground",
                   )}
-                >
-                  {gate.status === "error" ? "unavailable" : gate.status}
-                </span>
+                />
+                Verification
+                <span className="ml-auto font-normal text-muted-foreground">{gate.checks.length} checks</span>
               </div>
-              {gate.status !== "passed" && gateFailures.length > 0 && (
-                <ul className="space-y-0.5 rounded-md border border-destructive/40 bg-destructive/10 p-2 font-mono text-destructive">
-                  {gateFailures.map((check) => (
-                    <li key={check.name}>{check.detail}</li>
-                  ))}
-                </ul>
+              {gate.status === "error" ? (
+                <div className="p-2 text-muted-foreground">
+                  Verification unavailable — the evaluator errored; inspect the views manually.
+                  <div className="mt-1 font-mono">{gate.checks.map((check) => check.detail).join("; ")}</div>
+                </div>
+              ) : (
+                <>
+                  <ul>
+                    {gate.checks.map((check, index) => (
+                      <li
+                        key={check.name}
+                        className={cn(
+                          "flex items-baseline gap-2 border-b border-dashed px-2 py-1 font-mono last:border-b-0",
+                          !check.passed && "bg-destructive/10",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            check.passed ? "gate-tick text-emerald-600" : "text-destructive",
+                            "font-semibold",
+                          )}
+                          style={check.passed ? { animationDelay: `${index * 120}ms` } : undefined}
+                        >
+                          {check.passed ? "✓" : "✕"}
+                        </span>
+                        <span className={cn("min-w-20 font-semibold", !check.passed && "text-destructive")}>
+                          {check.name}
+                        </span>
+                        <span className={cn("text-muted-foreground", !check.passed && "text-destructive")}>
+                          {check.detail}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div
+                    className={cn(
+                      "px-2 py-1.5 font-semibold tracking-wide",
+                      gate.status === "passed"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-destructive/10 text-destructive",
+                    )}
+                  >
+                    {gate.status === "passed"
+                      ? "GATE PASSED — all declared expectations met"
+                      : `GATE FAILED — ${gateFailures.length} of ${gate.checks.length} checks failed`}
+                  </div>
+                </>
               )}
             </div>
           )}

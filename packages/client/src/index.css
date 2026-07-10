@@ -62,3 +62,26 @@
     letter-spacing: 0;
   }
 }
+
+/* Verification receipt: ticks land one after another as checks are read.
+   Purely decorative; disabled under prefers-reduced-motion. */
+@keyframes gate-tick-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.gate-tick {
+  animation: gate-tick-in 0.25s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate-tick {
+    animation: none;
+  }
+}
