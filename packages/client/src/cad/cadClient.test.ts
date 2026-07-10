@@ -101,6 +101,29 @@ describe("CadClient", () => {
     await expect(p2).resolves.toMatchObject({ stdout: "b-out" });
   });
 
+  it("passes the verify gate through run() untouched", async () => {
+    const client = new CadClient(vi.fn());
+    const w = latestWorker();
+
+    const p = client.run("code");
+    const gate = {
+      status: "failed" as const,
+      checks: [{ name: "bodies", passed: false, detail: "bodies: expected 1, found 2" }],
+    };
+    const req = w.posted[0] as Extract<CadRequest, { cmd: "run" }>;
+    w.emit({
+      id: req.id,
+      ok: true,
+      cmd: "run",
+      stdout: "",
+      measurements: { bboxMm: [1, 1, 1], volumeMm3: 1, areaMm2: 6, children: [] },
+      mesh: { positions: new Float32Array([1]), indices: new Uint32Array([0]) },
+      gate,
+    } satisfies CadResponse);
+
+    await expect(p).resolves.toMatchObject({ gate });
+  });
+
   it("correlates parseParams() and setParams() to their own responses by request id", async () => {
     const client = new CadClient(vi.fn());
     const w = latestWorker();

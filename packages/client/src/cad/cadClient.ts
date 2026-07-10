@@ -3,6 +3,7 @@ import type {
   CadRequest,
   CadResponse,
   ExportFormat,
+  Gate,
   Measurements,
   MeshPayload,
   ParamSpec,
@@ -135,12 +136,12 @@ export class CadClient {
   async run(
     code: string,
     timeoutMs = DEFAULT_TIMEOUT_MS,
-  ): Promise<{ stdout: string; measurements: Measurements; mesh: MeshPayload }> {
+  ): Promise<{ stdout: string; measurements: Measurements; mesh: MeshPayload; gate?: Gate }> {
     const id = this.nextId++;
     const res = await this.send({ id, cmd: "run", code }, timeoutMs);
     if (!res.ok) throw new Error(res.error);
     if (res.cmd !== "run") throw new Error(`Unexpected response cmd: ${res.cmd}`);
-    return { stdout: res.stdout, measurements: res.measurements, mesh: res.mesh };
+    return { stdout: res.stdout, measurements: res.measurements, mesh: res.mesh, gate: res.gate };
   }
 
   async parseParams(code: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ParamSpec[]> {
