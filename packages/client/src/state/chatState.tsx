@@ -12,6 +12,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { DEFAULT_CONVERSATION_TITLE, type ConversationDto } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import { createSession, registerMessagePersistenceId, type ChatSession, type SessionState } from "@/agent/session";
+import { latestGateSummary } from "@/agent/gateSummary";
 import { systemPrompt } from "@/agent/prompt";
 import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
 import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
@@ -258,6 +259,21 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
         // Title generation is best-effort; never surface it as a chat error.
       });
   }, [activeConversationId, conversations, sessionState]);
+
+  // Keep the sidebar's gate dot live for the active conversation: the server rolls the
+  // verdict up on message persistence, but the already-fetched list would only show it
+  // after a reload. Once a turn finishes, mirror the session's latest verdict locally.
+  useEffect(() => {
+    const id = activeConversationId;
+    if (!id || sessionState.streaming) return;
+    const status = latestGateSummary(sessionState.messages)?.status;
+    if (!status) return;
+    setConversations((prev) => {
+      const target = prev.find((c) => c.id === id);
+      if (!target || target.lastGateStatus === status) return prev;
+      return prev.map((c) => (c.id === id ? { ...c, lastGateStatus: status } : c));
+    });
+  }, [activeConversationId, sessionState]);
 
   const clearError = useCallback(() => {
     setError(null);

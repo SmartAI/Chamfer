@@ -60,6 +60,21 @@ export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {
                     active && "bg-background font-medium shadow-sm ring-1 ring-border",
                   )}
                 >
+                  {conversation.lastGateStatus && (
+                    <span
+                      data-testid="convo-gate-dot"
+                      data-status={conversation.lastGateStatus}
+                      aria-label={
+                        conversation.lastGateStatus === "passed"
+                          ? "Last run verified"
+                          : "Last run not verified"
+                      }
+                      className={cn(
+                        "h-2 w-2 shrink-0 rounded-full",
+                        conversation.lastGateStatus === "passed" ? "bg-emerald-500" : "bg-red-500",
+                      )}
+                    />
+                  )}
                   <button
                     type="button"
                     onClick={() => selectConversation(conversation.id)}
