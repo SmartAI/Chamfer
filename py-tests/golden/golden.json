@@ -1,0 +1,120 @@
+{
+  "bracket": {
+    "indexCount": 2352,
+    "measurements": {
+      "areaMm2": 8332.761041672824,
+      "bboxMm": [
+        60.0,
+        30.0,
+        60.0
+      ],
+      "children": [],
+      "volumeMm3": 17057.12388980385
+    },
+    "params": [
+      {
+        "description": "Leg length in mm",
+        "max": 120,
+        "min": 30,
+        "name": "leg_length",
+        "value": 60
+      },
+      {
+        "description": "Bracket width in mm",
+        "max": 60,
+        "min": 15,
+        "name": "leg_width",
+        "value": 30
+      },
+      {
+        "description": "Wall thickness in mm",
+        "max": 10,
+        "min": 3,
+        "name": "thickness",
+        "value": 5
+      },
+      {
+        "description": "Mounting hole diameter in mm",
+        "max": 10,
+        "min": 3,
+        "name": "hole_diameter",
+        "value": 6
+      }
+    ],
+    "positionCount": 2406,
+    "stdout": ""
+  },
+  "compound_pair": {
+    "indexCount": 1536,
+    "measurements": {
+      "areaMm2": 3123.18578948924,
+      "bboxMm": [
+        69.0,
+        30.0,
+        20.0
+      ],
+      "children": [
+        {
+          "bboxMm": [
+            30.0,
+            30.0,
+            6.0
+          ],
+          "label": "base",
+          "volumeMm3": 5400.0
+        },
+        {
+          "bboxMm": [
+            8.0,
+            8.0,
+            20.0
+          ],
+          "label": "pin",
+          "volumeMm3": 1005.3096491487335
+        }
+      ],
+      "volumeMm3": 6405.309649148733
+    },
+    "params": [],
+    "positionCount": 1590,
+    "stdout": ""
+  },
+  "param_box": {
+    "indexCount": 36,
+    "measurements": {
+      "areaMm2": 3560.0,
+      "bboxMm": [
+        40.0,
+        25.0,
+        12.0
+      ],
+      "children": [],
+      "volumeMm3": 11999.999999999998
+    },
+    "params": [
+      {
+        "description": "Overall width in mm",
+        "max": 100,
+        "min": 10,
+        "name": "width",
+        "value": 40
+      },
+      {
+        "description": "Overall depth in mm",
+        "max": 100,
+        "min": 10,
+        "name": "depth",
+        "value": 25
+      },
+      {
+        "description": "Overall height in mm",
+        "max": 50,
+        "min": 5,
+        "name": "height",
+        "value": 12
+      }
+    ],
+    "positionCount": 72,
+    "stdout": "param_box built\n"
+  }
+}

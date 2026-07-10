@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import type { Measurements } from "@chamfer/shared";
+import type { Gate, Measurements } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import { cn } from "@/lib/utils";
 import { CadCodeActions } from "./CadCodeActions";
@@ -9,7 +9,7 @@ import { CadCodeActions } from "./CadCodeActions";
  * Exported so MessageList can reuse it instead of duplicating the type. */
 export interface ToolCallCardResult {
   content?: unknown;
-  details?: { measurements?: Measurements };
+  details?: { measurements?: Measurements; gate?: Gate };
   isError?: boolean;
 }
 
@@ -72,6 +72,8 @@ export function ToolCallCard({ call, result, resultMessageId }: ToolCallCardProp
 
   const code = typeof call.arguments.code === "string" ? call.arguments.code : "";
   const measurements = result?.details?.measurements;
+  const gate = result?.details?.gate;
+  const gateFailures = gate?.checks.filter((check) => !check.passed) ?? [];
 
   return (
     <div data-testid="tool-call-card" className="mt-2 overflow-hidden rounded-md border bg-background text-foreground">
@@ -113,6 +115,29 @@ export function ToolCallCard({ call, result, resultMessageId }: ToolCallCardProp
               <span>{measurements.volumeMm3} mm3</span>
               <span className="text-muted-foreground">Area</span>
               <span>{measurements.areaMm2} mm2</span>
+            </div>
+          )}
+          {gate && (
+            <div data-testid="tool-gate" className="space-y-1 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Verify gate</span>
+                <span
+                  className={cn(
+                    "font-medium",
+                    gate.status === "passed" && "text-muted-foreground",
+                    gate.status === "failed" && "text-destructive",
+                  )}
+                >
+                  {gate.status === "error" ? "unavailable" : gate.status}
+                </span>
+              </div>
+              {gate.status !== "passed" && gateFailures.length > 0 && (
+                <ul className="space-y-0.5 rounded-md border border-destructive/40 bg-destructive/10 p-2 font-mono text-destructive">
+                  {gateFailures.map((check) => (
+                    <li key={check.name}>{check.detail}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
           {sheetUrl && <img src={sheetUrl} alt="Multi-view CAD inspection sheet" className="h-auto w-full border" />}

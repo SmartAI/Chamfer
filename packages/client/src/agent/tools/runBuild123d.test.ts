@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Measurements, MeshPayload } from "@chamfer/shared";
+import type { Gate, Measurements, MeshPayload } from "@chamfer/shared";
 import type { CadClient } from "@/cad/cadClient";
 import { renderViewSheet } from "@/viewer/viewSheet";
 import { createRunBuild123dTool } from "./runBuild123d";
@@ -45,6 +45,57 @@ describe("run_build123d tool", () => {
       mimeType: "image/png",
     });
     expect(result.details).toEqual({ measurements });
+  });
+
+  async function textForGate(gate: Gate | undefined): Promise<string> {
+    const cad = {
+      run: vi.fn().mockResolvedValue({ stdout: "", measurements, mesh, gate }),
+    } as unknown as CadClient;
+    vi.mocked(renderViewSheet).mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+    const tool = createRunBuild123dTool({ cad, onSuccess: vi.fn().mockResolvedValue(undefined) });
+    const result = await tool.execute("call-g", { code: "code" });
+    const first = result.content[0];
+    if (first?.type !== "text") throw new Error("expected text content");
+    return first.text;
+  }
+
+  it("reports a passing gate in one line", async () => {
+    const text = await textForGate({
+      status: "passed",
+      checks: [{ name: "valid", passed: true, detail: "B-rep validity (is_valid)" }],
+    });
+    expect(text).toContain("Verify gate: PASSED");
+    expect(text).not.toContain("FAILED");
+  });
+
+  it("lists each failing check and demands a fix on gate failure", async () => {
+    const text = await textForGate({
+      status: "failed",
+      checks: [
+        { name: "valid", passed: true, detail: "B-rep validity (is_valid)" },
+        { name: "bodies", passed: false, detail: "bodies: expected 1, found 2" },
+        { name: "bbox", passed: false, detail: "bbox_mm (sorted): expected [10, 20, 30] ±0.5, measured [9, 20, 30]" },
+      ],
+    });
+    expect(text).toContain("Verify gate: FAILED");
+    expect(text).toContain("bodies: expected 1, found 2");
+    expect(text).toContain("bbox_mm (sorted)");
+    expect(text).not.toContain("B-rep validity"); // passing checks stay quiet
+    expect(text).toMatch(/fix every failing check/i);
+  });
+
+  it("reports an errored gate as unavailable without failing the run", async () => {
+    const text = await textForGate({
+      status: "error",
+      checks: [{ name: "gate", passed: false, detail: "gate evaluator failed: boom" }],
+    });
+    expect(text).toContain("Verify gate: unavailable");
+    expect(text).toContain("boom");
+  });
+
+  it("omits the gate section when the worker sent none", async () => {
+    const text = await textForGate(undefined);
+    expect(text).not.toContain("Verify gate");
   });
 
   it("rethrows a CAD traceback without publishing a result", async () => {
