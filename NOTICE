@@ -1,0 +1,6 @@
+Chamfer
+Copyright 2026 Min Liu
+
+Contact: Min Liu <minliu905@gmail.com>
+
+This product bundles OCP.wasm (MIT), build123d (Apache-2.0), Pyodide (MPL-2.0), and OpenCascade via OCP (LGPL-2.1) at runtime.

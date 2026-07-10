@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 474 80" role="img" aria-labelledby="title desc">
+  <title id="title">Chamfer</title>
+  <desc id="desc">A geometric chamfered C followed by the Chamfer wordmark.</desc>
+  <g transform="translate(8 8)">
+    <path fill="#111827" d="M0 0h52l12 12v52H0z"/>
+    <path fill="#22D3EE" d="M51 0l13 12H51z"/>
+    <path fill="#fff" d="M47 14H25L14 25v14l11 11h22V39H30l-5-5v-4l5-5h17z"/>
+  </g>
+  <path fill="#111827" d="M126 20h-22L92 32v16l12 12h22V50h-18l-6-6v-8l6-6h18z"/>
+  <path fill="#111827" d="M140 20h10v15h16V20h10v40h-10V45h-16v15h-10z"/>
+  <path fill="#111827" fill-rule="evenodd" d="M194 20h16l14 40h-11l-3-10h-16l-3 10h-11zm3 20h10l-5-15z"/>
+  <path fill="#111827" d="M238 20h10l12 19 12-19h10v40h-10V37l-12 18-12-18v23h-10z"/>
+  <path fill="#111827" d="M300 20h32v10h-22v7h18v10h-18v13h-10z"/>
+  <path fill="#111827" d="M344 20h32v10h-22v5h18v10h-18v5h22v10h-32z"/>
+  <path fill="#111827" fill-rule="evenodd" d="M392 20h30l12 10v10l-9 8 15 12h-16l-12-10h-10v10h-10zm10 10v10h16l6-5-6-5z"/>
+</svg>

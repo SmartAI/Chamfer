@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Chamfer</title>
+  <path fill="#111827" d="M0 0h52l12 12v52H0z"/>
+  <path fill="#22D3EE" d="M51 0l13 12H51z"/>
+  <path fill="#fff" d="M47 14H25L14 25v14l11 11h22V39H30l-5-5v-4l5-5h17z"/>
+</svg>

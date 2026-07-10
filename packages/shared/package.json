@@ -1,0 +1,13 @@
+{
+  "name": "@chamfer/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest --run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  }
+}

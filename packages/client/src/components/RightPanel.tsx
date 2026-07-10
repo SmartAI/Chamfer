@@ -1,0 +1,44 @@
+import { useEffect, useMemo } from "react";
+import { LoaderCircle } from "lucide-react";
+import { Viewer } from "@/viewer/Viewer";
+import { meshToGeometry } from "@/viewer/meshToGeometry";
+import { useAppState } from "@/state/appState";
+import { ExportButtons } from "./ExportButtons";
+import { ConnectedParamsPanel } from "./ParamsPanel";
+import { ScriptPanel } from "./ScriptPanel";
+
+export function RightPanel() {
+  const { mesh, params, isRendering } = useAppState();
+  const geometry = useMemo(() => (mesh ? meshToGeometry(mesh) : null), [mesh]);
+
+  // BufferGeometry allocates GPU-side buffers that are not garbage collected;
+  // dispose the outgoing geometry whenever a new mesh replaces it and on unmount.
+  useEffect(() => {
+    if (!geometry) return;
+    return () => geometry.dispose();
+  }, [geometry]);
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="relative min-h-0 flex-1">
+        <Viewer geometry={geometry} />
+        {isRendering && (
+          <div
+            data-testid="viewer-rendering"
+            className="absolute left-3 top-3 z-20 flex items-center gap-2 rounded-md border bg-background/95 px-3 py-2 text-xs font-medium shadow-sm backdrop-blur-sm"
+          >
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+            Rendering 3D
+          </div>
+        )}
+        {params.length > 0 && (
+          <div className="absolute right-3 top-3 z-10 w-[min(360px,calc(100%-24px))] overflow-hidden rounded-md border bg-background/95 shadow-lg backdrop-blur-sm">
+            <ConnectedParamsPanel />
+          </div>
+        )}
+      </div>
+      <ExportButtons />
+      <ScriptPanel />
+    </div>
+  );
+}
