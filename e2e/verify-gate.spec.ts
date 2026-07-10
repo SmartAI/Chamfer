@@ -17,6 +17,10 @@ test("a failing verify gate is reported on the tool card", async ({ page }) => {
   await expect(page.getByTestId("tool-call-card")).not.toContainText("Failed");
   const gate = page.getByTestId("tool-gate");
   await expect(gate).toBeVisible({ timeout: 600_000 });
-  await expect(gate).toContainText("failed");
+  await expect(gate).toHaveAttribute("data-status", "failed");
+  await expect(gate).toContainText("GATE FAILED");
   await expect(gate).toContainText("bbox_mm");
+  // Ambient trust indicators mirror the failure.
+  await expect(page.getByTestId("verify-chip")).toHaveAttribute("data-status", "failed");
+  await expect(page.getByTestId("convo-gate-dot")).toHaveAttribute("data-status", "failed");
 });

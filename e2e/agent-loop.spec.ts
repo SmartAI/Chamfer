@@ -14,8 +14,13 @@ test("full agent loop with fake LLM", async ({ page }) => {
   // of burning the full timeout waiting for measurements that will never come.
   await expect(page.getByTestId("tool-call-card")).not.toContainText("Failed");
   await expect(page.getByTestId("tool-measurements")).toContainText("6000", { timeout: 600_000 });
-  await expect(page.getByTestId("tool-gate")).toContainText("passed");
+  await expect(page.getByTestId("tool-gate")).toHaveAttribute("data-status", "passed");
+  await expect(page.getByTestId("tool-gate")).toContainText("GATE PASSED");
   await expect(page.getByText("All views verified")).toBeVisible({ timeout: 600_000 });
+  // Ambient trust indicators: header chip and sidebar dot reflect the verdict.
+  await expect(page.getByTestId("verify-chip")).toHaveAttribute("data-status", "passed");
+  await expect(page.getByTestId("verify-chip")).toContainText("Verified");
+  await expect(page.getByTestId("convo-gate-dot")).toHaveAttribute("data-status", "passed");
   await page.reload();
   // Replay path re-fetches conversations, messages, and artifacts; give it the
   // same headroom as the rest of the spec instead of the 5s default, which
