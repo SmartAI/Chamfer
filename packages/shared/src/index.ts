@@ -87,6 +87,21 @@ export interface MeshPayload {
 
 export type ExportFormat = "step" | "stl" | "3mf" | "py";
 
+export interface GateCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+/** Deterministic verify-gate verdict computed by the harness on every run.
+ * "error" means the gate evaluator itself failed (fail-open): the run is
+ * still usable, the verdict is not. Optional on the wire so an older worker
+ * build never invalidates the response. */
+export interface Gate {
+  status: "passed" | "failed" | "error";
+  checks: GateCheck[];
+}
+
 export type CadRequest =
   | { id: number; cmd: "run"; code: string }
   | { id: number; cmd: "parseParams"; code: string }
@@ -94,7 +109,7 @@ export type CadRequest =
   | { id: number; cmd: "export"; code: string; format: ExportFormat };
 
 export type CadResponse =
-  | { id: number; ok: true; cmd: "run"; stdout: string; measurements: Measurements; mesh: MeshPayload }
+  | { id: number; ok: true; cmd: "run"; stdout: string; measurements: Measurements; mesh: MeshPayload; gate?: Gate }
   | { id: number; ok: true; cmd: "parseParams"; params: ParamSpec[] }
   | { id: number; ok: true; cmd: "setParams"; code: string }
   | { id: number; ok: true; cmd: "export"; data: Uint8Array; filename: string }

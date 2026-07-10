@@ -11,6 +11,12 @@ import traceback
 PARAMS_START = "# --- params ---"
 PARAMS_END = "# --- end params ---"
 
+EXPECT_START = "# --- expect ---"
+EXPECT_END = "# --- end expect ---"
+_EXPECT_REQUIRED_KEYS = ("bodies", "bbox_mm")
+_EXPECT_ALLOWED_KEYS = frozenset({"bodies", "bbox_mm", "bbox_tol", "volume_mm3"})
+DEFAULT_BBOX_TOL = 0.5
+
 # Only the trailing `# [min, max] description` comment is regex-parsed; the
 # assignment structure itself comes from ast.parse (comments are invisible
 # to the AST, so a regex is the only option for them).
@@ -20,17 +26,21 @@ _PARAM_COMMENT_RE = re.compile(
 )
 
 
-def _find_params_block(lines):
+def _find_block(lines, start_marker, end_marker):
     """Return (start, end) 0-based line indices of the marker lines, or None."""
     start = None
     for i, line in enumerate(lines):
         stripped = line.strip()
         if start is None:
-            if stripped == PARAMS_START:
+            if stripped == start_marker:
                 start = i
-        elif stripped == PARAMS_END:
+        elif stripped == end_marker:
             return start, i
     return None
+
+
+def _find_params_block(lines):
+    return _find_block(lines, PARAMS_START, PARAMS_END)
 
 
 def _numeric_value(node):
@@ -154,6 +164,161 @@ def set_params(source: str, values: dict[str, float]) -> str:
     return "\n".join(lines)
 
 
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def parse_expect(source: str) -> dict:
+    """Parse and validate the expect block into a normalized dict.
+
+    Raises ValueError with a user-facing message on a missing block, missing
+    EXPECT assignment, non-literal value, or any invalid field. Returns
+    {"bodies", "bbox_mm", "bbox_tol", "volume_mm3"} with defaults applied
+    (bbox_tol=DEFAULT_BBOX_TOL, volume_mm3=None).
+    """
+    lines = source.split("\n")
+    block = _find_block(lines, EXPECT_START, EXPECT_END)
+    if block is None:
+        raise ValueError(
+            f"Script has no expect block ({EXPECT_START} / {EXPECT_END})."
+        )
+    start, end = block
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        raise ValueError(f"expect block: script does not parse: {e}")
+    node = next(
+        (
+            n
+            for n in tree.body
+            if start < n.lineno - 1 < end
+            and isinstance(n, ast.Assign)
+            and len(n.targets) == 1
+            and isinstance(n.targets[0], ast.Name)
+            and n.targets[0].id == "EXPECT"
+        ),
+        None,
+    )
+    if node is None:
+        raise ValueError("expect block must contain a single `EXPECT = {...}` assignment.")
+    try:
+        raw = ast.literal_eval(node.value)
+    except ValueError:
+        raise ValueError("EXPECT must be a literal dict (numbers, lists, strings only).")
+    if not isinstance(raw, dict):
+        raise ValueError("EXPECT must be a dict.")
+    unknown = set(raw) - _EXPECT_ALLOWED_KEYS
+    if unknown:
+        raise ValueError(f"EXPECT has unknown keys: {sorted(unknown)}")
+    for key in _EXPECT_REQUIRED_KEYS:
+        if key not in raw:
+            raise ValueError(f"EXPECT is missing required key: {key}")
+
+    bodies = raw["bodies"]
+    if not isinstance(bodies, int) or isinstance(bodies, bool) or bodies < 1:
+        raise ValueError("EXPECT bodies must be an integer >= 1.")
+
+    bbox = raw["bbox_mm"]
+    if (
+        not isinstance(bbox, (list, tuple))
+        or len(bbox) != 3
+        or not all(_is_number(v) and v > 0 for v in bbox)
+    ):
+        raise ValueError("EXPECT bbox_mm must be three positive numbers.")
+
+    tol = raw.get("bbox_tol", DEFAULT_BBOX_TOL)
+    if not _is_number(tol) or tol <= 0:
+        raise ValueError("EXPECT bbox_tol must be a positive number.")
+
+    volume = raw.get("volume_mm3")
+    if volume is not None:
+        if (
+            not isinstance(volume, (list, tuple))
+            or len(volume) != 2
+            or not all(_is_number(v) for v in volume)
+            or volume[0] > volume[1]
+        ):
+            raise ValueError("EXPECT volume_mm3 must be [min, max] with min <= max.")
+        volume = [float(volume[0]), float(volume[1])]
+
+    return {
+        "bodies": bodies,
+        "bbox_mm": [float(v) for v in bbox],
+        "bbox_tol": float(tol),
+        "volume_mm3": volume,
+    }
+
+
+def _gate_check(name, passed, detail):
+    return {"name": name, "passed": bool(passed), "detail": detail}
+
+
+def _run_gate_checks(source, shape):
+    """All gate checks for one run: always-on validity plus the expect block."""
+    volume = float(shape.volume)
+    checks = [
+        _gate_check("valid", shape.is_valid, "B-rep validity (is_valid)"),
+        _gate_check("nondegenerate", volume > 0, f"total volume {volume:.6g} mm^3 must be > 0"),
+    ]
+    try:
+        expect = parse_expect(source)
+    except ValueError as e:
+        checks.append(_gate_check("expect_block", False, str(e)))
+        return checks
+    checks.append(_gate_check("expect_block", True, "expect block parsed"))
+
+    found_bodies = len(shape.solids())
+    checks.append(
+        _gate_check(
+            "bodies",
+            found_bodies == expect["bodies"],
+            f"bodies: expected {expect['bodies']}, found {found_bodies}",
+        )
+    )
+
+    bb = shape.bounding_box()
+    measured = sorted([bb.size.X, bb.size.Y, bb.size.Z])
+    wanted = sorted(expect["bbox_mm"])
+    tol = expect["bbox_tol"]
+    bbox_ok = all(abs(m - w) <= tol for m, w in zip(measured, wanted))
+    checks.append(
+        _gate_check(
+            "bbox",
+            bbox_ok,
+            f"bbox_mm (sorted): expected {wanted} ±{tol}, measured "
+            f"{[round(v, 3) for v in measured]}",
+        )
+    )
+
+    if expect["volume_mm3"] is not None:
+        lo, hi = expect["volume_mm3"]
+        checks.append(
+            _gate_check(
+                "volume",
+                lo <= volume <= hi,
+                f"volume_mm3: expected [{lo:.6g}, {hi:.6g}], measured {volume:.6g}",
+            )
+        )
+    return checks
+
+
+def evaluate_gate(source: str, shape) -> dict:
+    """Deterministic verify gate over the produced shape.
+
+    Fail-open: any internal error becomes status "error" instead of breaking
+    the run, so a gate bug can never prevent model building or export.
+    """
+    try:
+        checks = _run_gate_checks(source, shape)
+    except Exception as e:
+        return {
+            "status": "error",
+            "checks": [_gate_check("gate", False, f"gate evaluator failed: {e!r}")],
+        }
+    status = "passed" if all(c["passed"] for c in checks) else "failed"
+    return {"status": status, "checks": checks}
+
+
 def _to_shape(result):
     part = getattr(result, "part", None)  # BuildPart and friends
     if part is not None:
@@ -215,6 +380,7 @@ def run_script(source: str) -> dict:
             "measurements": _measure(shape),
             "positions": positions,
             "indices": indices,
+            "gate": evaluate_gate(source, shape),
         }
     except Exception:
         raise RuntimeError(

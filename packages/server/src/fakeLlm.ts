@@ -54,8 +54,14 @@ export function fakeLlm(): LlmStreamer {
         yield { type: "done", reason: "stop", message: partial };
         return;
       }
+      // The gate-fail scenario (triggered by "gate-fail" anywhere in the
+      // transcript) emits a script whose EXPECT bbox is deliberately wrong,
+      // so e2e can exercise a failing verify gate end to end.
+      const gateFail = JSON.stringify(messages).includes("gate-fail");
       if (messages.at(-1)?.role === "toolResult") {
-        const text = "Built a 10x20x30 box. All views verified.";
+        const text = gateFail
+          ? "The verify gate failed as expected for this scenario."
+          : "Built a 10x20x30 box. All views verified.";
         const partial = message([{ type: "text", text }], "stop");
         yield { type: "start", partial };
         yield { type: "text_start", contentIndex: 0, partial };
@@ -72,6 +78,10 @@ export function fakeLlm(): LlmStreamer {
         "depth = 20  # [1, 100] Depth in mm",
         "height = 30  # [1, 100] Height in mm",
         "# --- end params ---",
+        "# --- expect ---",
+        // The gate-fail variant expects a 31mm dimension the box never has.
+        `EXPECT = {"bodies": 1, "bbox_mm": [10, 20, ${gateFail ? 31 : 30}]}`,
+        "# --- end expect ---",
         "result = Box(width, depth, height)",
       ].join("\n");
       const args = JSON.stringify({ code });

@@ -168,6 +168,7 @@ self.onmessage = async (e: MessageEvent<CadRequest>) => {
         stdout: r.stdout,
         measurements: r.measurements,
         mesh: { positions, indices },
+        gate: r.gate,
       };
       post(res, [positions.buffer, indices.buffer]);
       return;

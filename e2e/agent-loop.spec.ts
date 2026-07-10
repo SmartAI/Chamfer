@@ -14,6 +14,7 @@ test("full agent loop with fake LLM", async ({ page }) => {
   // of burning the full timeout waiting for measurements that will never come.
   await expect(page.getByTestId("tool-call-card")).not.toContainText("Failed");
   await expect(page.getByTestId("tool-measurements")).toContainText("6000", { timeout: 600_000 });
+  await expect(page.getByTestId("tool-gate")).toContainText("passed");
   await expect(page.getByText("All views verified")).toBeVisible({ timeout: 600_000 });
   await page.reload();
   // Replay path re-fetches conversations, messages, and artifacts; give it the
