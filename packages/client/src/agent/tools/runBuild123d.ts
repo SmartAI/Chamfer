@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import type { Measurements, MeshPayload } from "@chamfer/shared";
+import type { Gate, Measurements, MeshPayload } from "@chamfer/shared";
 import type { CadClient } from "@/cad/cadClient";
 import { renderViewSheet } from "@/viewer/viewSheet";
 
@@ -31,6 +31,19 @@ async function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+function gateText(gate: Gate | undefined): string {
+  if (!gate) return "";
+  if (gate.status === "passed") {
+    return `Verify gate: PASSED (${gate.checks.length} checks).\n`;
+  }
+  if (gate.status === "error") {
+    const detail = gate.checks.map((c) => c.detail).join("; ");
+    return `Verify gate: unavailable (${detail}). Rely on the inspection sheet and measurements.\n`;
+  }
+  const failures = gate.checks.filter((c) => !c.passed).map((c) => `- ${c.detail}`);
+  return `Verify gate: FAILED\n${failures.join("\n")}\nFix every failing check before declaring success.\n`;
+}
+
 export function createRunBuild123dTool(deps: {
   cad: CadClient;
   onSuccess: (args: {
@@ -47,7 +60,7 @@ export function createRunBuild123dTool(deps: {
       "Execute one complete, self-contained build123d Python script. The script must assign the finished geometry to a top-level result variable.",
     parameters,
     execute: async (_toolCallId, { code }) => {
-      const { stdout, measurements, mesh } = await deps.cad.run(code);
+      const { stdout, measurements, mesh, gate } = await deps.cad.run(code);
       const sheetPng = await renderViewSheet(mesh);
       await deps.onSuccess({ code, mesh, measurements, sheetPng });
       const data = await blobToBase64(sheetPng);
@@ -56,7 +69,7 @@ export function createRunBuild123dTool(deps: {
         content: [
           {
             type: "text",
-            text: `${prefix}Measurements: ${JSON.stringify(measurements)}\nMulti-view inspection sheet attached. Inspect every view before declaring success.`,
+            text: `${prefix}Measurements: ${JSON.stringify(measurements)}\n${gateText(gate)}Multi-view inspection sheet attached. Inspect every view before declaring success.`,
           },
           { type: "image", data, mimeType: "image/png" },
         ],
