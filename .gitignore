@@ -11,3 +11,6 @@ packages/cli/LICENSE
 *.tgz
 *.tsbuildinfo
 __pycache__/
+
+# Internal working documents live in docs/internal/ and are never published
+docs/internal/
