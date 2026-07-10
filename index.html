@@ -3,50 +3,76 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>chamfer — type what you want (or show a photo), get a verified CAD part</title>
-<meta name="description" content="A small, plain-Python CAD agent harness: an LLM drives an external CAD MCP server to build a part from a prompt or a reference photo, and a deterministic kernel verifier decides PASS." />
+<title>Chamfer: Describe it. Watch it take shape.</title>
+<meta name="description" content="Describe a part in plain words or with a photo, and an AI designer builds a real 3D model right in your browser, checks its own work, and fixes its mistakes. Tune dimensions with sliders and export for 3D printing or manufacturing. Everything stays on your computer." />
 <style>
   :root {
-    --bg: #ffffff; --panel: #f6f7f9; --ink: #1a1d21; --muted: #5b6470;
-    --accent: #ea580c; --accent2: #2563eb; --ok: #059669; --line: #e4e7ec;
+    --bg: #ffffff;
+    --panel: #f6f7f9;
+    --ink: #1a1d21;
+    --muted: #5b6470;
+    --accent: #ea580c;
+    --accent-soft: #fff7ed;
+    --line: #e4e7ec;
+    --shadow: 0 1px 3px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1013;
+      --panel: #16191d;
+      --ink: #e8eaed;
+      --muted: #9aa3ad;
+      --accent: #fb923c;
+      --accent-soft: #251a10;
+      --line: #262a30;
+      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.6; }
-  a { color: var(--accent2); text-decoration: none; }
+  a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .wrap { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
   header { padding: 72px 0 40px; text-align: center; }
   .logo { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: .18em;
           text-transform: uppercase; color: var(--muted); }
-  h1 { font-size: clamp(30px, 6vw, 52px); line-height: 1.1; margin: 18px 0 10px; letter-spacing: -.02em; }
+  h1 { font-size: clamp(32px, 6vw, 56px); line-height: 1.08; margin: 18px 0 10px; letter-spacing: -.02em; }
   h1 .g { background: linear-gradient(90deg, var(--accent), #f59e0b); -webkit-background-clip: text;
           background-clip: text; color: transparent; }
-  .sub { color: var(--muted); font-size: clamp(16px, 2.4vw, 20px); max-width: 660px; margin: 0 auto; }
+  .sub { color: var(--muted); font-size: clamp(16px, 2.4vw, 20px); max-width: 700px; margin: 0 auto; }
   .cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
   .btn { display: inline-block; padding: 11px 20px; border-radius: 10px; font-weight: 600; font-size: 15px; }
   .btn.primary { background: var(--accent); color: #fff; }
-  .btn.ghost { border: 1px solid var(--line); color: var(--ink); background: #fff; }
+  .btn.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--panel); }
   .btn:hover { text-decoration: none; opacity: .92; }
   figure { margin: 40px 0; text-align: center; }
-  figure img { max-width: 100%; border-radius: 14px; border: 1px solid var(--line);
-               box-shadow: 0 1px 3px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06); }
+  figure img { max-width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow); }
   figcaption { color: var(--muted); font-size: 13px; margin-top: 10px; }
-  section { padding: 24px 0; border-top: 1px solid var(--line); }
-  h2 { font-size: 22px; margin: 8px 0 16px; }
+  section { padding: 32px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 24px; margin: 8px 0 16px; letter-spacing: -.01em; }
+  p.lead { color: var(--muted); font-size: 15px; margin: 0 0 8px; }
   pre { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-        padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 14px; color: #24292f; }
-  pre .c { color: var(--muted); }
-  code { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; font-family: var(--mono); font-size: .92em; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+        padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 14px; color: var(--ink); }
+  code { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px;
+         font-family: var(--mono); font-size: .92em; }
+  pre code { background: none; border: 0; padding: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 20px 0; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
   .card h3 { margin: 0 0 6px; font-size: 16px; }
   .card p { margin: 0; color: var(--muted); font-size: 14px; }
-  .pass { color: var(--ok); font-weight: 700; }
-  .new { display: inline-block; background: #fff7ed; color: var(--accent); border: 1px solid #fed7aa;
-         border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .08em;
-         text-transform: uppercase; padding: 1px 9px; vertical-align: 3px; margin-left: 8px; }
+  .video-placeholder { background: var(--panel); border: 1px dashed var(--line); border-radius: 14px;
+        padding: 56px 24px; text-align: center; margin: 24px 0; }
+  .video-placeholder .play { width: 64px; height: 64px; border-radius: 50%; background: var(--accent-soft);
+        border: 1px solid var(--accent); display: inline-flex; align-items: center; justify-content: center;
+        margin-bottom: 14px; }
+  .video-placeholder .play span { display: inline-block; width: 0; height: 0; margin-left: 5px;
+        border-top: 11px solid transparent; border-bottom: 11px solid transparent;
+        border-left: 18px solid var(--accent); }
+  .video-placeholder p { margin: 4px 0; }
+  .video-placeholder .big { font-weight: 700; font-size: 18px; }
+  .video-placeholder .small { color: var(--muted); font-size: 14px; }
   footer { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0 60px; }
   footer p { margin: 6px 0; }
 </style>
@@ -55,68 +81,111 @@
 <div class="wrap">
   <header>
     <div class="logo">chamfer</div>
-    <h1>Type what you want — or show a photo.<br /><span class="g">Get a verified CAD part.</span></h1>
-    <p class="sub">A small, plain-Python agent harness. The LLM drives an external CAD MCP
-      server to build a part from your prompt or reference image — then a deterministic kernel
-      verifier decides <span class="pass">PASS</span>, never the model's own word.</p>
+    <h1>Describe it.<br /><span class="g">Watch it take shape.</span></h1>
+    <p class="sub">Tell it what you want to make, in plain words or with a photo.
+      An AI designer builds a real 3D part right in your browser, checks its own work from every
+      angle, and fixes its mistakes until the part matches what you asked for.
+      Fine-tune dimensions with sliders, then export a file ready for 3D printing or manufacturing.
+      Everything stays on your computer.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/SmartAI/Chamfer">View on GitHub</a>
-      <a class="btn ghost" href="https://pypi.org/project/chamfer-cad/">Install from PyPI</a>
+      <a class="btn ghost" href="#quick-start">Quick start</a>
     </div>
   </header>
 
   <figure>
-    <img src="assets/hero.gif" alt="The agent building a part step by step, measuring its own work and self-correcting" />
-    <figcaption>One real run, replayed frame by frame — the agent builds, measures its own geometry, catches mistakes, and rebuilds before the independent verifier passes it. <em>(From an earlier Fusion-backed version; the current harness targets an external build123d MCP server.)</em></figcaption>
+    <img src="media/hero.png" alt="The Chamfer workspace: the agent has just built a swept drawer handle, with its generated Python, measurements, and 7-view inspection sheet in the chat, and the finished part with parametric sliders in the 3D viewer" />
+    <figcaption>One real run: the hard preset (a swept drawer handle) built, self-inspected, and live in the 3D viewer with parametric sliders.</figcaption>
   </figure>
 
   <section>
-    <h2>From a photo to a part<span class="new">new</span></h2>
-    <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Attach reference images with <code>--image</code>: a requirements stage
-      first describes each image in CAD-engineering terms, and during the build the agent compares its own
-      renders against your photos — while the kernel checks every number.</p>
+    <h2>Watch the demos</h2>
+    <p class="lead">Text to CAD: a full run from prompt to exported part.</p>
+    <div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;">
+      <iframe src="https://www.youtube.com/embed/QUC5HnAoHCI" title="Chamfer demo video"
+        style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen></iframe>
+    </div>
+    <p class="lead" style="margin-top:22px;">Image to 3D: building a part from a single 2D picture.</p>
+    <div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;">
+      <iframe src="https://www.youtube.com/embed/n72PvB1WUfw" title="Chamfer image-to-3D demo video"
+        style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen></iframe>
+    </div>
+  </section>
+
+  <section>
+    <h2>An agent that checks its own geometry</h2>
+    <p class="lead">Every run renders a 7-view inspection sheet (isometric, front, back, left, right, top, bottom, plus measured
+      dimensions) that the agent reads back before it answers, so mistakes get caught and rebuilt inside the loop.
+      The generated Python, the kernel measurements, and the full sheet stay visible in the tool-call card.</p>
     <figure>
-      <img src="assets/bracket-photo-to-part.gif" alt="A reference photo of an L-bracket turned into a measured, verified CAD part step by step" />
-      <figcaption>A real <code>--image</code> run: reference in, bracket built step by step, every boolean confirmed by
-        kernel measurement, all four through-holes counted by <code>find_holes</code> — then the verify gate re-measures
-        the exported STEP with no LLM involved.</figcaption>
+      <img src="media/viewsheet.png" alt="An expanded tool-call card showing the generated build123d script, bounds, volume, and area measurements, and the 7-view inspection sheet" />
+      <figcaption>The expanded tool-call card: script, measurements, and the 7-view sheet the agent inspected.</figcaption>
     </figure>
   </section>
 
   <section>
-    <h2>Watch it work — <code>chamfer serve</code><span class="new">new</span></h2>
-    <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Every run writes a full per-turn event log; <code>chamfer serve</code> is a
-      local web app over it. Start runs from a composer, watch the thread live next to a 3D canvas, scrub back
-      through every step, and read the acceptance checks on the Evidence tab. Give runs a session id and
-      follow-ups become edits of the last verified part — every version stays replayable.</p>
+    <h2>From empty chat to finished part in one click</h2>
+    <p class="lead">Three verified preset prompts, from a simple turned spacer to a swept multi-feature drawer handle,
+      start a generation immediately.</p>
     <figure>
-      <img src="assets/webapp-session.gif" alt="The chamfer serve web app: thread and 3D canvas, replay scrubber, and the Evidence tab" />
-      <figcaption>Live and replay are one code path over <code>session.jsonl</code>: the scrubber walks the run's actual steps;
-        the Evidence tab shows what the verifier measured, check by check.</figcaption>
+      <img src="media/presets.png" alt="The empty chat state with three preset prompt cards: cylindrical spacer, mounting plate, and drawer handle" />
+      <figcaption>The fresh workspace: pick a preset or just describe the part you want.</figcaption>
     </figure>
   </section>
 
   <section>
-    <h2>Gallery</h2>
-    <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Each GIF is a script-for-script replay of a real session log — actual geometry states, not illustrations. <em>(These runs are from an earlier Fusion-backed version; the current release drives an external build123d MCP server through the same measured loop.)</em></p>
+    <h2>Parametric sliders, local re-execution</h2>
+    <p class="lead">The script's parameter block becomes live sliders.
+      Drag one and the part re-executes in the browser, with no new chat turn and no API call.</p>
     <figure>
-      <img src="assets/electric-kettle-build.gif" alt="The agent building an electric kettle step by step, catching an upside-down spout and rebuilding it" />
-      <figcaption>Electric kettle — a cylindrical body on a power base, a C-handle with measured hand clearance, a domed lid and a spout, with one live self-correction: the spout first extruded upside-down, the agent saw it in its own measurement and rebuilt it at the rim.</figcaption>
-    </figure>
-    <figure>
-      <img src="assets/desk-lamp-build.gif" alt="The agent building a desk lamp with a weighted base, verifying a kept-clear light zone and stability" />
-      <figcaption>Desk lamp — a weighted base, a slim stem, an overhanging arm and a hollow shade, with a kept-clear light zone verified at a measured 258 mm and stability confirmed from the center of mass sitting inside the base edge.</figcaption>
+      <img src="media/params.png" alt="The right panel after dragging the arc length slider to its minimum: the drawer handle is visibly shorter" />
+      <figcaption>arc_length dragged from 110 down to 60: the handle re-builds instantly, entirely client-side.</figcaption>
     </figure>
   </section>
 
-  <figure>
-    <img src="assets/architecture.svg" alt="Chamfer architecture: agent loop over an MCP server, with a deterministic verifier deciding PASS" />
-    <figcaption>Where determinism lives: the LLM writes CAD freely; fixed code decides what is true.</figcaption>
-  </figure>
+  <section>
+    <h2>Everything else you need</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Export anything</h3>
+        <p>STEP, STL, 3MF, or the raw build123d <code>.py</code> script, so the design stays editable outside Chamfer.</p>
+      </div>
+      <div class="card">
+        <h3>Reference images</h3>
+        <p>Paste or attach sketches and photos in chat to guide the model toward the shape you have in mind.</p>
+      </div>
+      <div class="card">
+        <h3>Bring your own key</h3>
+        <p>Anthropic, OpenAI, or Google. Keys are stored locally and only ever shown masked.</p>
+      </div>
+      <div class="card">
+        <h3>Local persistence</h3>
+        <p>Conversations, scripts, and view sheets persist in local SQLite; every session replays after a reload.</p>
+      </div>
+    </div>
+    <figure>
+      <img src="media/settings.png" alt="The settings modal with provider, model, masked API key, and base URL fields" />
+      <figcaption>Bring-your-own-key settings: pick a provider and model, paste a key, done.</figcaption>
+    </figure>
+  </section>
+
+  <section id="quick-start">
+    <h2>Quick start</h2>
+    <p class="lead">Requires Node.js &gt;= 22.19.</p>
+    <pre><code>git clone https://github.com/SmartAI/Chamfer.git
+cd Chamfer-v2
+npm install
+npm run dev</code></pre>
+    <p class="lead">Open the printed URL, add your API key in Settings, and describe a part.</p>
+  </section>
 
   <footer>
-    <p><a href="https://github.com/SmartAI/Chamfer">github.com/SmartAI/Chamfer</a> · <a href="https://pypi.org/project/chamfer-cad/">pypi.org/project/chamfer-cad</a> · Apache-2.0</p>
-    <p>An independent open-source project — not affiliated with, endorsed by, or sponsored by Autodesk, Inc.</p>
+    <p><a href="https://github.com/SmartAI/Chamfer">github.com/SmartAI/Chamfer</a> · Apache-2.0</p>
+    <p>Geometry never leaves your machine.</p>
   </footer>
 </div>
 </body>
