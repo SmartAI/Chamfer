@@ -38,4 +38,20 @@ describe("latestGateSummary", () => {
     expect(latestGateSummary([{ role: "toolResult", details: { gate: "oops" } }])).toBeUndefined();
     expect(latestGateSummary([null, 42, "x"])).toBeUndefined();
   });
+
+  it("skips probe runs: their verdicts never become the conversation badge", () => {
+    const probe = {
+      role: "toolResult",
+      toolCallId: "tc-probe",
+      content: [],
+      details: {
+        gate: { status: "passed", checks: [{ name: "c0", passed: true, detail: "d" }] },
+        measurements: { component: "probe" },
+      },
+    };
+    const messages = [runResult("failed", [{ passed: false }]), probe];
+    // The newest non-probe verdict (the failure) wins over the newer probe pass.
+    expect(latestGateSummary(messages)).toEqual({ status: "failed", passedChecks: 0, totalChecks: 1 });
+    expect(latestGateSummary([probe])).toBeUndefined();
+  });
 });

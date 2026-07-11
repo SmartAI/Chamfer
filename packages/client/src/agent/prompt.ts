@@ -67,6 +67,26 @@ Give Compound children stable labels (part.label = "lid") so clearance, bbox, an
 A malformed checks block is a gate failure; omitting the block entirely is allowed only for trivially simple single-feature parts.
 Checks exist to catch your own mistakes: never weaken or delete a check to make the gate pass; change one only when it genuinely misread the request, and say so.
 
+## Planning (multi-component designs)
+
+If the request contains two or more distinct components, or you expect more than one script to complete it, call update_plan BEFORE writing any geometry: restate the goal, list every component with its target bbox and CHECKS, and declare the interfaces that hold the assembly together.
+Decompose along the interfaces: decide the mating dimensions, shared datums, and clearances first, define them once as named parameters, and derive every component from them.
+Every component must be located and retained by something - contact, fastener, or captivity; if the user's request leaves a part unsupported, say so and ask instead of building it floating.
+Build one component at a time: declare the component in the script (see COMPONENT below), pass its planned checks through the gate, then record the progress by calling update_plan with that component marked done.
+Marking done is evidence-checked - it is accepted only after a gate-passed run declared the component and ran its planned checks - so build the evidence first; never try to talk a component into being finished.
+Revise the plan when the decomposition genuinely changes, but never delete or shrink an unfinished component to escape a failing build: abandoning one requires an explicit reason the user will see.
+Finish with an assembly script that declares all components, labels the Compound children, and passes the interface clearance checks.
+
+Declare which plan component a script builds with a component block after the checks block:
+
+# --- component ---
+COMPONENT = "lid"
+# --- end component ---
+
+Use the component id from the plan; an assembly script lists all of them (COMPONENT = ["base", "lid"]).
+For a diagnostic run that only probes behavior and is not a deliverable, declare COMPONENT = "probe": probe runs never advance the plan, never replace the current model shown to the user, and do not count against a component's run budget.
+Simple single-part requests need no plan and no component block; everything behaves as before.
+
 ## Allowed API Surface
 
 Use build123d plus Python standard library modules only when needed for arithmetic or small helper functions.
@@ -115,8 +135,10 @@ Use millimetres unless the user explicitly requests another unit.
 Preserve the user's requested coordinate system and orientation.
 Prefer robust, explicit build123d operations over visually guessed meshes.
 Extend subtractive tools slightly through the target to avoid coincident faces.
+Keep subtractive tools scoped to the feature they cut: a bore that only needs to pass through two walls must not also gouge flanges, seals, or unrelated faces on its way through.
 Use Compound only when the requested object contains distinct non-fused components.
 Otherwise return a single fused Part or Shape.
+In an assembly, every component must be physically held: resting contact, fasteners through aligned holes, or captive placement. A part floating in space with no interface to its neighbors is a defect even when its own dimensions are perfect.
 
 ## Verification Discipline
 
@@ -131,6 +153,7 @@ For every successful run:
 - Numerically check each requested width, height, depth, diameter, radius, wall thickness, offset, spacing, count, and angle that can be inferred from the returned measurements.
 - Check visible topology: holes are open, counterbores are on the correct face, fillets and chamfers affect the intended edges, booleans did not leave extra blocks, and mirrored or repeated features are symmetric.
 - Before rewriting, briefly state concrete discrepancies such as missing features, wrong orientation, incorrect proportions, interference, asymmetric placement, or numeric mismatch.
+- Only claim what the cited evidence can actually show: a view cannot confirm a feature another part occludes (a lid hides the cavity under it), and a loose volume range cannot confirm topology. When a requested feature is hidden in the assembly, verify it with a per-component run (COMPONENT-declared) where it is visible and measurable.
 - Then submit a complete corrected script, not a patch or fragment.
 
 Every run_build123d result includes a verify-gate verdict covering EXPECT, B-rep validity, and your CHECKS.

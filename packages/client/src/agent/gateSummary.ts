@@ -1,4 +1,5 @@
 import type { Gate } from "@chamfer/shared";
+import { PROBE_COMPONENT, runComponentIds } from "./plan";
 
 export interface GateSummary {
   status: Gate["status"];
@@ -10,8 +11,15 @@ const GATE_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "error"]
 
 function gateOf(message: unknown): Gate | undefined {
   if (typeof message !== "object" || message === null) return undefined;
-  const m = message as { role?: unknown; details?: { gate?: unknown } };
+  const m = message as {
+    role?: unknown;
+    details?: { gate?: unknown; measurements?: { component?: unknown } };
+  };
   if (m.role !== "toolResult") return undefined;
+  // Probe runs are diagnostics, not deliverables: their verdicts must never
+  // become the conversation's verification badge.
+  const ids = runComponentIds(m.details?.measurements);
+  if (ids.length === 1 && ids[0] === PROBE_COMPONENT) return undefined;
   const gate = m.details?.gate;
   if (typeof gate !== "object" || gate === null) return undefined;
   const status = (gate as { status?: unknown }).status;
@@ -19,7 +27,7 @@ function gateOf(message: unknown): Gate | undefined {
   return gate as Gate;
 }
 
-/** Verdict of the most recent verify-gate-bearing tool result, or undefined.
+/** Verdict of the most recent verify-gate-bearing, non-probe tool result, or undefined.
  * Tolerates arbitrary message shapes: replayed history predating the gate,
  * lookup_docs results, and malformed content all simply yield no summary. */
 export function latestGateSummary(messages: unknown[]): GateSummary | undefined {

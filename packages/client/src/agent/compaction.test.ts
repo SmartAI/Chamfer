@@ -115,6 +115,29 @@ describe("findCompactionCut", () => {
     const messages = [assistant("only assistant")];
     expect(findCompactionCut(messages, 0, 10)).toBe(0);
   });
+
+  it("never cuts past the newest accepted plan snapshot", () => {
+    const planResult = {
+      role: "toolResult",
+      toolCallId: "plan-1",
+      toolName: "update_plan",
+      content: [{ type: "text", text: "Plan accepted" }],
+      details: { plan: { goal: "g", components: [], interfaces: [] } },
+      isError: false,
+      timestamp: 1,
+    };
+    const messages = [
+      user("turn 1"),
+      assistant("reply 1"),
+      user("plan it"),
+      planResult,
+      bigUser(30_000, "later chatter"),
+      assistant("reply"),
+    ];
+    // Budget alone would keep only the tail; the plan result pulls the cut back
+    // to the start of its turn so the plan of record stays in context verbatim.
+    expect(findCompactionCut(messages, 0, 1_000)).toBe(2);
+  });
 });
 
 describe("runCompaction", () => {

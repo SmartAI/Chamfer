@@ -1,0 +1,227 @@
+import { describe, expect, it } from "vitest";
+import {
+  collectComponentEvidence,
+  latestPlan,
+  planIncompleteComponents,
+  runComponentIds,
+  validatePlanSnapshot,
+  type Plan,
+} from "./plan";
+import { createUpdatePlanTool } from "./tools/updatePlan";
+
+function makePlan(overrides: Partial<Plan> = {}): Plan {
+  return {
+    goal: "two-part housing",
+    components: [
+      { id: "base", description: "housing base", status: "todo" },
+      { id: "lid", description: "flat lid", status: "todo" },
+    ],
+    interfaces: [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
+    ...overrides,
+  };
+}
+
+function gatePassedRun(component: string | string[], checks: unknown[] = []): unknown {
+  return {
+    role: "toolResult",
+    toolName: "run_build123d",
+    isError: false,
+    content: [],
+    details: { gate: { status: "passed", checks: [] }, measurements: { component, checks } },
+    timestamp: 1,
+  };
+}
+
+function planResult(plan: Plan): unknown {
+  return {
+    role: "toolResult",
+    toolName: "update_plan",
+    isError: false,
+    content: [],
+    details: { plan },
+    timestamp: 1,
+  };
+}
+
+describe("validatePlanSnapshot", () => {
+  const noEvidence = new Map();
+
+  it("accepts a well-formed two-component plan", () => {
+    expect(validatePlanSnapshot({ next: makePlan(), previous: undefined, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("rejects duplicate, malformed, and reserved component ids", () => {
+    const plan = makePlan({
+      components: [
+        { id: "base", description: "a", status: "todo" },
+        { id: "base", description: "b", status: "todo" },
+        { id: "Bad Id", description: "c", status: "todo" },
+        { id: "probe", description: "d", status: "todo" },
+      ],
+      interfaces: [],
+    });
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/duplicate component id "base"/);
+    expect(errors.join("\n")).toMatch(/"Bad Id"/);
+    expect(errors.join("\n")).toMatch(/reserved for diagnostic runs/);
+  });
+
+  it("rejects abandoning without a reason", () => {
+    const plan = makePlan();
+    plan.components[1]!.status = "abandoned";
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/abandon_reason/);
+  });
+
+  it("rejects unknown check kinds", () => {
+    const plan = makePlan();
+    plan.components[0]!.checks = [{ kind: "hole_sideways", count: 2 }];
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/unknown check kind "hole_sideways"/);
+  });
+
+  it("requires interface coverage for every non-free-floating component", () => {
+    const plan = makePlan({ interfaces: [] });
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.filter((e) => e.includes("not held by any interface"))).toHaveLength(2);
+  });
+
+  it("accepts an uncovered component with a free_floating_reason", () => {
+    const plan = makePlan({
+      components: [
+        { id: "base", description: "base", status: "todo", free_floating_reason: "single part on the bench" },
+        { id: "lid", description: "lid", status: "todo", free_floating_reason: "user wants it beside the base" },
+      ],
+      interfaces: [],
+    });
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("rejects a disconnected interface graph", () => {
+    const plan = makePlan({
+      components: [
+        { id: "a1", description: "a", status: "todo" },
+        { id: "a2", description: "b", status: "todo" },
+        { id: "b1", description: "c", status: "todo" },
+        { id: "b2", description: "d", status: "todo" },
+      ],
+      interfaces: [
+        { a: "a1", b: "a2", kind: "clearance", min_mm: 0 },
+        { a: "b1", b: "b2", kind: "clearance", min_mm: 0 },
+      ],
+    });
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/disconnected/);
+  });
+
+  it("rejects clearance interfaces without min_mm and captive without endpoints", () => {
+    const plan = makePlan({
+      interfaces: [
+        { a: "base", b: "lid", kind: "clearance" },
+        { a: "base", b: "ghost", kind: "captive" },
+      ],
+    });
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/requires min_mm/);
+    expect(errors.join("\n")).toMatch(/endpoints must be component ids/);
+  });
+
+  it("rejects silently dropping a previous component", () => {
+    const previous = makePlan();
+    const next = makePlan({
+      components: [{ id: "base", description: "base", status: "todo", free_floating_reason: "now single-part" }],
+      interfaces: [],
+    });
+    const errors = validatePlanSnapshot({ next, previous, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/component "lid" from the previous plan is missing/);
+  });
+
+  it("rejects done without gate evidence and accepts it with evidence covering the planned checks", () => {
+    const check = { kind: "hole_through", diameter: 5.5, count: 4 };
+    const plan = makePlan();
+    plan.components[0]!.status = "done";
+    plan.components[0]!.checks = [check];
+
+    const without = validatePlanSnapshot({ next: plan, previous: undefined, evidence: new Map() });
+    expect(without.join("\n")).toMatch(/no gate-passed run has declared COMPONENT = "base"/);
+
+    // Evidence with the check present in a different key order must pass.
+    const evidence = collectComponentEvidence([
+      gatePassedRun("base", [{ count: 4, diameter: 5.5, kind: "hole_through" }]),
+    ]);
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence })).toEqual([]);
+
+    // Evidence that ran a different check set must fail.
+    const wrongEvidence = collectComponentEvidence([gatePassedRun("base", [{ kind: "bbox", size_mm: [1, 2, 3] }])]);
+    const missing = validatePlanSnapshot({ next: plan, previous: undefined, evidence: wrongEvidence });
+    expect(missing.join("\n")).toMatch(/was not part of the gate-passed run/);
+  });
+});
+
+describe("evidence and plan derivation from the transcript", () => {
+  it("collects evidence only from gate-passed runs and ignores probes and failures", () => {
+    const evidence = collectComponentEvidence([
+      gatePassedRun("probe"),
+      gatePassedRun(["base", "lid"]),
+      {
+        role: "toolResult",
+        toolName: "run_build123d",
+        details: { gate: { status: "failed" }, measurements: { component: "pin" } },
+      },
+    ]);
+    expect([...evidence.keys()].sort()).toEqual(["base", "lid"]);
+  });
+
+  it("latestPlan returns the newest accepted snapshot and skips errored results", () => {
+    const first = makePlan({ goal: "v1" });
+    const second = makePlan({ goal: "v2" });
+    const messages = [
+      planResult(first),
+      planResult(second),
+      { role: "toolResult", toolName: "update_plan", isError: true, content: [], timestamp: 2 },
+    ];
+    expect(latestPlan(messages)?.goal).toBe("v2");
+    expect(latestPlan([])).toBeUndefined();
+  });
+
+  it("planIncompleteComponents excludes done and abandoned", () => {
+    const plan = makePlan({
+      components: [
+        { id: "a1", description: "a", status: "done" },
+        { id: "a2", description: "b", status: "building" },
+        { id: "a3", description: "c", status: "abandoned", abandon_reason: "gone" },
+        { id: "a4", description: "d", status: "todo" },
+      ],
+    });
+    expect(planIncompleteComponents(plan).map((c) => c.id)).toEqual(["a2", "a4"]);
+  });
+
+  it("runComponentIds normalizes string, array, and absent declarations", () => {
+    expect(runComponentIds({ component: "lid" })).toEqual(["lid"]);
+    expect(runComponentIds({ component: ["a", "b", 3 as unknown as string] })).toEqual(["a", "b"]);
+    expect(runComponentIds({})).toEqual([]);
+    expect(runComponentIds(undefined)).toEqual([]);
+  });
+});
+
+describe("createUpdatePlanTool", () => {
+  it("accepts a valid snapshot and returns it in details with a compact text body", async () => {
+    const tool = createUpdatePlanTool({ getMessages: () => [] });
+    const result = await tool.execute("t1", makePlan() as never, undefined as never, undefined as never);
+    expect(result.details?.plan.goal).toBe("two-part housing");
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/^Plan accepted: 2 components \(2 todo\), 1 interfaces\./);
+    expect(text).toContain('"goal":"two-part housing"');
+  });
+
+  it("rejects an invalid snapshot with every error listed", async () => {
+    const tool = createUpdatePlanTool({ getMessages: () => [planResult(makePlan())] });
+    const next = makePlan({
+      components: [{ id: "base", description: "base", status: "done" }],
+      interfaces: [],
+    });
+    await expect(tool.execute("t1", next as never, undefined as never, undefined as never)).rejects.toThrow(
+      /Plan rejected:[\s\S]*"lid" from the previous plan is missing[\s\S]*no gate-passed run/,
+    );
+  });
+});
