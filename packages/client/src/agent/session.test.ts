@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import * as rest from "../api/rest";
-import { classifySessionError, createSession, type SessionError, type SessionState } from "./session";
+import { classifySessionError, createSession, SELF_CHECK_MARKER, type SessionError, type SessionState } from "./session";
 import { systemPrompt } from "./prompt";
 
 vi.mock("../api/rest", () => ({
@@ -645,5 +645,281 @@ describe("classifySessionError", () => {
   it("classifies everything else as generic, preserving the message", () => {
     const error = classifySessionError("Agent is already processing a prompt");
     expect(error).toEqual({ kind: "generic", message: "Agent is already processing a prompt" });
+  });
+});
+
+describe("createSession agent-loop policies", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function textMessage(text: string, stopReason: "stop" | "toolUse" = "stop"): AssistantMessage {
+    return {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      api: FAKE_MODEL.api,
+      provider: FAKE_MODEL.provider,
+      model: FAKE_MODEL.id,
+      usage: ZERO_USAGE,
+      stopReason,
+      timestamp: Date.now(),
+    };
+  }
+
+  function toolCallMessage(id: string): AssistantMessage {
+    return {
+      ...textMessage("", "toolUse"),
+      content: [{ type: "toolCall", id, name: "run_build123d", arguments: { code: "result = Box(1, 1, 1)" } }],
+    };
+  }
+
+  function pushCompleted(message: AssistantMessage) {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      stream.push({ type: "start", partial: message });
+      stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
+      stream.end(message);
+    });
+    return stream;
+  }
+
+  /** streamFn that answers summarization requests from a canned summary and plays the
+   * scripted assistant messages for everything else, recording each turn's context. */
+  function makeScriptedStreamFn(script: AssistantMessage[], summaryText = "canned summary") {
+    const turnContexts: { systemPrompt?: string; messages: unknown[] }[] = [];
+    const summaryContexts: { systemPrompt?: string; messages: unknown[] }[] = [];
+    const streamFn = vi.fn((_model: unknown, context: { systemPrompt?: string; messages: unknown[] }) => {
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        summaryContexts.push(context);
+        return pushCompleted(textMessage(summaryText));
+      }
+      turnContexts.push(context);
+      const next = script.shift();
+      return pushCompleted(next ?? textMessage("script exhausted"));
+    });
+    return { streamFn, turnContexts, summaryContexts };
+  }
+
+  function gateTool(status: "passed" | "failed") {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ran" }],
+      details: { gate: { status, checks: [] } },
+    }));
+    return {
+      tool: {
+        name: "run_build123d",
+        label: "Run build123d",
+        description: "fake run tool",
+        parameters: Type.Object({ code: Type.String() }),
+        execute,
+      },
+      execute,
+    };
+  }
+
+  it("injects the self-check once after a gate pass and lets the agent continue", async () => {
+    const { tool } = gateTool("passed");
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      toolCallMessage("call-1"),
+      textMessage("Box built; gate passed, stopping here."),
+      textMessage("Checked every requirement: all satisfied."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build a box with 4 holes");
+
+    // Turn flow: toolCall -> premature stop -> injected self-check -> final answer.
+    expect(turnContexts).toHaveLength(3);
+    const selfChecks = (latest?.messages ?? []).filter((m) => {
+      const message = m as { role?: string; content?: { type?: string; text?: string }[] };
+      return (
+        message.role === "user" &&
+        Array.isArray(message.content) &&
+        Boolean(message.content[0]?.text?.startsWith(SELF_CHECK_MARKER))
+      );
+    });
+    expect(selfChecks).toHaveLength(1);
+    expect(latest?.error).toBeUndefined();
+
+    // The injected nudge was persisted like any other message.
+    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    const persistedSelfCheck = postMessage.mock.calls.find((call) =>
+      String(call[1].contentJson).includes("[Chamfer self-check]"),
+    );
+    expect(persistedSelfCheck).toBeDefined();
+  });
+
+  it("does not inject the self-check when the gate never passed", async () => {
+    const { tool } = gateTool("failed");
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      toolCallMessage("call-1"),
+      textMessage("Gate failed; explaining honestly and stopping."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build a box");
+
+    expect(turnContexts).toHaveLength(2);
+    const selfChecks = (latest?.messages ?? []).filter((m) =>
+      JSON.stringify(m).includes(SELF_CHECK_MARKER),
+    );
+    expect(selfChecks).toHaveLength(0);
+  });
+
+  it("retries a pre-content 429, surfaces the retrying notice, and completes the turn", async () => {
+    let calls = 0;
+    const streamFn = vi.fn(() => {
+      calls += 1;
+      if (calls === 1) {
+        const stream = createAssistantMessageEventStream();
+        const failed: AssistantMessage = {
+          ...textMessage(""),
+          content: [],
+          stopReason: "error",
+          errorMessage: "429 too many requests, retry-after: 1",
+        };
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: failed });
+          stream.push({ type: "error", reason: "error", error: failed });
+          stream.end(failed);
+        });
+        return stream;
+      }
+      return pushCompleted(textMessage("recovered"));
+    });
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+      __retryOptions: { sleep: () => Promise.resolve() },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    const notices: unknown[] = [];
+    let latest: SessionState | undefined;
+    session.subscribe((state) => {
+      if (state.notice) notices.push(state.notice);
+      latest = state;
+    });
+    await session.send("build a box");
+
+    expect(calls).toBe(2);
+    expect(latest?.error).toBeUndefined();
+    expect(latest?.notice).toBeUndefined();
+    expect(notices).toContainEqual({ kind: "retrying", attempt: 1, maxAttempts: 5, delaySeconds: 1 });
+    const finalAssistant = (latest?.messages ?? []).at(-1) as { content?: { text?: string }[] };
+    expect(finalAssistant?.content?.[0]?.text).toBe("recovered");
+  });
+
+  it("compacts an oversized history into a persisted compaction row before the turn", async () => {
+    const bigText = "x".repeat(50_000 * 4);
+    const priorMessages = [
+      { role: "user", content: [{ type: "text", text: `Housing must be 80x60x30mm. ${bigText}` }], timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 2 },
+      { role: "user", content: [{ type: "text", text: `Wall thickness 3mm. ${bigText}` }], timestamp: 3 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 4 },
+      { role: "user", content: [{ type: "text", text: `Add M4 holes. ${bigText}` }], timestamp: 5 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 6 },
+      { role: "user", content: [{ type: "text", text: "small recent question" }], timestamp: 7 },
+      { role: "assistant", content: [{ type: "text", text: "small recent answer" }], timestamp: 8 },
+    ];
+    const { streamFn, turnContexts, summaryContexts } = makeScriptedStreamFn(
+      [textMessage("continuing the design")],
+      "- Housing 80x60x30mm, wall 3mm.",
+    );
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages,
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("now add the lid");
+
+    // One summarization call ran, and the turn context starts with the summary.
+    expect(summaryContexts).toHaveLength(1);
+    expect(turnContexts).toHaveLength(1);
+    const first = (turnContexts[0]?.messages ?? [])[0] as { role?: string; content?: { text?: string }[] };
+    expect(first?.role).toBe("user");
+    expect(first?.content?.[0]?.text).toContain("Summary of earlier work");
+    expect(first?.content?.[0]?.text).toContain("80x60x30mm");
+    // The turn context is much smaller than the full transcript.
+    expect((turnContexts[0]?.messages ?? []).length).toBeLessThan(priorMessages.length);
+
+    // The compaction row was persisted with the next seq, before the user prompt.
+    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    const compactionCall = postMessage.mock.calls.find((call) => call[1].role === "compaction");
+    expect(compactionCall).toBeDefined();
+    expect(compactionCall?.[1].seq).toBe(priorMessages.length);
+    const userCall = postMessage.mock.calls.find((call) => call[1].role === "user");
+    expect(userCall?.[1].seq).toBe(priorMessages.length + 1);
+
+    // The full transcript (plus the row) stays visible to the UI.
+    expect(latest?.messages.length).toBeGreaterThan(priorMessages.length);
+    // A second send must not re-summarize: the persisted row already shrank the context.
+    await session.send("one more tweak");
+    expect(summaryContexts).toHaveLength(1);
+  });
+
+  it("stubs superseded view sheets in the LLM context while the transcript keeps every image", async () => {
+    const sheets = Array.from({ length: 9 }, (_, i) => ({
+      role: "toolResult",
+      toolCallId: `call-${i}`,
+      toolName: "run_build123d",
+      content: [
+        { type: "text", text: `Measurements run ${i}` },
+        { type: "image", data: `png-${i}`, mimeType: "image/png" },
+      ],
+      isError: false,
+      timestamp: i,
+    }));
+    const { streamFn, turnContexts } = makeScriptedStreamFn([textMessage("looked at the sheets")]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: sheets,
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("continue");
+
+    const contextMessages = (turnContexts[0]?.messages ?? []) as { content?: { type?: string }[] }[];
+    const imagesInContext = contextMessages.flatMap((m) => (m.content ?? []).filter((b) => b.type === "image"));
+    expect(imagesInContext).toHaveLength(3);
+
+    const imagesInTranscript = (latest?.messages ?? []).flatMap((m) =>
+      ((m as { content?: { type?: string }[] }).content ?? []).filter((b) => b.type === "image"),
+    );
+    expect(imagesInTranscript).toHaveLength(9);
   });
 });

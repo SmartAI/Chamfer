@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Streamdown, type CustomRendererProps } from "streamdown";
-import { ArrowDown, CheckCircle2, LoaderCircle } from "lucide-react";
+import { ArrowDown, CheckCircle2, FoldVertical, ListChecks, LoaderCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
-import { getMessagePersistenceId } from "@/agent/session";
+import { getMessagePersistenceId, SELF_CHECK_MARKER } from "@/agent/session";
 import { CadCodeActions } from "./CadCodeActions";
 
 function PythonCodeBlock({ code, language, isIncomplete }: CustomRendererProps) {
@@ -130,7 +130,7 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
 
   const renderable = messages.filter((m) => {
     const role = (m as RoledMessage).role;
-    return role === "user" || role === "assistant";
+    return role === "user" || role === "assistant" || role === "compaction";
   }) as RoledMessage[];
   const toolResults = new Map<string, RoledMessage>();
   for (const message of messages as RoledMessage[]) {
@@ -172,6 +172,35 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
         const isUser = message.role === "user";
         const isLast = index === renderable.length - 1;
         const text = extractText(message.content);
+
+        // Compaction rows and injected self-check nudges are transcript metadata, not
+        // conversation bubbles: both render as centered system chips.
+        if (message.role === "compaction") {
+          return (
+            <div key={index} className="flex justify-center">
+              <span
+                data-testid="compaction-marker"
+                className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground"
+              >
+                <FoldVertical className="h-3 w-3" aria-hidden="true" />
+                Earlier history compacted into a summary for the model - everything stays visible here
+              </span>
+            </div>
+          );
+        }
+        if (isUser && text.startsWith(SELF_CHECK_MARKER)) {
+          return (
+            <div key={index} className="flex justify-center">
+              <span
+                data-testid="self-check-chip"
+                className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground"
+              >
+                <ListChecks className="h-3 w-3" aria-hidden="true" />
+                Self-check: confirming every part of the request is built
+              </span>
+            </div>
+          );
+        }
         const toolCalls = Array.isArray(message.content) ? message.content.filter(isToolCallBlock) : [];
         // User image blocks are persisted verbatim in contentJson (base64 included), so
         // replayed messages render straight from the content blocks; no attachment fetch.

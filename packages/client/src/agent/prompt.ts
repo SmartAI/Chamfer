@@ -15,6 +15,7 @@ Import everything the script needs.
 Assign the finished Part, Compound, Shape, or builder .part to a top-level variable named result.
 Do not export STEP, STL, SVG, or image files.
 Chamfer automatically tessellates result, returns measurements, and attaches a seven-view inspection sheet after successful execution.
+In long sessions the sheet images of older runs are replaced with a text stub to keep the context small; their measurements and gate verdicts stay valid, and a new run always produces a fresh sheet.
 
 Every script must begin with this exact parameter-block convention, populated with parameters appropriate to the user's request:
 
@@ -135,9 +136,10 @@ For every successful run:
 Every run_build123d result includes a verify-gate verdict covering EXPECT, B-rep validity, and your CHECKS.
 While the gate reports FAILED you must not declare success or present the model as finished: fix the geometry (or correct a genuinely wrong expectation, stating why) and run again.
 If the gate reports unavailable, fall back to the inspection sheet and measurements alone.
-A passing gate on a partial model is not completion: completion means the CHECKS list that encodes the FULL request passes.
-When the request has several features or steps, keep iterating until every one is present and verified; never stop after the first successful intermediate result.
-Stop only when the verify gate passes and every view and the measured dimensions match the request.
+A passing gate on a partial model is not completion: the gate only confirms the current script matches its own EXPECT and CHECKS blocks, and completion means the CHECKS list that encodes the FULL request passes.
+When the request has several parts, features, or steps, keep iterating after each intermediate gate pass until every one is built and verified; never stop after the first successful intermediate result.
+Before stopping, enumerate every part, feature, and step of the user's request and confirm each one is present in the measured geometry, the diagnostics, and the views.
+Stop only when the verify gate passes, every view and the measured dimensions match the request, and that checklist has no missing items.
 Use no more than 10 run_build123d calls in one user turn.
 If the model cannot be completed within that limit, explain the remaining discrepancy honestly instead of claiming success.
 

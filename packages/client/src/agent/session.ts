@@ -2,6 +2,9 @@ import { Agent, streamProxy, type AgentEvent, type AgentMessage, type AgentTool,
 import type { Model, Api, ImageContent } from "@earendil-works/pi-ai";
 import { PROXY_AUTH_TOKEN } from "@chamfer/shared";
 import * as rest from "../api/rest";
+import { transformLlmContext } from "./contextPolicy";
+import { runCompaction } from "./compaction";
+import { withStreamRetry, type StreamRetryOptions } from "./retryStream";
 
 export interface ChatSession {
   conversationId: string;
@@ -22,11 +25,17 @@ export interface SessionError {
   message: string;
 }
 
+/** Transient activity the status strip shows while the session works around provider limits. */
+export type SessionNotice =
+  | { kind: "retrying"; attempt: number; maxAttempts: number; delaySeconds: number }
+  | { kind: "compacting" };
+
 export interface SessionState {
   /** pi AgentMessages: persisted history plus the live streaming partial, if any. */
   messages: unknown[];
   streaming: boolean;
   error?: SessionError;
+  notice?: SessionNotice;
 }
 
 // Provider/proxy failure text is free-form (streamProxy wraps HTTP failures as
@@ -61,6 +70,11 @@ export interface CreateSessionOptions {
    * it exists so tests can inject a fake streamFn without mocking the whole pi-agent-core module.
    */
   __streamFn?: StreamFn;
+  /**
+   * Internal test-only override for retry pacing (sleep, attempt budget, delays). Production
+   * callers must not set this; the session always installs its own onWait/onResume callbacks.
+   */
+  __retryOptions?: Pick<StreamRetryOptions, "sleep" | "maxAttempts" | "baseDelayMs" | "maxDelayMs">;
 }
 
 function buildStreamFn(): StreamFn {
@@ -74,6 +88,12 @@ function buildStreamFn(): StreamFn {
 
 const PERSIST_RETRY_DELAY_MS = 250;
 export const DEFAULT_MAX_CAD_RUNS = 10;
+
+/** Prefix identifying the injected self-check nudge, so the UI can render it as a
+ * system chip and the rate-limit Retry action never resends it as the user's prompt. */
+export const SELF_CHECK_MARKER = "[Chamfer self-check]";
+
+export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed for the current script. A passing gate only confirms the current geometry matches its own EXPECT block - it does not mean the whole request is done. Re-read the original request, list every requested part, feature, and step, and mark each one satisfied or missing against the latest measurements and views. If anything is missing, continue building it now. If everything is satisfied, reply with the final summary.`;
 const persistenceIds = new WeakMap<object, string>();
 
 export function registerMessagePersistenceId(message: unknown, id: string): void {
@@ -115,17 +135,35 @@ function fileToImageContent(file: File): Promise<ImageContent> {
 }
 
 /** Builds a SessionState snapshot from current agent state, including the live streaming partial. */
-function snapshotState(agent: Agent, error: SessionError | undefined): SessionState {
+function snapshotState(agent: Agent, error: SessionError | undefined, notice: SessionNotice | undefined): SessionState {
   const messages: unknown[] = agent.state.messages.slice();
   if (agent.state.isStreaming && agent.state.streamingMessage) {
     messages.push(agent.state.streamingMessage);
   }
-  return { messages, streaming: agent.state.isStreaming, error };
+  return { messages, streaming: agent.state.isStreaming, error, notice };
 }
 
 export function createSession(opts: CreateSessionOptions): ChatSession {
   const model = JSON.parse(opts.modelJson) as Model<Api>;
   const priorMessages = opts.priorMessages as AgentMessage[];
+
+  let lastError: SessionError | undefined;
+  let notice: SessionNotice | undefined;
+  const listeners = new Set<(state: SessionState) => void>();
+
+  // Pre-content 429/529 failures are retried inside the stream function, invisibly to
+  // the agent loop; the notice keeps the user informed while the session waits.
+  const streamFn = withStreamRetry(opts.__streamFn ?? buildStreamFn(), {
+    ...opts.__retryOptions,
+    onWait: ({ attempt, maxAttempts, delayMs }) => {
+      notice = { kind: "retrying", attempt, maxAttempts, delaySeconds: Math.ceil(delayMs / 1000) };
+      notify();
+    },
+    onResume: () => {
+      notice = undefined;
+      notify();
+    },
+  });
 
   const agent = new Agent({
     initialState: {
@@ -133,16 +171,17 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       model,
       tools: (opts.tools ?? []) as AgentTool[],
     },
-    streamFn: opts.__streamFn ?? buildStreamFn(),
+    streamFn,
+    // The persisted transcript is the source of truth; what the model sees is the
+    // policy-transformed view (stale view sheets stubbed, compacted history windowed).
+    transformContext: async (messages) => transformLlmContext(messages),
   });
   agent.state.messages = priorMessages;
 
   let nextSeq = priorMessages.length;
-  let lastError: SessionError | undefined;
-  const listeners = new Set<(state: SessionState) => void>();
 
   function notify(): void {
-    const state = snapshotState(agent, lastError);
+    const state = snapshotState(agent, lastError, notice);
     for (const listener of listeners) listener(state);
   }
 
@@ -222,8 +261,40 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       : DEFAULT_MAX_CAD_RUNS;
   let cadRunsThisTurn = 0;
   let cadRunLimitReached = false;
+  // Self-check: armed once per send(); fires when the agent is about to stop after a
+  // gate pass, nudging it to verify the WHOLE request is satisfied, not just the gate.
+  let gatePassedThisTurn = false;
+  let selfCheckArmed = false;
 
   agent.subscribe((event: AgentEvent) => {
+    if (
+      event.type === "tool_execution_end" &&
+      event.toolName === "run_build123d" &&
+      !event.isError &&
+      (event.result as { details?: { gate?: { status?: unknown } } })?.details?.gate?.status === "passed"
+    ) {
+      gatePassedThisTurn = true;
+    }
+    if (
+      event.type === "turn_end" &&
+      event.message.role === "assistant" &&
+      !event.message.errorMessage &&
+      selfCheckArmed &&
+      gatePassedThisTurn &&
+      !cadRunLimitReached &&
+      Array.isArray(event.message.content) &&
+      !event.message.content.some((block) => (block as { type?: string })?.type === "toolCall") &&
+      !agent.hasQueuedMessages()
+    ) {
+      // The agent would stop here. Inject exactly one follow-up (pi drains the
+      // follow-up queue only when the agent would otherwise end the run).
+      selfCheckArmed = false;
+      agent.followUp({
+        role: "user",
+        content: [{ type: "text", text: SELF_CHECK_PROMPT }],
+        timestamp: Date.now(),
+      } as AgentMessage);
+    }
     if (event.type === "message_end") {
       const seq = nextSeq;
       nextSeq += 1;
@@ -261,6 +332,33 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     async send(text: string, images?: File[]): Promise<void> {
       cadRunsThisTurn = 0;
       cadRunLimitReached = false;
+      gatePassedThisTurn = false;
+      selfCheckArmed = true;
+      // Compaction runs between turns, before the prompt: when the LLM-visible context
+      // is near the window, older history is summarized into a persisted compaction
+      // row. Failures are non-fatal - the turn proceeds on the uncompacted context.
+      try {
+        const row = await runCompaction({
+          messages: agent.state.messages as AgentMessage[],
+          model,
+          streamFn,
+          onStart: () => {
+            notice = { kind: "compacting" };
+            notify();
+          },
+        });
+        if (row) {
+          agent.state.messages = [...agent.state.messages, row as unknown as AgentMessage];
+          const seq = nextSeq;
+          nextSeq += 1;
+          queuePersist(seq, row as unknown as AgentMessage);
+        }
+      } catch (compactionError) {
+        console.warn("Chamfer: context compaction skipped:", compactionError);
+      } finally {
+        if (notice?.kind === "compacting") notice = undefined;
+        notify();
+      }
       try {
         // agent.prompt(text, imageBlocks) builds the user message with the text block
         // first, then the image blocks; message_end then persists it verbatim (base64
@@ -292,7 +390,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     },
     subscribe(listener: (state: SessionState) => void): () => void {
       listeners.add(listener);
-      listener(snapshotState(agent, lastError));
+      listener(snapshotState(agent, lastError, notice));
       return () => listeners.delete(listener);
     },
   };
