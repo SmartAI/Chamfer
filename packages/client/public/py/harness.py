@@ -654,12 +654,22 @@ def _eval_check(spec, shape, holes):
         return _eval_clearance_check(spec, shape)
 
     if kind == "symmetric":
-        from build123d import Plane, mirror
+        from build123d import Plane
 
         plane = getattr(Plane, spec["plane"])
-        mirrored = mirror(shape, about=plane)
-        volume = float(shape.volume)
-        asymmetry = float((shape - mirrored).volume) + float((mirrored - shape).volume)
+        # Cutting a multi-child Compound against its mirror hands OCC several
+        # exactly-coincident tools at once; its same-domain detection handles
+        # that unreliably and children can come back uncut, reporting >100%
+        # "asymmetric" volume on symmetric assemblies. Fuse to a single body
+        # first so the mirror-difference is one well-posed boolean.
+        solids = shape.solids()
+        body = solids[0].fuse(*solids[1:]) if solids else shape
+        mirrored = body.mirror(plane)
+        volume = float(body.volume)
+        # Mirroring is an isometry, so both difference directions enclose the
+        # same volume; measuring one avoids double-counting (and keeps the
+        # reported ratio within 0-100%).
+        asymmetry = float((body - mirrored).volume)
         ratio_pct = 100 * asymmetry / volume if volume > 0 else float("inf")
         return ratio_pct <= spec["tol_pct"], (
             f"symmetry about {spec['plane']}: asymmetric volume {ratio_pct:.3g}% "
