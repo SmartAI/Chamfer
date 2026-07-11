@@ -153,3 +153,61 @@ describe("MessageList scroll anchoring", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("MessageList checklist rendering", () => {
+  it("renders satisfied/missing checklist lines as icon rows, both prefix and suffix forms", () => {
+    render(
+      <MessageList
+        messages={[
+          assistantMessage(
+            "Satisfied: four holes are present.\n\nNozzle bore: Not satisfied\n\nWidth: 10 mm: Satisfied",
+          ),
+        ]}
+        streaming={false}
+      />,
+    );
+
+    const passes = screen.getAllByTestId("checklist-pass");
+    expect(passes).toHaveLength(2);
+    expect(passes[0]!.textContent).toContain("four holes are present");
+    expect(passes[0]!.textContent).not.toMatch(/satisfied/i);
+    expect(passes[1]!.textContent).toContain("Width: 10 mm");
+
+    const fail = screen.getByTestId("checklist-fail");
+    expect(fail.textContent).toContain("Nozzle bore");
+    expect(fail.textContent).not.toMatch(/satisfied/i);
+  });
+
+  it("recognizes verdicts wrapped in inline styling like backticks and bold", () => {
+    render(
+      <MessageList
+        messages={[
+          assistantMessage(
+            "- `Satisfied` High-mounted swept main wing\n- **Not satisfied:** nose landing light\n- Twin propellers: `Satisfied`",
+          ),
+        ]}
+        streaming={false}
+      />,
+    );
+
+    const passes = screen.getAllByTestId("checklist-pass");
+    expect(passes).toHaveLength(2);
+    expect(passes[0]!.textContent).toContain("High-mounted swept main wing");
+    expect(passes[1]!.textContent).toContain("Twin propellers");
+    expect(passes[1]!.textContent).not.toMatch(/satisfied/i);
+    expect(screen.getByTestId("checklist-fail").textContent).toContain("nose landing light");
+  });
+
+  it("leaves ordinary prose mentioning satisfaction untouched", () => {
+    render(
+      <MessageList
+        messages={[assistantMessage("All of the requirements are satisfied.")]}
+        streaming={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("checklist-pass")).toBeNull();
+    expect(screen.queryByTestId("checklist-fail")).toBeNull();
+    expect(screen.getByText(/All of the requirements are satisfied\./)).toBeTruthy();
+  });
+});

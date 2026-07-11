@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Streamdown, type CustomRendererProps } from "streamdown";
-import { ArrowDown, CheckCircle2, FoldVertical, ListChecks, LoaderCircle } from "lucide-react";
+import { Children, isValidElement, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { Streamdown, type Components, type CustomRendererProps } from "streamdown";
+import { ArrowDown, Check, CheckCircle2, FoldVertical, ListChecks, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
 import { getMessagePersistenceId, SELF_CHECK_MARKER } from "@/agent/session";
@@ -21,6 +21,115 @@ function PythonCodeBlock({ code, language, isIncomplete }: CustomRendererProps) 
 }
 
 const CAD_CODE_RENDERERS = [{ language: ["python", "py"], component: PythonCodeBlock }];
+
+// The self-check nudge asks the model to "mark each one satisfied or missing",
+// which it phrases either as a prefix ("Satisfied: four holes are present") or
+// a suffix ("Width: 10 mm: Satisfied"). Both render as an icon row instead of
+// the bare word. Prefix/suffix must sit against a colon so prose like "all
+// requirements are satisfied." passes through untouched.
+const PASS_PREFIX = /^\s*satisfied[:.]\s*/i;
+const FAIL_PREFIX = /^\s*(?:not\s+satisfied|unsatisfied|missing|not\s+met)[:.]\s*/i;
+const PASS_SUFFIX = /[:—-]\s*satisfied\s*[.!]?\s*$/i;
+const FAIL_SUFFIX = /[:—-]\s*(?:not\s+satisfied|unsatisfied|missing|not\s+met)\s*[.!]?\s*$/i;
+// A whole child element (inline code, bold, …) carrying nothing but the verdict,
+// e.g. the `Satisfied` / **Not satisfied:** stylings some models produce.
+const PASS_ONLY = /^\s*satisfied\s*[:.]?\s*$/i;
+const FAIL_ONLY = /^\s*(?:not\s+satisfied|unsatisfied|missing|not\s+met)\s*[:.]?\s*$/i;
+
+/** Concatenated string content of a node, or null if it contains non-text children. */
+function nodeText(node: ReactNode): string | null {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (isValidElement(node)) {
+    let text = "";
+    for (const child of Children.toArray((node.props as { children?: ReactNode }).children)) {
+      const childText = nodeText(child);
+      if (childText === null) return null;
+      text += childText;
+    }
+    return text;
+  }
+  return null;
+}
+
+function markerOnlyKind(node: ReactNode): "pass" | "fail" | null {
+  if (!isValidElement(node)) return null;
+  const text = nodeText(node);
+  if (text === null) return null;
+  if (PASS_ONLY.test(text)) return "pass";
+  if (FAIL_ONLY.test(text)) return "fail";
+  return null;
+}
+
+function checklistMarker(children: ReactNode): { kind: "pass" | "fail" | null; rest: ReactNode } {
+  const items = Children.toArray(children);
+  const first = items[0];
+  if (typeof first === "string") {
+    const pass = first.match(PASS_PREFIX);
+    const fail = pass ? null : first.match(FAIL_PREFIX);
+    const match = pass ?? fail;
+    if (match) {
+      return { kind: pass ? "pass" : "fail", rest: [first.slice(match[0].length), ...items.slice(1)] };
+    }
+  }
+  const firstElementKind = markerOnlyKind(first);
+  if (firstElementKind) {
+    const rest = items.slice(1);
+    if (typeof rest[0] === "string") rest[0] = rest[0].replace(/^\s*[:.—-]?\s*/, "");
+    return { kind: firstElementKind, rest };
+  }
+  const last = items.at(-1);
+  if (typeof last === "string") {
+    const pass = last.match(PASS_SUFFIX);
+    const fail = pass ? null : last.match(FAIL_SUFFIX);
+    const match = pass ?? fail;
+    if (match) {
+      return { kind: pass ? "pass" : "fail", rest: [...items.slice(0, -1), last.slice(0, last.length - match[0].length)] };
+    }
+  }
+  const lastElementKind = markerOnlyKind(last);
+  if (lastElementKind) {
+    const rest = items.slice(0, -1);
+    const beforeLast = rest.at(-1);
+    if (typeof beforeLast === "string") rest[rest.length - 1] = beforeLast.replace(/\s*[:—-]\s*$/, "");
+    return { kind: lastElementKind, rest };
+  }
+  return { kind: null, rest: children };
+}
+
+function checklistRow(tagName: "p" | "li") {
+  // "p" and "li" accept the same attributes we forward; the cast keeps JSX
+  // from demanding a single concrete intrinsic element type.
+  const Tag = tagName as "p";
+  // Loosely typed on purpose: the same component serves Streamdown's `p` and
+  // `li` slots, whose prop types differ only in the DOM element generic.
+  function ChecklistRow({ node: _node, children, className, ...rawProps }: { node?: unknown; children?: ReactNode; className?: string } & Record<string, unknown>) {
+    const props = rawProps as ComponentPropsWithoutRef<"p">;
+    const { kind, rest } = checklistMarker(children);
+    if (!kind) {
+      return <Tag className={className} {...props}>{children}</Tag>;
+    }
+    return (
+      <Tag
+        data-testid={kind === "pass" ? "checklist-pass" : "checklist-fail"}
+        className={cn(className, "flex items-start gap-1.5", tagName === "li" && "list-none")}
+        {...props}
+      >
+        {kind === "pass" ? (
+          <Check aria-label="Satisfied" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        ) : (
+          <X aria-label="Not satisfied" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+        )}
+        <span className="min-w-0">{rest}</span>
+      </Tag>
+    );
+  }
+  return ChecklistRow;
+}
+
+// Cast: the shared row component is deliberately loose (see above), while
+// streamdown's Components maps each tag to its exact DOM element generic.
+const CHECKLIST_COMPONENTS = { p: checklistRow("p"), li: checklistRow("li") } as Components;
 
 interface TextBlock {
   type: "text";
@@ -256,6 +365,7 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
                 <Streamdown
                   controls={{ code: { copy: true, download: false } }}
                   plugins={{ renderers: CAD_CODE_RENDERERS }}
+                  components={CHECKLIST_COMPONENTS}
                 >
                   {text}
                 </Streamdown>
