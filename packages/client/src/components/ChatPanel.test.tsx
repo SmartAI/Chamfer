@@ -293,6 +293,19 @@ describe("ChatPanel", () => {
     expect((screen.getByTestId("composer-input") as HTMLTextAreaElement).disabled).toBe(true);
     expect(screen.getAllByText(/settings/i).length).toBeGreaterThan(0);
   });
+
+  it("shows the settings hint exactly once in an active empty conversation", () => {
+    renderWithContext({
+      session: null,
+      settingsPresent: false,
+      sessionState: { messages: [], streaming: false },
+    });
+
+    // The composer explains why everything is disabled; the preset grid above
+    // it must not repeat the same sentence.
+    expect(screen.getAllByText("Configure a model and API key in Settings to start chatting.")).toHaveLength(1);
+    expect(screen.queryByTestId("preset-disabled-hint")).toBeNull();
+  });
 });
 
 describe("ChatPanel preset prompts", () => {
