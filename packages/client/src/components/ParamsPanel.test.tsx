@@ -37,6 +37,13 @@ describe("ParamsPanel", () => {
     vi.useRealTimers();
   });
 
+  it("renders a drag grip so the floating panel can be moved", () => {
+    render(<ParamsPanel params={[WIDTH_SPEC]} onChange={vi.fn(async () => {})} />);
+
+    const grip = screen.getByTestId("params-drag-handle");
+    expect(grip.hasAttribute("data-drag-handle")).toBe(true);
+  });
+
   it("commits a slider change (debounced) with the full value map", async () => {
     const onChange = vi.fn(async () => {});
     render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);

@@ -48,6 +48,33 @@ describe("Composer", () => {
     expect(await screen.findByTestId("composer-attachment")).toBeTruthy();
   });
 
+  it("shows a Stop button while streaming and forwards clicks to onStop", () => {
+    const onStop = vi.fn();
+    render(<Composer disabled={false} streaming onStop={onStop} onSend={vi.fn()} />);
+
+    const stop = screen.getByTestId("composer-stop");
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the Stop button when not streaming", () => {
+    render(<Composer disabled={false} streaming={false} onStop={vi.fn()} onSend={vi.fn()} />);
+
+    expect(screen.queryByTestId("composer-stop")).toBeNull();
+  });
+
+  it("keeps typing and sending available while streaming", () => {
+    const onSend = vi.fn();
+    render(<Composer disabled={false} streaming onStop={vi.fn()} onSend={onSend} />);
+
+    const input = screen.getByTestId("composer-input") as HTMLTextAreaElement;
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "queue me" } });
+    fireEvent.click(screen.getByTestId("composer-send"));
+
+    expect(onSend).toHaveBeenCalledWith("queue me", []);
+  });
+
   it("the attach button opens a hidden image file input", () => {
     render(<Composer disabled={false} onSend={vi.fn()} />);
 

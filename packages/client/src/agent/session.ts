@@ -54,7 +54,7 @@ export interface CreateSessionOptions {
   /** Replayed from REST: parsed AgentMessage history for this conversation. */
   priorMessages: unknown[];
   /** Max run_build123d executions per turn before the turn is aborted;
-   * defaults to MAX_CAD_RUNS_PER_TURN. Configurable via settings/env. */
+   * defaults to DEFAULT_MAX_CAD_RUNS. Configurable via settings/env. */
   maxCadRuns?: number;
   /**
    * Internal test-only override for the stream function. Production callers must not set this;
@@ -73,7 +73,7 @@ function buildStreamFn(): StreamFn {
 }
 
 const PERSIST_RETRY_DELAY_MS = 250;
-const MAX_CAD_RUNS_PER_TURN = 10;
+export const DEFAULT_MAX_CAD_RUNS = 10;
 const persistenceIds = new WeakMap<object, string>();
 
 export function registerMessagePersistenceId(message: unknown, id: string): void {
@@ -219,7 +219,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   const maxCadRuns =
     opts.maxCadRuns && Number.isInteger(opts.maxCadRuns) && opts.maxCadRuns > 0
       ? opts.maxCadRuns
-      : MAX_CAD_RUNS_PER_TURN;
+      : DEFAULT_MAX_CAD_RUNS;
   let cadRunsThisTurn = 0;
   let cadRunLimitReached = false;
 
@@ -233,10 +233,13 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       event.type === "turn_end" &&
       event.message.role === "assistant" &&
       event.message.errorMessage &&
+      event.message.stopReason !== "aborted" &&
       !cadRunLimitReached
     ) {
       // LLM/proxy failures arrive here: pi turns both in-band proxy error events and
       // streamFn rejections into an errored assistant message carrying errorMessage.
+      // Aborted turns are excluded: the user asked for the stop (Stop button,
+      // conversation switch), so the fabricated abort message is not an error.
       lastError = classifySessionError(event.message.errorMessage);
     }
     if (event.type === "agent_start") {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import * as rest from "../api/rest";
-import { classifySessionError, createSession, type SessionError } from "./session";
+import { classifySessionError, createSession, type SessionError, type SessionState } from "./session";
 import { systemPrompt } from "./prompt";
 
 vi.mock("../api/rest", () => ({
@@ -179,6 +179,38 @@ describe("createSession", () => {
     session.abort();
 
     await expect(sendPromise).resolves.toBeUndefined();
+  });
+
+  it("a user-initiated abort ends the turn without surfacing an error", async () => {
+    // Stream that stays pending until the abort signal fires, then rejects with the
+    // signal's reason — the same shape streamProxy produces when a fetch is aborted.
+    const streamFn = vi.fn(
+      (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const fail = () => reject(options?.signal?.reason ?? new Error("aborted"));
+          if (options?.signal?.aborted) fail();
+          else options?.signal?.addEventListener("abort", fail);
+        }),
+    );
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+
+    const sendPromise = session.send("build something big");
+    // Let send() reach the streaming stage so an active run exists to abort.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    session.abort();
+    await sendPromise;
+
+    expect(latest?.streaming).toBe(false);
+    expect(latest?.error).toBeUndefined();
   });
 
   it("recovers from a transient postMessage failure: retries once, persists both messages in order with contiguous seq, and never persists a synthetic error message", async () => {

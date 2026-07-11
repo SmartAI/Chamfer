@@ -10,10 +10,15 @@ import {
   PerspectiveCamera,
   useBounds,
 } from "@react-three/drei";
-import { Box, Focus, Grid3x3, Scan } from "lucide-react";
+import { Box, Focus, Grid3x3, Rotate3d, Scan } from "lucide-react";
 import type * as THREE from "three";
 import { technicalEdges } from "./meshToGeometry";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
+
+const AUTO_ROTATE_DEFAULT_SPEED = 2.5;
+const AUTO_ROTATE_MIN_SPEED = 0.5;
+const AUTO_ROTATE_MAX_SPEED = 10;
 
 interface ViewerProps {
   geometry: THREE.BufferGeometry | null;
@@ -107,6 +112,8 @@ function ProjectionButton({
 export function Viewer({ geometry }: ViewerProps) {
   const [projection, setProjection] = useState<Projection>("orthographic");
   const [showEdges, setShowEdges] = useState(true);
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [autoRotateSpeed, setAutoRotateSpeed] = useState(AUTO_ROTATE_DEFAULT_SPEED);
   const [fitRequest, setFitRequest] = useState(0);
 
   function selectProjection(next: Projection) {
@@ -120,6 +127,8 @@ export function Viewer({ geometry }: ViewerProps) {
       data-has-geometry={geometry !== null}
       data-projection={projection}
       data-edges={showEdges}
+      data-auto-rotate={autoRotate}
+      data-auto-rotate-speed={autoRotateSpeed}
       className="relative h-full w-full overflow-hidden bg-[#f4f5f7]"
     >
       <Canvas shadows dpr={[1, 2]}>
@@ -151,6 +160,8 @@ export function Viewer({ geometry }: ViewerProps) {
           zoomToCursor
           minDistance={0.1}
           maxDistance={10000}
+          autoRotate={autoRotate}
+          autoRotateSpeed={autoRotateSpeed}
         />
         <GizmoHelper alignment="top-right" margin={[64, 64]}>
           <GizmoViewcube color="#ffffff" hoverColor="#22d3ee" textColor="#111827" />
@@ -192,7 +203,37 @@ export function Viewer({ geometry }: ViewerProps) {
         >
           <Grid3x3 className="h-4 w-4" />
         </ProjectionButton>
+        <ProjectionButton
+          active={autoRotate}
+          label="Toggle auto-rotate"
+          onClick={() => setAutoRotate((value) => !value)}
+        >
+          <Rotate3d className="h-4 w-4" />
+        </ProjectionButton>
       </div>
+
+      {autoRotate && (
+        <div
+          data-testid="auto-rotate-speed"
+          className="absolute left-3 top-14 z-10 flex w-44 items-center gap-2 rounded-md border bg-background/95 px-3 py-2 shadow-sm backdrop-blur-sm"
+        >
+          <Rotate3d className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <Slider
+            min={AUTO_ROTATE_MIN_SPEED}
+            max={AUTO_ROTATE_MAX_SPEED}
+            step={0.5}
+            value={[autoRotateSpeed]}
+            onValueChange={(next) => {
+              if (next[0] !== undefined) setAutoRotateSpeed(next[0]);
+            }}
+            aria-label="Auto-rotate speed"
+            className="min-w-0"
+          />
+          <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+            {autoRotateSpeed.toFixed(1)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

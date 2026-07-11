@@ -59,7 +59,7 @@ function makeFakeSession(conversationId = "conv-1") {
 }
 
 function makeContextValue(overrides: Partial<ChatContextValue>): ChatContextValue {
-  return {
+  const value: ChatContextValue = {
     conversations: [],
     activeConversationId: "conv-1",
     session: null,
@@ -72,8 +72,24 @@ function makeContextValue(overrides: Partial<ChatContextValue>): ChatContextValu
     removeConversation: vi.fn(async () => {}),
     refreshSettings: vi.fn(async () => {}),
     clearError: vi.fn(),
+    queuedMessages: [],
+    queuePaused: false,
+    sendMessage: vi.fn(),
+    stopAgent: vi.fn(),
+    removeQueued: vi.fn(),
+    sendQueuedNow: vi.fn(),
+    modelName: "Test Model",
+    maxCadRuns: 10,
     ...overrides,
   };
+  // Unless a test overrides it, sendMessage behaves like the idle-path provider:
+  // it forwards straight to the session, so existing session.send assertions hold.
+  if (!overrides.sendMessage) {
+    value.sendMessage = vi.fn((text: string, images: File[]) => {
+      void value.session?.send(text, images);
+    });
+  }
+  return value;
 }
 
 function panelWithContext(overrides: Partial<ChatContextValue>, onOpenSettings?: () => void) {
@@ -89,7 +105,7 @@ function renderWithContext(overrides: Partial<ChatContextValue>, onOpenSettings?
 }
 
 describe("ChatPanel", () => {
-  it("renders the user bubble, streams assistant markdown in, and disables the composer while streaming", async () => {
+  it("renders the user bubble, streams assistant markdown in, and keeps the composer usable while streaming", async () => {
     const session = makeFakeSession();
 
     const { rerender } = renderWithContext({
@@ -109,34 +125,16 @@ describe("ChatPanel", () => {
     // after each session notification.
     for (const next of STATE_SEQUENCE) {
       act(() => {
-        rerender(
-          <ChatContext.Provider
-            value={{
-              conversations: [],
-              activeConversationId: "conv-1",
-              session,
-              sessionState: next,
-              settingsPresent: true,
-              loading: false,
-              error: null,
-              selectConversation: vi.fn(),
-              newConversation: vi.fn(async () => "conv-1"),
-              removeConversation: vi.fn(async () => {}),
-              refreshSettings: vi.fn(async () => {}),
-              clearError: vi.fn(),
-            }}
-          >
-            <ChatPanel />
-          </ChatContext.Provider>,
-        );
+        rerender(panelWithContext({ session, sessionState: next }));
       });
 
       if (next.streaming) {
         expect(screen.getByTestId("generation-status").textContent).toContain("Agent is working");
-        // Composer must be disabled while a turn is streaming.
+        // The composer stays usable while a turn is streaming (messages queue),
+        // and a Stop control appears.
         await waitFor(() => {
-          expect((screen.getByTestId("composer-input") as HTMLTextAreaElement).disabled).toBe(true);
-          expect((screen.getByTestId("composer-send") as HTMLButtonElement).disabled).toBe(true);
+          expect((screen.getByTestId("composer-input") as HTMLTextAreaElement).disabled).toBe(false);
+          expect(screen.getByTestId("composer-stop")).toBeTruthy();
         });
       }
     }
@@ -152,11 +150,102 @@ describe("ChatPanel", () => {
     });
     expect(messageList.querySelector('[data-streamdown="strong"]')?.textContent).toBe("friend");
 
-    // After the final non-streaming state, composer is enabled again.
+    // After the final non-streaming state, the Stop control is gone again.
     await waitFor(() => {
-      expect((screen.getByTestId("composer-input") as HTMLTextAreaElement).disabled).toBe(false);
+      expect(screen.queryByTestId("composer-stop")).toBeNull();
     });
     expect(screen.getByTestId("generation-status").textContent).toContain("Done");
+  });
+
+  it("routes sends through sendMessage and wires the Stop button to stopAgent", () => {
+    const sendMessage = vi.fn();
+    const stopAgent = vi.fn();
+    renderWithContext({
+      session: makeFakeSession(),
+      sessionState: { messages: [USER_MESSAGE], streaming: true },
+      sendMessage,
+      stopAgent,
+    });
+
+    const input = screen.getByTestId("composer-input") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "queued while busy" } });
+    fireEvent.click(screen.getByTestId("composer-send"));
+    expect(sendMessage).toHaveBeenCalledWith("queued while busy", []);
+
+    fireEvent.click(screen.getByTestId("composer-stop"));
+    expect(stopAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders queued messages with send-now and remove controls", () => {
+    const removeQueued = vi.fn();
+    const sendQueuedNow = vi.fn();
+    renderWithContext({
+      session: makeFakeSession(),
+      sessionState: { messages: [USER_MESSAGE], streaming: true },
+      queuedMessages: [
+        { id: "q1", text: "refine the neck", images: [] },
+        { id: "q2", text: "add the vent slots", images: [] },
+      ],
+      removeQueued,
+      sendQueuedNow,
+    });
+
+    const items = screen.getAllByTestId("queued-message");
+    expect(items).toHaveLength(2);
+    expect(items[0]!.textContent).toContain("refine the neck");
+
+    fireEvent.click(within(items[0]!).getByTestId("queued-send-now"));
+    expect(sendQueuedNow).toHaveBeenCalledWith("q1");
+
+    fireEvent.click(within(items[1]!).getByTestId("queued-remove"));
+    expect(removeQueued).toHaveBeenCalledWith("q2");
+  });
+
+  it("shows the model, LLM-call count, and CAD-run usage above the composer", () => {
+    renderWithContext({
+      session: makeFakeSession(),
+      modelName: "Claude Opus 4.8",
+      maxCadRuns: 100,
+      sessionState: {
+        messages: [
+          USER_MESSAGE,
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "c1", name: "run_build123d", arguments: {} }],
+            timestamp: 2,
+          },
+          ASSISTANT_FINAL,
+        ],
+        streaming: true,
+      },
+    });
+
+    const strip = screen.getByTestId("agent-status");
+    expect(strip.textContent).toContain("Claude Opus 4.8");
+    expect(strip.textContent).toMatch(/LLM calls\s*2/);
+    expect(strip.textContent).toMatch(/CAD runs\s*1\s*\/\s*100/);
+  });
+
+  it("hides the status strip when no model is configured", () => {
+    renderWithContext({
+      session: null,
+      settingsPresent: false,
+      modelName: null,
+      sessionState: { messages: [], streaming: false },
+    });
+
+    expect(screen.queryByTestId("agent-status")).toBeNull();
+  });
+
+  it("shows a paused notice when the queue is paused", () => {
+    renderWithContext({
+      session: makeFakeSession(),
+      sessionState: { messages: [USER_MESSAGE], streaming: false },
+      queuedMessages: [{ id: "q1", text: "later", images: [] }],
+      queuePaused: true,
+    });
+
+    expect(screen.getByTestId("queue-paused").textContent).toMatch(/paused/i);
   });
 
   it("shows generation progress before the first assistant token arrives", () => {

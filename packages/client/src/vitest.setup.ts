@@ -20,6 +20,25 @@ if (!Element.prototype.setPointerCapture) {
   Element.prototype.setPointerCapture = () => {};
 }
 
+// This jsdom setup ships without window.localStorage; components that persist
+// UI state (workspace layout, draggable overlays) need a real-enough store.
+if (typeof window !== "undefined" && !window.localStorage) {
+  const store = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, String(value)),
+      removeItem: (key: string) => void store.delete(key),
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() {
+        return store.size;
+      },
+    },
+  });
+}
+
 // jsdom does not implement Worker. AppStateProvider eagerly constructs a
 // CadClient (which constructs a Worker) on mount, so components that render
 // the app shell need a no-op stub present even when the worker itself is

@@ -11,7 +11,13 @@ import {
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { DEFAULT_CONVERSATION_TITLE, type ConversationDto } from "@chamfer/shared";
 import * as rest from "@/api/rest";
-import { createSession, registerMessagePersistenceId, type ChatSession, type SessionState } from "@/agent/session";
+import {
+  createSession,
+  registerMessagePersistenceId,
+  DEFAULT_MAX_CAD_RUNS,
+  type ChatSession,
+  type SessionState,
+} from "@/agent/session";
 import { latestGateSummary } from "@/agent/gateSummary";
 import { systemPrompt } from "@/agent/prompt";
 import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
@@ -19,6 +25,13 @@ import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
 import { useOptionalAppState } from "@/state/appState";
 
 const EMPTY_SESSION_STATE: SessionState = { messages: [], streaming: false };
+
+/** A message the user sent while the agent was busy, waiting for its own turn. */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  images: File[];
+}
 
 export interface ChatContextValue {
   conversations: ConversationDto[];
@@ -40,6 +53,42 @@ export interface ChatContextValue {
   /** Re-fetches /api/settings (e.g. after saving in SettingsModal) so settings-gated UI
    * such as the preset prompt cards enables without a reload. */
   refreshSettings: () => Promise<void>;
+  /** Messages waiting for the agent to become idle, in send order. */
+  queuedMessages: QueuedMessage[];
+  /** True after stopAgent(): queued messages stay put until the user resumes
+   * (by sending anything, or sendQueuedNow on a specific item). */
+  queuePaused: boolean;
+  /** Sends now when the agent is idle; enqueues when a turn is streaming. */
+  sendMessage: (text: string, images: File[]) => void;
+  /** Aborts the in-flight turn and pauses queue draining. */
+  stopAgent: () => void;
+  /** Drops a queued message without sending it. */
+  removeQueued: (id: string) => void;
+  /** Moves a queued message to the front and resumes draining. */
+  sendQueuedNow: (id: string) => void;
+  /** Display name of the configured model (null when none is configured). */
+  modelName: string | null;
+  /** Effective run_build123d cap per turn (settings value or the default). */
+  maxCadRuns: number;
+}
+
+/** Display name from a settings modelJson payload; null when absent or unparseable. */
+function modelNameOf(modelJson: string | undefined): string | null {
+  if (!modelJson) return null;
+  try {
+    const parsed = JSON.parse(modelJson) as { name?: unknown; id?: unknown };
+    if (typeof parsed.name === "string" && parsed.name) return parsed.name;
+    if (typeof parsed.id === "string" && parsed.id) return parsed.id;
+  } catch {
+    // Fall through: a corrupt modelJson simply shows no model.
+  }
+  return null;
+}
+
+/** Effective per-turn CAD-run cap from the string-encoded setting. */
+function capOf(maxCadRuns: string | undefined): number {
+  const parsed = Number(maxCadRuns);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CAD_RUNS;
 }
 
 /** Exported so tests can render `ChatContext.Provider` directly with a fake value (e.g. a
@@ -74,6 +123,17 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   const [settingsPresent, setSettingsPresent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [queuePaused, setQueuePaused] = useState(false);
+  const [modelName, setModelName] = useState<string | null>(null);
+  const [maxCadRuns, setMaxCadRuns] = useState<number>(DEFAULT_MAX_CAD_RUNS);
+  // True from a send() call until its promise settles (the real session resolves send()
+  // only when the whole agent turn is done). Guards the drain effect against firing a
+  // second send into a turn whose streaming flag has not propagated yet.
+  const sendInFlightRef = useRef(false);
+  // Bumped when a send settles, so the drain effect re-runs even though a promise
+  // resolution alone triggers no render.
+  const [drainTick, setDrainTick] = useState(0);
 
   const buildSession = __createSession ?? createSession;
 
@@ -100,6 +160,8 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       .then((settings) => {
         if (cancelled) return;
         setSettingsPresent(Boolean(settings.modelJson));
+        setModelName(modelNameOf(settings.modelJson));
+        setMaxCadRuns(capOf(settings.maxCadRuns));
       })
       .catch(() => {
         // Leave settingsPresent false; switchTo re-fetches settings and surfaces errors.
@@ -137,6 +199,10 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     sessionRef.current = null;
     setSession(null);
     setSessionState(EMPTY_SESSION_STATE);
+    // The queue is conversation-scoped: messages typed for one conversation must
+    // never fire into another.
+    setQueuedMessages([]);
+    setQueuePaused(false);
     // CAD output is conversation scoped. Clear the mesh, measurements,
     // parameters, and script before restoring the target artifact below.
     if (clearWorkspace) clearWorkspace();
@@ -150,6 +216,8 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
 
         const modelJson = settings.modelJson;
         setSettingsPresent(Boolean(modelJson));
+        setModelName(modelNameOf(modelJson));
+        setMaxCadRuns(capOf(settings.maxCadRuns));
 
         const priorMessages = messages
           .slice()
@@ -282,6 +350,68 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     });
   }, [activeConversationId, sessionState]);
 
+  /** Fires a send on the live session and keeps the in-flight guard accurate for
+   * the whole turn (send() resolves when the turn is fully over). */
+  const dispatchSend = useCallback((text: string, images: File[]) => {
+    const live = sessionRef.current;
+    if (!live) return;
+    sendInFlightRef.current = true;
+    void live.send(text, images).finally(() => {
+      sendInFlightRef.current = false;
+      setDrainTick((tick) => tick + 1);
+    });
+  }, []);
+
+  const sendMessage = useCallback(
+    (text: string, images: File[]) => {
+      if (!sessionRef.current) return;
+      // Any explicit send is the user asking for the agent to run again, so a
+      // Stop-induced pause ends here.
+      setQueuePaused(false);
+      if (sessionState.streaming || sendInFlightRef.current) {
+        setQueuedMessages((prev) => [...prev, { id: crypto.randomUUID(), text, images }]);
+        return;
+      }
+      dispatchSend(text, images);
+    },
+    [dispatchSend, sessionState.streaming],
+  );
+
+  const stopAgent = useCallback(() => {
+    // Pause before aborting: abort synchronously flips streaming off inside the same
+    // batch, and the drain effect must already see the pause when it re-runs.
+    setQueuePaused(true);
+    sessionRef.current?.abort();
+  }, []);
+
+  const removeQueued = useCallback((id: string) => {
+    setQueuedMessages((prev) => prev.filter((message) => message.id !== id));
+  }, []);
+
+  const sendQueuedNow = useCallback((id: string) => {
+    // Move to the front and resume; the drain effect below delivers it as soon as
+    // the agent is idle (immediately, when nothing is in flight).
+    setQueuedMessages((prev) => {
+      const chosen = prev.find((message) => message.id === id);
+      if (!chosen) return prev;
+      return [chosen, ...prev.filter((message) => message.id !== id)];
+    });
+    setQueuePaused(false);
+  }, []);
+
+  // Queue drain: whenever the agent is idle, nothing is paused or errored, and a
+  // message is waiting, send exactly one. Each drained turn re-triggers this effect
+  // via drainTick when it settles, delivering the rest FIFO.
+  useEffect(() => {
+    void drainTick;
+    if (sessionState.streaming || sendInFlightRef.current) return;
+    if (queuePaused || sessionState.error) return;
+    const next = queuedMessages[0];
+    if (!next || !sessionRef.current) return;
+    setQueuedMessages((prev) => prev.slice(1));
+    dispatchSend(next.text, next.images);
+  }, [dispatchSend, drainTick, queuePaused, queuedMessages, sessionState]);
+
   const clearError = useCallback(() => {
     setError(null);
   }, []);
@@ -311,6 +441,8 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       const settings = await rest.getSettings();
       const present = Boolean(settings.modelJson);
       setSettingsPresent(present);
+      setModelName(modelNameOf(settings.modelJson));
+      setMaxCadRuns(capOf(settings.maxCadRuns));
       // A conversation opened before a model was configured never had its session built
       // (switchTo bails without modelJson); re-switch to build it now. There is no live
       // session to abort in that case.
@@ -352,6 +484,14 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       newConversation,
       removeConversation,
       refreshSettings,
+      queuedMessages,
+      queuePaused,
+      sendMessage,
+      stopAgent,
+      removeQueued,
+      sendQueuedNow,
+      modelName,
+      maxCadRuns,
     }),
     [
       conversations,
@@ -366,6 +506,14 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       newConversation,
       removeConversation,
       refreshSettings,
+      queuedMessages,
+      queuePaused,
+      sendMessage,
+      stopAgent,
+      removeQueued,
+      sendQueuedNow,
+      modelName,
+      maxCadRuns,
     ],
   );
 
