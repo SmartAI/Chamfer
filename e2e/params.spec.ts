@@ -19,8 +19,10 @@ test("param slider re-runs locally without a new chat message", async ({ page })
   await expect(page.getByTestId("tool-measurements")).toContainText("6000", { timeout: 600_000 });
   await expect(page.getByText("All views verified")).toBeVisible({ timeout: 600_000 });
 
-  // The successful run parses the script's params block into the panel.
+  // The successful run parses the script's params block into the panel. The
+  // panel starts collapsed (calmer default), so expand it to reach the rows.
   const rightPanel = page.getByTestId("right-panel");
+  await rightPanel.getByTestId("params-panel-toggle").click();
   await expect(rightPanel.getByTestId("param-width")).toBeVisible();
   await expect(rightPanel.getByTestId("param-depth")).toBeVisible();
   await expect(rightPanel.getByTestId("param-height")).toBeVisible();
