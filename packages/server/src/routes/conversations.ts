@@ -15,7 +15,7 @@ import {
   messageExists,
   setConversationTitle,
 } from "../conversationStore";
-import { readSettings } from "../settingsStore";
+import { readEffectiveSettings } from "../settingsStore";
 import { resolveProviderConfig } from "../providerConfig";
 import { buildTitleTranscript, generateTitleText } from "../titles";
 import type { LlmStreamer } from "../llm";
@@ -53,7 +53,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer): Hono {
     if (conversation.title !== DEFAULT_CONVERSATION_TITLE) {
       return c.json({ title: conversation.title, generated: false } satisfies GenerateTitleDto);
     }
-    const settings = readSettings(db);
+    const { settings } = readEffectiveSettings(db);
     if (!settings.modelJson) return c.json({ error: "no model configured" }, 400);
     const transcript = buildTitleTranscript(listMessages(db, id));
     if (!transcript) {

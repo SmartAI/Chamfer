@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { DatabaseSync } from "node:sqlite";
-import type { SettingsDto } from "@chamfer/shared";
-import { readSettings, writeSettings } from "../settingsStore";
+import type { SettingsPatchDto, SettingsResponseDto } from "@chamfer/shared";
+import { readEffectiveSettings, writeSettings } from "../settingsStore";
 import { FAKE_MODEL } from "../fakeLlm";
 
 function mask(value: string | undefined): string {
@@ -12,21 +12,23 @@ export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_
   const app = new Hono();
 
   app.get("/api/settings", (c) => {
-    const raw = readSettings(db);
-    const masked: SettingsDto = {
-      anthropicApiKey: mask(raw.anthropicApiKey),
-      anthropicBaseUrl: raw.anthropicBaseUrl,
-      openaiApiKey: mask(raw.openaiApiKey),
-      openaiBaseUrl: raw.openaiBaseUrl,
-      googleApiKey: mask(raw.googleApiKey),
-      googleBaseUrl: raw.googleBaseUrl,
-      modelJson: raw.modelJson ?? (fakeMode ? JSON.stringify(FAKE_MODEL) : undefined),
+    const { settings, sources } = readEffectiveSettings(db);
+    const masked: SettingsResponseDto = {
+      anthropicApiKey: mask(settings.anthropicApiKey),
+      anthropicBaseUrl: settings.anthropicBaseUrl,
+      openaiApiKey: mask(settings.openaiApiKey),
+      openaiBaseUrl: settings.openaiBaseUrl,
+      googleApiKey: mask(settings.googleApiKey),
+      googleBaseUrl: settings.googleBaseUrl,
+      modelJson: settings.modelJson ?? (fakeMode ? JSON.stringify(FAKE_MODEL) : undefined),
+      maxCadRuns: settings.maxCadRuns,
+      sources,
     };
     return c.json(masked);
   });
 
   app.put("/api/settings", async (c) => {
-    const patch = (await c.req.json()) as SettingsDto;
+    const patch = (await c.req.json()) as SettingsPatchDto;
     writeSettings(db, patch);
     return c.json({ ok: true });
   });

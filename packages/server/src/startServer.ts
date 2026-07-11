@@ -5,6 +5,10 @@ import { openDb } from "./db";
 import { createApp } from "./app";
 import { fakeLlm } from "./fakeLlm";
 
+// Re-exported so the published CLI (which bundles this file as its entry)
+// can load .env/.env.local before it reads CHAMFER_DATA_DIR/PORT.
+export { loadDotenv } from "./envConfig";
+
 export interface StartServerOptions {
   dbPath: string;
   /** Absolute path to the built client; static hosting is skipped if absent. */

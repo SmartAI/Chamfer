@@ -50,6 +50,12 @@ npx chamfer
 Open the printed URL, add your API key in Settings, and describe a part or click one of the preset prompts.
 Your conversations and settings live in `~/.chamfer`.
 
+### Configuration
+
+Instead of typing keys into Settings, you can put them in a `.env` or `.env.local` file in the directory you run `chamfer` from.
+See [.env.example](.env.example) for every supported variable (provider API keys, base URLs, default model, port, data dir) with explanations.
+Values found in the environment appear pre-filled in Settings with a `.env` badge; anything you change there overrides the environment and can be reverted with "Reset to .env".
+
 ### Developing
 
 ```bash
