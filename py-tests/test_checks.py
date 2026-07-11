@@ -245,6 +245,52 @@ def test_unknown_label_fails_with_available_labels():
     assert "'lid'" in check["detail"] and "left" in check["detail"]
 
 
+# Five disjoint bodies, coordinate-symmetric about both YZ (x -> -x) and
+# XZ (y -> -y): three plates centered on the Z axis plus a spacer pair at
+# x = +-25. Mirror-differencing the Compound child-by-child trips OCC's
+# coincident-face booleans and used to report ~150% "asymmetric" volume.
+SYMMETRIC_STACK = """
+from build123d import *
+plate1 = Pos(0, 0, 4) * Box(80, 40, 8)
+plate2 = Pos(0, 0, 23) * Box(80, 40, 6)
+plate3 = Pos(0, 0, 40) * Box(80, 40, 4)
+sp1 = Pos(25, 0, 14) * Cylinder(radius=5, height=12)
+sp2 = Pos(-25, 0, 14) * Cylinder(radius=5, height=12)
+result = Compound(children=[plate1, plate2, plate3, sp1, sp2])
+"""
+
+STACK_EXPECT = '# --- expect ---\nEXPECT = {"bodies": 5, "bbox_mm": [80, 40, 42]}\n# --- end expect ---\n'
+
+
+def test_symmetric_check_passes_for_symmetric_multibody_compound():
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "symmetric", "plane": "YZ"}, {"kind": "symmetric", "plane": "XZ"}]',
+            body=SYMMETRIC_STACK,
+            expect=STACK_EXPECT,
+        )
+    )
+    checks = agent_checks(gate)
+    assert [c["passed"] for c in checks] == [True, True], [c["detail"] for c in checks]
+
+
+def test_symmetric_check_fails_for_asymmetric_multibody_compound():
+    # Same stack with one spacer pulled off-center: XZ symmetry survives,
+    # YZ symmetry is broken.
+    body = SYMMETRIC_STACK.replace("Pos(25, 0, 14)", "Pos(15, 0, 14)")
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "symmetric", "plane": "YZ"}, {"kind": "symmetric", "plane": "XZ"}]',
+            body=body,
+            expect='# --- expect ---\nEXPECT = {"bodies": 5, "bbox_mm": [80, 40, 42]}\n# --- end expect ---\n',
+        )
+    )
+    checks = agent_checks(gate)
+    assert not checks[0]["passed"], checks[0]["detail"]
+    assert "asymmetric volume" in checks[0]["detail"]
+    assert checks[1]["passed"], checks[1]["detail"]
+
+
 def test_symmetric_check_fails_for_asymmetric_part():
     asymmetric = """
 from build123d import *
