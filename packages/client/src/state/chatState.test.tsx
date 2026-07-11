@@ -174,6 +174,48 @@ describe("ChatProvider conversation switching", () => {
     expect(createSessionMock.mock.calls[0]?.[0]).toMatchObject({ maxCadRuns: 7 });
   });
 
+  it("exposes the configured model name and CAD-run cap for the status strip", async () => {
+    const convA = makeConversation("conv-a");
+    mockedRest.listConversations.mockResolvedValue([convA]);
+    mockedRest.getSettings.mockResolvedValue({
+      modelJson: JSON.stringify({ id: "claude-opus-4-8", name: "Claude Opus 4.8" }),
+      maxCadRuns: "100",
+      sources: {},
+    } as SettingsResponseDto);
+    mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
+    mockedRest.listArtifacts.mockResolvedValue([]);
+
+    const createSessionMock = vi.fn().mockReturnValue(makeFakeSession("conv-a"));
+    let latest: ReturnType<typeof useChatState> | undefined;
+    render(
+      <ChatProvider __createSession={createSessionMock}>
+        <Harness onValue={(v) => (latest = v)} />
+      </ChatProvider>,
+    );
+
+    await waitFor(() => expect(latest?.loading).toBe(false));
+    await waitFor(() => expect(latest?.modelName).toBe("Claude Opus 4.8"));
+
+    act(() => latest?.selectConversation("conv-a"));
+    await waitFor(() => expect(latest?.session).not.toBeNull());
+    expect(latest?.maxCadRuns).toBe(100);
+  });
+
+  it("falls back to the default CAD-run cap when the setting is absent", async () => {
+    mockedRest.listConversations.mockResolvedValue([]);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
+
+    let latest: ReturnType<typeof useChatState> | undefined;
+    render(
+      <ChatProvider __createSession={vi.fn()}>
+        <Harness onValue={(v) => (latest = v)} />
+      </ChatProvider>,
+    );
+
+    await waitFor(() => expect(latest?.loading).toBe(false));
+    expect(latest?.maxCadRuns).toBe(10);
+  });
+
   it("refreshSettings re-fetches settings so settings-gated UI enables after saving", async () => {
     mockedRest.listConversations.mockResolvedValue([]);
     // No model configured at mount time.
@@ -197,6 +239,186 @@ describe("ChatProvider conversation switching", () => {
     });
 
     expect(latest?.settingsPresent).toBe(true);
+  });
+});
+
+describe("ChatProvider message queue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Fake session whose send() promise resolves only when the test ends the turn,
+   * mirroring the real session where send() settles after the full agent turn. */
+  function makeQueueSession(conversationId: string) {
+    const listeners = new Set<(state: SessionState) => void>();
+    const pendingResolvers: Array<() => void> = [];
+    const session: ChatSession = {
+      conversationId,
+      send: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            pendingResolvers.push(resolve);
+          }),
+      ),
+      abort: vi.fn(),
+      subscribe: (listener: (state: SessionState) => void) => {
+        listeners.add(listener);
+        listener({ messages: [], streaming: false });
+        return () => listeners.delete(listener);
+      },
+    };
+    return {
+      session,
+      emit: (state: SessionState) => {
+        for (const listener of listeners) listener(state);
+      },
+      finishTurn: () => {
+        pendingResolvers.shift()?.();
+      },
+    };
+  }
+
+  async function renderQueueHarness() {
+    mockedRest.listConversations.mockResolvedValue([makeConversation("conv-a"), makeConversation("conv-b")]);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
+    mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
+    mockedRest.listArtifacts.mockResolvedValue([]);
+
+    const fakeA = makeQueueSession("conv-a");
+    const fakeB = makeQueueSession("conv-b");
+    const createSessionMock = vi.fn((opts: { conversationId: string }) =>
+      opts.conversationId === "conv-a" ? fakeA.session : fakeB.session,
+    );
+
+    let latest: ReturnType<typeof useChatState> | undefined;
+    render(
+      <ChatProvider __createSession={createSessionMock as never}>
+        <Harness onValue={(v) => (latest = v)} />
+      </ChatProvider>,
+    );
+    await waitFor(() => expect(latest?.loading).toBe(false));
+    act(() => latest?.selectConversation("conv-a"));
+    await waitFor(() => expect(latest?.session).toBe(fakeA.session));
+    return { fakeA, getLatest: () => latest };
+  }
+
+  it("sends immediately when idle, queues while streaming, and drains FIFO at turn end", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
+    expect(fakeA.session.send).toHaveBeenCalledWith("first", []);
+
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => getLatest()?.sendMessage("second", []));
+    act(() => getLatest()?.sendMessage("third", []));
+
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
+    expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["second", "third"]);
+
+    // Turn ends: streaming stops and the send() promise settles.
+    await act(async () => {
+      fakeA.emit({ messages: [], streaming: false });
+      fakeA.finishTurn();
+      await Promise.resolve();
+    });
+
+    expect(fakeA.session.send).toHaveBeenCalledTimes(2);
+    expect(fakeA.session.send).toHaveBeenLastCalledWith("second", []);
+    expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["third"]);
+  });
+
+  it("stopAgent aborts the session and pauses draining, keeping queued items", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => getLatest()?.sendMessage("second", []));
+
+    act(() => getLatest()?.stopAgent());
+    expect(fakeA.session.abort).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fakeA.emit({ messages: [], streaming: false });
+      fakeA.finishTurn();
+      await Promise.resolve();
+    });
+
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
+    expect(getLatest()?.queuePaused).toBe(true);
+    expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["second"]);
+  });
+
+  it("sendQueuedNow resumes draining with the chosen item first", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => getLatest()?.sendMessage("second", []));
+    act(() => getLatest()?.sendMessage("third", []));
+    act(() => getLatest()?.stopAgent());
+    await act(async () => {
+      fakeA.emit({ messages: [], streaming: false });
+      fakeA.finishTurn();
+      await Promise.resolve();
+    });
+
+    const third = getLatest()?.queuedMessages.find((m) => m.text === "third");
+    await act(async () => {
+      getLatest()?.sendQueuedNow(third!.id);
+      await Promise.resolve();
+    });
+
+    expect(fakeA.session.send).toHaveBeenCalledTimes(2);
+    expect(fakeA.session.send).toHaveBeenLastCalledWith("third", []);
+    expect(getLatest()?.queuePaused).toBe(false);
+    expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["second"]);
+  });
+
+  it("removeQueued discards an item without sending it", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => getLatest()?.sendMessage("second", []));
+    act(() => getLatest()?.sendMessage("third", []));
+
+    const second = getLatest()?.queuedMessages.find((m) => m.text === "second");
+    act(() => getLatest()?.removeQueued(second!.id));
+
+    expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["third"]);
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-drain into a turn that ended in error", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => getLatest()?.sendMessage("second", []));
+
+    await act(async () => {
+      fakeA.emit({ messages: [], streaming: false, error: { kind: "generic", message: "boom" } });
+      fakeA.finishTurn();
+      await Promise.resolve();
+    });
+
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
+    expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["second"]);
+  });
+
+  it("clears the queue when switching conversations", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => getLatest()?.sendMessage("second", []));
+    expect(getLatest()?.queuedMessages).toHaveLength(1);
+
+    act(() => getLatest()?.selectConversation("conv-b"));
+
+    expect(getLatest()?.queuedMessages).toHaveLength(0);
+    expect(getLatest()?.queuePaused).toBe(false);
   });
 });
 

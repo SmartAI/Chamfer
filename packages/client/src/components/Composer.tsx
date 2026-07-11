@@ -1,10 +1,15 @@
 import { useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from "react";
-import { Paperclip, X } from "lucide-react";
+import { Paperclip, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export interface ComposerProps {
   disabled: boolean;
   disabledHint?: string;
+  /** True while an agent turn is running: shows the Stop button. The composer
+   * itself stays usable so sends can queue behind the running turn. */
+  streaming?: boolean;
+  /** Aborts the running turn; only rendered while streaming. */
+  onStop?: () => void;
   onSend: (text: string, images: File[]) => void;
 }
 
@@ -26,7 +31,7 @@ function readPreviewUrl(file: File): Promise<string> {
 
 let nextImageId = 0;
 
-export function Composer({ disabled, disabledHint, onSend }: ComposerProps) {
+export function Composer({ disabled, disabledHint, streaming = false, onStop, onSend }: ComposerProps) {
   const [value, setValue] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -140,13 +145,26 @@ export function Composer({ disabled, disabledHint, onSend }: ComposerProps) {
           onPaste={handlePaste}
           rows={1}
         />
+        {streaming && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            data-testid="composer-stop"
+            aria-label="Stop the agent"
+            title="Stop the agent"
+            onClick={onStop}
+          >
+            <Square className="h-4 w-4 fill-current" />
+          </Button>
+        )}
         <Button
           type="button"
           data-testid="composer-send"
           disabled={disabled || value.trim().length === 0}
           onClick={handleSend}
         >
-          Send
+          {streaming ? "Queue" : "Send"}
         </Button>
       </div>
     </div>

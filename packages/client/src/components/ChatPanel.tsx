@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Clock, LoaderCircle, Send, X } from "lucide-react";
+import { turnStats } from "@/agent/turnStats";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
 import { ErrorBanner } from "./ErrorBanner";
@@ -52,7 +54,17 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
     newConversation,
     error: providerError,
     clearError,
+    queuedMessages,
+    queuePaused,
+    sendMessage,
+    stopAgent,
+    removeQueued,
+    sendQueuedNow,
+    modelName,
+    maxCadRuns,
   } = useChatState();
+
+  const stats = useMemo(() => turnStats(sessionState.messages), [sessionState.messages]);
 
   // A preset chosen from the no-conversation state must wait for newConversation()'s async
   // switch to produce a live ChatSession; the prompt is stashed here and sent by the effect
@@ -87,9 +99,9 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
 
   const handleSend = useCallback(
     (text: string, images: File[]) => {
-      void session?.send(text, images);
+      sendMessage(text, images);
     },
-    [session],
+    [sendMessage],
   );
 
   const retryText = sessionState.error?.kind === "rate-limited" ? lastUserMessageText(sessionState.messages) : undefined;
@@ -158,12 +170,9 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
     );
   }
 
-  const disabled = !settingsPresent || !session || sessionState.streaming;
-  const disabledHint = !settingsPresent
-    ? SETTINGS_HINT
-    : sessionState.streaming
-      ? "Waiting for the response to finish..."
-      : undefined;
+  // Streaming no longer disables the composer: sends during a turn join the queue.
+  const disabled = !settingsPresent || !session;
+  const disabledHint = !settingsPresent ? SETTINGS_HINT : undefined;
 
   const conversationTitle = conversations.find((c) => c.id === activeConversationId)?.title;
 
@@ -194,7 +203,69 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
           <PresetPrompts disabled={disabled || presetLaunching} onSelect={handlePresetSelect} />
         }
       />
-      <Composer disabled={disabled} disabledHint={disabledHint} onSend={handleSend} />
+      {queuedMessages.length > 0 && (
+        <div data-testid="queue-strip" className="flex shrink-0 flex-col gap-1.5 border-t px-3 pt-2">
+          {queuePaused && (
+            <p data-testid="queue-paused" className="text-xs text-muted-foreground">
+              Queue paused — send a queued message below or type a new one to resume.
+            </p>
+          )}
+          {queuedMessages.map((message) => (
+            <div
+              key={message.id}
+              data-testid="queued-message"
+              className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5 text-xs"
+            >
+              <Clock className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{message.text}</span>
+              <button
+                type="button"
+                data-testid="queued-send-now"
+                aria-label="Send now"
+                title="Send now"
+                onClick={() => sendQueuedNow(message.id)}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Send className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                data-testid="queued-remove"
+                aria-label="Remove from queue"
+                title="Remove from queue"
+                onClick={() => removeQueued(message.id)}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {modelName && (
+        <div
+          data-testid="agent-status"
+          className="flex shrink-0 items-center gap-1.5 border-t px-4 py-1.5 text-[11px] tabular-nums text-muted-foreground"
+        >
+          {sessionState.streaming && (
+            <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
+          )}
+          <span className="font-medium text-foreground">{modelName}</span>
+          <span aria-hidden="true">·</span>
+          <span>LLM calls {stats.llmCalls}</span>
+          <span aria-hidden="true">·</span>
+          <span>
+            CAD runs {stats.cadRunsThisTurn} / {maxCadRuns}
+          </span>
+        </div>
+      )}
+      <Composer
+        disabled={disabled}
+        disabledHint={disabledHint}
+        streaming={sessionState.streaming}
+        onStop={stopAgent}
+        onSend={handleSend}
+      />
     </div>
   );
 }
