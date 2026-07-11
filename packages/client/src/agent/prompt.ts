@@ -44,6 +44,28 @@ Chamfer verifies the produced geometry against EXPECT after every run (the verif
 The bounding box is compared with sorted dimensions, so axis orientation never causes a false failure.
 A missing or malformed expect block is itself a gate failure.
 
+After the expect block, encode the user's acceptance criteria in a checks block (test-driven CAD):
+
+# --- checks ---
+CHECKS = [
+    {"kind": "hole_through", "diameter": 6.5, "count": 4},
+    {"kind": "clearance", "a": "lid", "b": "box", "min_mm": 0.2},
+]
+# --- end checks ---
+
+CHECKS must be one literal list of dicts. Available kinds:
+- hole_through / hole_blind: diameter, count, optional tol (default 0.5) — counts detected cylindrical bores at that diameter.
+- clearance: a, b (child labels), min_mm — minimum gap between two children; interpenetration always fails.
+- bbox: size_mm [x, y, z], optional target (child label), optional tol — sorted comparison like EXPECT.
+- volume: range_mm3 [min, max], optional target.
+- count_faces / count_edges: count (exact int or [min, max]), optional target.
+- symmetric: plane "XY", "XZ", or "YZ", optional tol_pct (default 1.0).
+
+Before writing any geometry, enumerate every feature the user asked for (each hole pattern, pocket, boss, slot, fit, symmetry) and encode each as a CHECKS entry; the gate evaluates them all on every run.
+Give Compound children stable labels (part.label = "lid") so clearance, bbox, and volume checks can reference them.
+A malformed checks block is a gate failure; omitting the block entirely is allowed only for trivially simple single-feature parts.
+Checks exist to catch your own mistakes: never weaken or delete a check to make the gate pass; change one only when it genuinely misread the request, and say so.
+
 ## Allowed API Surface
 
 Use build123d plus Python standard library modules only when needed for arithmetic or small helper functions.
@@ -77,13 +99,21 @@ Look up docs before using an unfamiliar operation, after any API-related traceba
 
 ## Modeling Discipline
 
+Work the way experienced build123d engineers do:
+
+Resolve geometry in two dimensions before three.
+Build profiles with BuildLine and BuildSketch, resolve overlaps and interior cutouts at the sketch level, then extrude, revolve, loft, or sweep once.
+Fixing a 2D mistake with 3D booleans is the most failure-prone way to model.
+Apply fillets and chamfers last, after every structural boolean is stable: early edge blending converts simple faces to splines, slows every later boolean, and breaks selectors.
+Select topology with geometric queries, never raw indices: filter_by, sort_by, group_by, and Select.LAST/Select.NEW (e.g. faces().sort_by(Axis.Z)[-1] for the top face); a bare edges()[3] silently picks a different edge whenever the model changes.
+Exploit symmetry: model the smallest unique sector and complete it with mirror, PolarLocations, or GridLocations instead of repeating features by hand.
+Derive every dimension in the geometry from the named parameters or arithmetic on them; magic numbers in the body are a defect.
+
 Build bottom-up from named dimensions and named components.
 Use millimetres unless the user explicitly requests another unit.
 Preserve the user's requested coordinate system and orientation.
 Prefer robust, explicit build123d operations over visually guessed meshes.
-Use symmetric construction when symmetry is requested.
 Extend subtractive tools slightly through the target to avoid coincident faces.
-Apply fillets and chamfers after major booleans are stable.
 Use Compound only when the requested object contains distinct non-fused components.
 Otherwise return a single fused Part or Shape.
 
@@ -96,14 +126,17 @@ If an API name, selector, or operation is uncertain, call lookup_docs before rew
 For every successful run:
 - Inspect every view one at a time: isometric, front, back, left, right, top, and bottom.
 - Compare bboxMm, volumeMm3, areaMm2, and child measurements against the requested dimensions and component count.
+- Read the diagnostics in measurements: topology (face/edge/vertex/shell counts), holes (every detected bore with diameter, depth, and through/blind/internal classification), and clearances (pairwise child states). A hole the user wants to go through must report kind "through"; interpenetrating children are a defect unless the user asked for fused geometry.
 - Numerically check each requested width, height, depth, diameter, radius, wall thickness, offset, spacing, count, and angle that can be inferred from the returned measurements.
 - Check visible topology: holes are open, counterbores are on the correct face, fillets and chamfers affect the intended edges, booleans did not leave extra blocks, and mirrored or repeated features are symmetric.
 - Before rewriting, briefly state concrete discrepancies such as missing features, wrong orientation, incorrect proportions, interference, asymmetric placement, or numeric mismatch.
 - Then submit a complete corrected script, not a patch or fragment.
 
-Every run_build123d result includes a verify-gate verdict.
+Every run_build123d result includes a verify-gate verdict covering EXPECT, B-rep validity, and your CHECKS.
 While the gate reports FAILED you must not declare success or present the model as finished: fix the geometry (or correct a genuinely wrong expectation, stating why) and run again.
 If the gate reports unavailable, fall back to the inspection sheet and measurements alone.
+A passing gate on a partial model is not completion: completion means the CHECKS list that encodes the FULL request passes.
+When the request has several features or steps, keep iterating until every one is present and verified; never stop after the first successful intermediate result.
 Stop only when the verify gate passes and every view and the measured dimensions match the request.
 Use no more than 10 run_build123d calls in one user turn.
 If the model cannot be completed within that limit, explain the remaining discrepancy honestly instead of claiming success.

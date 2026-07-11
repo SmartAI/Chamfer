@@ -95,11 +95,43 @@ export interface ParamSpec {
   description: string;
 }
 
+export interface TopologyCounts {
+  faces: number;
+  edges: number;
+  vertices: number;
+  shells: number;
+}
+
+/** One detected cylindrical bore. "internal" means material was found past
+ * both ends (a buried void); "blind" past exactly one end. */
+export interface HoleMeasurement {
+  diameterMm: number;
+  depthMm: number;
+  kind: "through" | "blind" | "internal";
+  axisDir: [number, number, number];
+  centerMm: [number, number, number];
+}
+
+/** Pairwise child clearance: distanceMm for apart/touching,
+ * overlapMm3 for interpenetrating. */
+export interface ClearanceMeasurement {
+  a: string;
+  b: string;
+  state: "apart" | "touching" | "interpenetrating";
+  distanceMm?: number;
+  overlapMm3?: number;
+}
+
 export interface Measurements {
   bboxMm: [number, number, number];
   volumeMm3: number;
   areaMm2: number;
   children: Array<{ label: string; bboxMm: [number, number, number]; volumeMm3: number }>;
+  /** Diagnostics are fail-open: each field is omitted when its evaluator
+   * failed, and clearances is only present for multi-child results. */
+  topology?: TopologyCounts;
+  holes?: HoleMeasurement[];
+  clearances?: ClearanceMeasurement[];
 }
 
 export interface MeshPayload {
