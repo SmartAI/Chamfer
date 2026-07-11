@@ -69,6 +69,7 @@ export interface Plan {
 export const KNOWN_CHECK_KINDS: ReadonlySet<string> = new Set([
   "hole_through",
   "hole_blind",
+  "hole_internal",
   "clearance",
   "bbox",
   "volume",

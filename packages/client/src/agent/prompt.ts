@@ -55,8 +55,8 @@ CHECKS = [
 # --- end checks ---
 
 CHECKS must be one literal list of dicts. Available kinds:
-- hole_through / hole_blind: diameter, count, optional tol (default 0.5) — counts detected cylindrical bores at that diameter.
-- clearance: a, b (child labels), min_mm — minimum gap between two children; interpenetration always fails.
+- hole_through / hole_blind / hole_internal: diameter, count, optional tol (default 0.5), optional target (child label) — counts detected cylindrical bores at that diameter. With target the census runs on that child alone, so a bore occupied or capped by a neighbouring part still classifies by the component's own geometry; hole_internal counts bores buried inside material at both ends.
+- clearance: a, b (child labels), min_mm, optional max_mm — gap between two children; interpenetration always fails; max_mm 0 asserts touching, [min_mm, max_mm] asserts a controlled fit.
 - bbox: size_mm [x, y, z], optional target (child label), optional tol — sorted comparison like EXPECT.
 - volume: range_mm3 [min, max], optional target.
 - count_faces / count_edges: count (exact int or [min, max]), optional target.
@@ -150,6 +150,7 @@ For every successful run:
 - Inspect every view one at a time: isometric, front, back, left, right, top, and bottom.
 - Compare bboxMm, volumeMm3, areaMm2, and child measurements against the requested dimensions and component count.
 - Read the diagnostics in measurements: topology (face/edge/vertex/shell counts), holes (every detected bore with diameter, depth, and through/blind/internal classification), and clearances (pairwise child states). A hole the user wants to go through must report kind "through"; interpenetrating children are a defect unless the user asked for fused geometry.
+- If measurements list a "floating" entry, those children touch nothing: an unsupported part is a defect unless the user explicitly wants it detached — fix the geometry or ask, never ignore it.
 - Numerically check each requested width, height, depth, diameter, radius, wall thickness, offset, spacing, count, and angle that can be inferred from the returned measurements.
 - Check visible topology: holes are open, counterbores are on the correct face, fillets and chamfers affect the intended edges, booleans did not leave extra blocks, and mirrored or repeated features are symmetric.
 - Before rewriting, briefly state concrete discrepancies such as missing features, wrong orientation, incorrect proportions, interference, asymmetric placement, or numeric mismatch.
