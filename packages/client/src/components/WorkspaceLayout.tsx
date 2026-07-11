@@ -128,7 +128,7 @@ export function WorkspaceLayout({ sidebar, chat, viewer }: WorkspaceLayoutProps)
         aria-label={widths.sidebarCollapsed ? "Show chat history" : "Hide chat history"}
         title={widths.sidebarCollapsed ? "Show chat history" : "Hide chat history"}
         onClick={() => setWidths((current) => ({ ...current, sidebarCollapsed: !current.sidebarCollapsed }))}
-        className="absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-md border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="absolute top-2 z-30 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         style={{ left: widths.sidebarCollapsed ? 12 : widths.sidebar + 12 }}
       >
         {widths.sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}

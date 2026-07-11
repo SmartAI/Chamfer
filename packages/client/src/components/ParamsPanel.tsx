@@ -41,7 +41,7 @@ function sameValues(a: Record<string, number>, b: Record<string, number>): boole
  * CAD/persistence side effects are injected through onChange, which is what
  * the unit tests drive directly. */
 export function ParamsPanel({ params, onChange }: ParamsPanelProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [values, setValues] = useState<Record<string, number>>(() => valuesFromSpecs(params));
   const [error, setError] = useState<string | null>(null);
   // Refs mirror the latest values/onChange so the debounce timer never

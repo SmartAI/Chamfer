@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Clock, LoaderCircle, Send, X } from "lucide-react";
+import { Clock, Send, X } from "lucide-react";
 import { turnStats } from "@/agent/turnStats";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
@@ -183,7 +183,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div data-testid="chat-header" className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
+      <div data-testid="chat-header" className="flex min-h-12 shrink-0 items-center gap-2 border-b py-2 pl-12 pr-4">
         <span className="min-w-0 truncate text-sm font-medium">{conversationTitle}</span>
         <VerificationChip
           streaming={sessionState.streaming}
@@ -252,9 +252,6 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
           data-testid="agent-status"
           className="flex shrink-0 items-center gap-1.5 border-t px-4 py-1.5 text-[11px] tabular-nums text-muted-foreground"
         >
-          {sessionState.streaming && (
-            <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
-          )}
           <span className="font-medium text-foreground">{modelName}</span>
           <span aria-hidden="true">·</span>
           <span>LLM calls {stats.llmCalls}</span>
