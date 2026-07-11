@@ -101,10 +101,12 @@ const PIN_THRESHOLD_PX = 40;
 
 export function MessageList({ messages, streaming, generationFailed = false, emptyState }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   // Whether the view should follow new content. A ref, not state: scroll events
-  // fire per frame and must never re-render, and the autoscroll effect below only
-  // reads the latest value when content actually changes.
+  // fire per frame and must never re-render, and the autoscroll effects below only
+  // read the latest value when content actually changes.
   const pinnedRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
 
   useEffect(() => {
@@ -115,11 +117,34 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
     }
   }, [messages, streaming]);
 
+  // Content can grow without a `messages` identity change (view-sheet images
+  // decoding, tool cards expanding, streaming markdown reflow). Watching the
+  // content wrapper keeps the view glued through those, not just appends.
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) bottomRef.current?.scrollIntoView({ block: "end" });
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
   function handleScroll(event: React.UIEvent<HTMLDivElement>) {
     const el = event.currentTarget;
-    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
-    pinnedRef.current = pinned;
-    if (pinned) setShowJump(false);
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const scrolledUp = el.scrollTop < lastScrollTopRef.current;
+    lastScrollTopRef.current = el.scrollTop;
+    if (gap < PIN_THRESHOLD_PX) {
+      pinnedRef.current = true;
+      setShowJump(false);
+    } else if (scrolledUp) {
+      // Only an upward move away from the bottom is a signal to stop following.
+      // Downward scrolls that haven't reached the threshold yet (e.g. the smooth
+      // jump-to-latest animation mid-flight) must not unpin, or content landing
+      // during the animation strands the view.
+      pinnedRef.current = false;
+    }
   }
 
   function jumpToLatest() {
@@ -160,8 +185,9 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
       <div
         data-testid="message-list"
         onScroll={handleScroll}
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+        className="min-h-0 flex-1 overflow-y-auto p-4"
       >
+      <div ref={contentRef} className="flex min-h-full flex-col gap-4">
       {renderable.length === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center gap-6 text-sm text-muted-foreground">
           <span>Start the conversation</span>
@@ -275,6 +301,7 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
         </div>
       )}
         <div ref={bottomRef} />
+      </div>
       </div>
     </div>
   );
