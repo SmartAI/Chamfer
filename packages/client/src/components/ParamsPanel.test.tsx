@@ -11,6 +11,13 @@ const WIDTH_SPEC: ParamSpec = {
   description: "Overall width in mm",
 };
 
+/** The panel mounts collapsed by default; most tests exercise the expanded controls. */
+function renderExpanded(ui: Parameters<typeof render>[0]): ReturnType<typeof render> {
+  const result = render(ui);
+  fireEvent.click(screen.getByTestId("params-panel-toggle"));
+  return result;
+}
+
 async function flushDebounce(): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(300);
@@ -46,7 +53,7 @@ describe("ParamsPanel", () => {
 
   it("commits a slider change (debounced) with the full value map", async () => {
     const onChange = vi.fn(async () => {});
-    render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
+    renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
     const row = screen.getByTestId("param-overall_width");
     expect(row.textContent).toContain("overall_width");
@@ -67,7 +74,7 @@ describe("ParamsPanel", () => {
 
   it("commits a numeric input edit on Enter and shows both controls' current value", async () => {
     const onChange = vi.fn(async () => {});
-    render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
+    renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
     const input = screen.getByTestId("param-input-overall_width") as HTMLInputElement;
     expect(input.value).toBe("100");
@@ -84,7 +91,7 @@ describe("ParamsPanel", () => {
 
   it("skips no-op commits (blur without an edit)", async () => {
     const onChange = vi.fn(async () => {});
-    render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
+    renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
     fireEvent.blur(screen.getByTestId("param-input-overall_width"));
     await flushDebounce();
@@ -92,17 +99,19 @@ describe("ParamsPanel", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("collapses and restores the parameter controls", () => {
+  it("starts collapsed and expands the parameter controls on demand", () => {
     render(<ParamsPanel params={[WIDTH_SPEC]} onChange={vi.fn(async () => {})} />);
 
     const toggle = screen.getByTestId("params-panel-toggle");
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByTestId("param-overall_width")).toBeNull();
 
     fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByTestId("param-overall_width")).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("param-overall_width")).toBeNull();
   });
 
   it("shows a Python error inline and keeps the controls usable", async () => {
@@ -110,7 +119,7 @@ describe("ParamsPanel", () => {
       .fn<(values: Record<string, number>) => Promise<void>>()
       .mockRejectedValueOnce(new Error("NameError: name 'Bax' is not defined"))
       .mockResolvedValue(undefined);
-    render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
+    renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
     const input = screen.getByTestId("param-input-overall_width");
     fireEvent.change(input, { target: { value: "50" } });
@@ -137,7 +146,7 @@ describe("ParamsPanel", () => {
       .fn<(values: Record<string, number>) => Promise<void>>()
       .mockReturnValueOnce(commitA.promise)
       .mockReturnValueOnce(commitB.promise);
-    render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
+    renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
     const input = screen.getByTestId("param-input-overall_width");
 
@@ -172,7 +181,7 @@ describe("ParamsPanel", () => {
     const onChange = vi
       .fn<(values: Record<string, number>) => Promise<void>>()
       .mockResolvedValue(undefined);
-    const { rerender } = render(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
+    const { rerender } = renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
     const input = screen.getByTestId("param-input-overall_width") as HTMLInputElement;
 

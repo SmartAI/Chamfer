@@ -19,12 +19,12 @@ vi.mock("@react-three/drei", () => ({
 }));
 
 describe("Viewer controls", () => {
-  it("defaults to orthographic projection and disables fit without geometry", () => {
+  it("defaults to perspective projection and disables fit without geometry", () => {
     render(<Viewer geometry={null} />);
 
-    expect(screen.getByTestId("viewer").getAttribute("data-projection")).toBe("orthographic");
+    expect(screen.getByTestId("viewer").getAttribute("data-projection")).toBe("perspective");
     expect((screen.getByTestId("viewer-fit") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("button", { name: "Orthographic view" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Perspective view" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("switches projection and keeps fit available for a model", () => {
@@ -32,10 +32,10 @@ describe("Viewer controls", () => {
     render(<Viewer geometry={geometry} />);
 
     expect((screen.getByTestId("viewer-fit") as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Perspective view" }));
+    fireEvent.click(screen.getByRole("button", { name: "Orthographic view" }));
 
-    expect(screen.getByTestId("viewer").getAttribute("data-projection")).toBe("perspective");
-    expect(screen.getByRole("button", { name: "Perspective view" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("viewer").getAttribute("data-projection")).toBe("orthographic");
+    expect(screen.getByRole("button", { name: "Orthographic view" }).getAttribute("aria-pressed")).toBe("true");
 
   });
 

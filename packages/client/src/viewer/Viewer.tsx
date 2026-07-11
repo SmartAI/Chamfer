@@ -110,7 +110,7 @@ function ProjectionButton({
 }
 
 export function Viewer({ geometry }: ViewerProps) {
-  const [projection, setProjection] = useState<Projection>("orthographic");
+  const [projection, setProjection] = useState<Projection>("perspective");
   const [showEdges, setShowEdges] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
   const [autoRotateSpeed, setAutoRotateSpeed] = useState(AUTO_ROTATE_DEFAULT_SPEED);
