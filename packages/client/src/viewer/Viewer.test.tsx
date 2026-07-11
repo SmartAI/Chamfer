@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BufferGeometry } from "three";
 import { Viewer } from "./Viewer";
@@ -37,6 +37,38 @@ describe("Viewer controls", () => {
     expect(screen.getByTestId("viewer").getAttribute("data-projection")).toBe("perspective");
     expect(screen.getByRole("button", { name: "Perspective view" }).getAttribute("aria-pressed")).toBe("true");
 
+  });
+
+  it("starts with auto-rotate off and toggles it on", () => {
+    const geometry = {} as BufferGeometry;
+    render(<Viewer geometry={geometry} />);
+
+    const toggle = screen.getByRole("button", { name: "Toggle auto-rotate" });
+    expect(screen.getByTestId("viewer").getAttribute("data-auto-rotate")).toBe("false");
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByTestId("viewer").getAttribute("data-auto-rotate")).toBe("true");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shows a speed slider only while auto-rotate is on, and adjusts the speed", () => {
+    const geometry = {} as BufferGeometry;
+    render(<Viewer geometry={geometry} />);
+
+    expect(screen.queryByTestId("auto-rotate-speed")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Toggle auto-rotate" }));
+
+    const speedChip = screen.getByTestId("auto-rotate-speed");
+    const slider = within(speedChip).getByRole("slider");
+    expect(screen.getByTestId("viewer").getAttribute("data-auto-rotate-speed")).toBe("2.5");
+
+    fireEvent.keyDown(slider, { key: "End" });
+    expect(screen.getByTestId("viewer").getAttribute("data-auto-rotate-speed")).toBe("10");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle auto-rotate" }));
+    expect(screen.queryByTestId("auto-rotate-speed")).toBeNull();
   });
 
   it("shows the edge overlay by default and toggles it off", () => {
