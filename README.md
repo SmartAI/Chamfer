@@ -32,6 +32,10 @@ Everything stays on your computer.
 
 [![Watch Chamfer build a part from a 2D image](https://img.youtube.com/vi/n72PvB1WUfw/maxresdefault.jpg)](https://youtu.be/n72PvB1WUfw)
 
+**The finished part, live in the viewer:**
+
+![A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer](docs/media/plane-rotating.gif)
+
 ## Features
 
 - AI generation from text or an image
