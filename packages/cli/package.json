@@ -17,6 +17,9 @@
     "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.3",
     "@hono/node-server": "^1.13.0",
+    "@langfuse/otel": "^5.9.1",
+    "@langfuse/tracing": "^5.9.1",
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
     "hono": "^4.6.0"
   },
   "devDependencies": {

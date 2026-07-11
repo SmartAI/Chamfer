@@ -4,6 +4,8 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { openDb } from "./db";
 import { createApp } from "./app";
 import { fakeLlm } from "./fakeLlm";
+import { realLlm } from "./llm";
+import { initObservability } from "./observability";
 
 // Re-exported so the published CLI (which bundles this file as its entry)
 // can load .env/.env.local before it reads CHAMFER_DATA_DIR/PORT.
@@ -19,8 +21,10 @@ export interface StartServerOptions {
 export function startServer(opts: StartServerOptions) {
   const port = opts.port ?? (process.env.PORT ? Number(process.env.PORT) : 8787);
 
+  initObservability();
   const db = openDb(opts.dbPath);
-  const app = createApp(db, process.env.CHAMFER_FAKE_LLM === "1" ? fakeLlm() : undefined);
+  const llm = process.env.CHAMFER_FAKE_LLM === "1" ? fakeLlm() : realLlm();
+  const app = createApp(db, llm);
 
   // Production static hosting: when a built client is available, serve it from
   // this server so one process runs the whole app. The API routes registered
