@@ -1,6 +1,6 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Streamdown, type CustomRendererProps } from "streamdown";
-import { CheckCircle2, LoaderCircle } from "lucide-react";
+import { ArrowDown, CheckCircle2, LoaderCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
 import { getMessagePersistenceId } from "@/agent/session";
@@ -96,12 +96,37 @@ export interface MessageListProps {
   emptyState?: ReactNode;
 }
 
+/** How close to the bottom (px) still counts as "pinned" for autoscroll purposes. */
+const PIN_THRESHOLD_PX = 40;
+
 export function MessageList({ messages, streaming, generationFailed = false, emptyState }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Whether the view should follow new content. A ref, not state: scroll events
+  // fire per frame and must never re-render, and the autoscroll effect below only
+  // reads the latest value when content actually changes.
+  const pinnedRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
+    if (pinnedRef.current) {
+      bottomRef.current?.scrollIntoView({ block: "end" });
+    } else {
+      setShowJump(true);
+    }
   }, [messages, streaming]);
+
+  function handleScroll(event: React.UIEvent<HTMLDivElement>) {
+    const el = event.currentTarget;
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
+    pinnedRef.current = pinned;
+    if (pinned) setShowJump(false);
+  }
+
+  function jumpToLatest() {
+    pinnedRef.current = true;
+    setShowJump(false);
+    bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
 
   const renderable = messages.filter((m) => {
     const role = (m as RoledMessage).role;
@@ -120,7 +145,23 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
     renderable.at(-1)?.role === "assistant";
 
   return (
-    <div data-testid="message-list" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {showJump && (
+        <button
+          type="button"
+          data-testid="jump-to-latest"
+          onClick={jumpToLatest}
+          className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-md backdrop-blur-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+          New messages
+        </button>
+      )}
+      <div
+        data-testid="message-list"
+        onScroll={handleScroll}
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+      >
       {renderable.length === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center gap-6 text-sm text-muted-foreground">
           <span>Start the conversation</span>
@@ -204,7 +245,8 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
           <span>{streaming ? "Agent is working" : "Done"}</span>
         </div>
       )}
-      <div ref={bottomRef} />
+        <div ref={bottomRef} />
+      </div>
     </div>
   );
 }
