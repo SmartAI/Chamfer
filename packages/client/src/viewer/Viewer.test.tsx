@@ -38,4 +38,18 @@ describe("Viewer controls", () => {
     expect(screen.getByRole("button", { name: "Perspective view" }).getAttribute("aria-pressed")).toBe("true");
 
   });
+
+  it("shows the edge overlay by default and toggles it off", () => {
+    const geometry = {} as BufferGeometry;
+    render(<Viewer geometry={geometry} />);
+
+    const toggle = screen.getByRole("button", { name: "Toggle edge lines" });
+    expect(screen.getByTestId("viewer").getAttribute("data-edges")).toBe("true");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByTestId("viewer").getAttribute("data-edges")).toBe("false");
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  });
 });

@@ -55,7 +55,27 @@ export interface SettingsDto {
   googleBaseUrl?: string;
   /** Selected model, serialized pi-ai Model JSON */
   modelJson?: string;
+  /** Max run_build123d executions per agent turn before the turn is aborted.
+   * String-encoded positive integer (settings values are strings on the wire);
+   * the client falls back to its built-in default when unset or invalid. */
+  maxCadRuns?: string;
 }
+
+/** Where an effective settings value came from: the environment (.env /
+ * .env.local / real env vars), the settings table, or a stored override
+ * shadowing an env value (revertible). */
+export type SettingsSource = "env" | "db" | "db-over-env";
+
+export type SettingsSources = Partial<Record<keyof SettingsDto, SettingsSource>>;
+
+/** GET /api/settings payload: effective (env + stored) values plus provenance. */
+export interface SettingsResponseDto extends SettingsDto {
+  sources: SettingsSources;
+}
+
+/** PUT /api/settings payload: null (or empty string) deletes the stored
+ * value, reverting the key to its environment baseline if one exists. */
+export type SettingsPatchDto = { [K in keyof SettingsDto]?: string | null };
 
 export interface ModelInfoDto {
   provider: Provider;

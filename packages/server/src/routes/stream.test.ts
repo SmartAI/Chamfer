@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../db";
 import { createApp } from "../app";
 import type { LlmStreamer } from "../llm";
@@ -211,5 +211,42 @@ describe("POST /api/stream", () => {
 
     expect(streamCapture.model).toMatchObject({ baseUrl: "https://gateway.example/v1" });
     expect(streamCapture.options?.apiKey).toBe("sk-custom");
+  });
+
+  describe("environment fallback", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("resolves the API key from the environment when nothing is stored", async () => {
+      vi.stubEnv("OPENAI_API_KEY", "sk-oai-from-env");
+      resetOptionsCapture();
+      const app = createApp(openDb(":memory:"), signalRecordingScripted);
+      const res = await app.request("/api/stream", {
+        method: "POST",
+        headers: { authorization: "Bearer chamfer-local", "content-type": "application/json" },
+        body: JSON.stringify({ model: { provider: "openai", id: "gpt-5" }, context: { messages: [] }, options: {} }),
+      });
+      await res.text();
+      expect(streamCapture.options?.apiKey).toBe("sk-oai-from-env");
+    });
+
+    it("prefers a stored key over the environment key", async () => {
+      vi.stubEnv("OPENAI_API_KEY", "sk-oai-from-env");
+      resetOptionsCapture();
+      const app = createApp(openDb(":memory:"), signalRecordingScripted);
+      await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ openaiApiKey: "sk-oai-from-db" }),
+      });
+      const res = await app.request("/api/stream", {
+        method: "POST",
+        headers: { authorization: "Bearer chamfer-local", "content-type": "application/json" },
+        body: JSON.stringify({ model: { provider: "openai", id: "gpt-5" }, context: { messages: [] }, options: {} }),
+      });
+      await res.text();
+      expect(streamCapture.options?.apiKey).toBe("sk-oai-from-db");
+    });
   });
 });

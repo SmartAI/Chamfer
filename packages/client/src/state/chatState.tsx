@@ -184,12 +184,19 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
             );
           }
 
+          // Settings values travel as strings; the session falls back to its
+          // built-in cap when the value is missing or not a positive integer.
+          const parsedMaxCadRuns = Number(settings.maxCadRuns);
+          const maxCadRuns =
+            Number.isInteger(parsedMaxCadRuns) && parsedMaxCadRuns > 0 ? parsedMaxCadRuns : undefined;
+
           const newSession = buildSession({
             conversationId: id,
             modelJson,
             systemPrompt,
             tools,
             priorMessages,
+            maxCadRuns,
           });
           sessionRef.current = newSession;
           setSession(newSession);

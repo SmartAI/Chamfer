@@ -189,11 +189,9 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
         streaming={sessionState.streaming}
         generationFailed={Boolean(sessionState.error)}
         emptyState={
-          <PresetPrompts
-            disabled={disabled || presetLaunching}
-            disabledHint={disabledHint}
-            onSelect={handlePresetSelect}
-          />
+          // No disabledHint here: the composer directly below already explains
+          // why everything is disabled; repeating the sentence reads as a bug.
+          <PresetPrompts disabled={disabled || presetLaunching} onSelect={handlePresetSelect} />
         }
       />
       <Composer disabled={disabled} disabledHint={disabledHint} onSend={handleSend} />

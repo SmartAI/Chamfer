@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ModelInfoDto, Provider, SettingsDto } from "@chamfer/shared";
+import type { ModelInfoDto, Provider, SettingsDto, SettingsSource, SettingsSources } from "@chamfer/shared";
 import { getModels, getSettings, putSettings } from "@/api/rest";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,8 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   google: "Google",
 };
 
+/** Free-text settings fields: per-provider credentials plus agent limits.
+ * All ride the same diff-on-save / badge / reset machinery. */
 interface ProviderFieldState {
   anthropicApiKey: string;
   anthropicBaseUrl: string;
@@ -34,6 +36,7 @@ interface ProviderFieldState {
   openaiBaseUrl: string;
   googleApiKey: string;
   googleBaseUrl: string;
+  maxCadRuns: string;
 }
 
 const PROVIDERS: Provider[] = ["anthropic", "openai", "google"];
@@ -44,6 +47,7 @@ const PROVIDER_FIELDS: Array<keyof ProviderFieldState> = [
   "openaiBaseUrl",
   "googleApiKey",
   "googleBaseUrl",
+  "maxCadRuns",
 ];
 
 function findCurrentModelId(settingsModelJson: string | undefined, models: ModelInfoDto[]): string | undefined {
@@ -62,6 +66,27 @@ function findCurrentModelId(settingsModelJson: string | undefined, models: Model
     // not valid JSON; no match
   }
   return undefined;
+}
+
+/** Provenance chip next to a field label: `.env` for environment-supplied
+ * values, `saved` + a revert action for stored overrides shadowing an env
+ * value. Hidden once the field is edited (the pending value is neither). */
+function SourceBadge({ source, pristine, onReset }: { source?: SettingsSource; pristine: boolean; onReset: () => void }) {
+  if (!pristine || !source || source === "db") return null;
+  const chip = "rounded border border-border px-1 font-mono text-[10px] leading-4 text-muted-foreground";
+  if (source === "env") return <span className={chip}>.env</span>;
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className={chip}>saved</span>
+      <button
+        type="button"
+        className="text-[10px] text-muted-foreground underline hover:text-foreground"
+        onClick={onReset}
+      >
+        Reset to .env
+      </button>
+    </span>
+  );
 }
 
 function getModelBaseUrl(model: ModelInfoDto | undefined): string {
@@ -91,10 +116,14 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
     openaiBaseUrl: "",
     googleApiKey: "",
     googleBaseUrl: "",
+    maxCadRuns: "",
   });
   const [models, setModels] = useState<ModelInfoDto[]>([]);
+  const [sources, setSources] = useState<SettingsSources>({});
   const [selectedProvider, setSelectedProvider] = useState<Provider>("anthropic");
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
+  const [initialModelId, setInitialModelId] = useState<string | undefined>(undefined);
+  const [reloadCount, setReloadCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -116,14 +145,17 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
           openaiBaseUrl: settings.openaiBaseUrl || defaultBaseUrl("openai"),
           googleApiKey: settings.googleApiKey ?? "",
           googleBaseUrl: settings.googleBaseUrl || defaultBaseUrl("google"),
+          maxCadRuns: settings.maxCadRuns ?? "",
         };
         setInitial({ ...settings, ...loadedProviderFields });
         setProviderFields(loadedProviderFields);
         setModels(modelList);
+        setSources(settings.sources ?? {});
         const currentModelId = findCurrentModelId(settings.modelJson, modelList);
         const currentModel = modelList.find((model) => model.id === currentModelId);
         setSelectedProvider(currentModel?.provider ?? "anthropic");
         setSelectedModelId(currentModelId);
+        setInitialModelId(currentModelId);
         setLoaded(true);
       })
       .catch((err: unknown) => {
@@ -135,7 +167,7 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, reloadCount]);
 
   const modelsByProvider = useMemo(() => {
     const groups = new Map<Provider, ModelInfoDto[]>();
@@ -165,6 +197,23 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
     setProviderFields((prev) => ({ ...prev, [field]: value }));
   }
 
+  function isPristine(field: keyof ProviderFieldState): boolean {
+    return providerFields[field] === (initial[field] ?? "");
+  }
+
+  /** Deletes a stored override so the key falls back to its env value, then
+   * re-fetches so the field shows what it reverted to. */
+  async function handleReset(field: keyof SettingsDto) {
+    setError(null);
+    try {
+      await putSettings({ [field]: null });
+      onSaved?.();
+      setReloadCount((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function handleSave() {
     setError(null);
     setSaving(true);
@@ -175,7 +224,9 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
           patch[field] = providerFields[field];
         }
       }
-      if (selectedModel) {
+      // Only persist the model when actually changed, so an env-sourced
+      // model is not silently promoted to a stored override on every save.
+      if (selectedModel && selectedModelId !== initialModelId) {
         patch.modelJson = selectedModel.modelJson;
       }
       await putSettings(patch);
@@ -214,7 +265,14 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="model-select">Model</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="model-select">Model</Label>
+                <SourceBadge
+                  source={sources.modelJson}
+                  pristine={selectedModelId === initialModelId}
+                  onReset={() => void handleReset("modelJson")}
+                />
+              </div>
               <Select value={selectedModelId} onValueChange={setSelectedModelId}>
                 <SelectTrigger id="model-select">
                   <SelectValue placeholder="Select a model" />
@@ -233,7 +291,14 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="provider-api-key">API key</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="provider-api-key">API key</Label>
+                <SourceBadge
+                  source={sources[apiKeyField]}
+                  pristine={isPristine(apiKeyField)}
+                  onReset={() => void handleReset(apiKeyField)}
+                />
+              </div>
               <Input
                 id="provider-api-key"
                 type="password"
@@ -244,7 +309,14 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="provider-base-url">Base URL</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="provider-base-url">Base URL</Label>
+                <SourceBadge
+                  source={sources[baseUrlField]}
+                  pristine={isPristine(baseUrlField)}
+                  onReset={() => void handleReset(baseUrlField)}
+                />
+              </div>
               <Input
                 id="provider-base-url"
                 type="url"
@@ -252,6 +324,30 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
                 onChange={(event) => handleProviderFieldChange(baseUrlField, event.target.value)}
               />
               <p className="text-xs text-muted-foreground">Change this only when using a compatible custom endpoint.</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="max-cad-runs">Max CAD runs per turn</Label>
+                <SourceBadge
+                  source={sources.maxCadRuns}
+                  pristine={isPristine("maxCadRuns")}
+                  onReset={() => void handleReset("maxCadRuns")}
+                />
+              </div>
+              <Input
+                id="max-cad-runs"
+                type="number"
+                min={1}
+                step={1}
+                placeholder="10"
+                value={providerFields.maxCadRuns}
+                onChange={(event) => handleProviderFieldChange("maxCadRuns", event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Safety cap: the agent stops after this many build123d executions in one turn. Empty uses the default
+                of 10.
+              </p>
             </div>
           </div>
         )}

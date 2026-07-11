@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SettingsResponseDto } from "@chamfer/shared";
 import { openDb } from "../db";
 import { createApp } from "../app";
 
@@ -41,5 +42,67 @@ describe("settings routes", () => {
     const got = (await (await app.request("/api/settings")).json()) as Record<string, string>;
     expect(got.anthropicApiKey).toBe("***5678"); // unchanged, not overwritten with the mask
     expect(got.openaiApiKey).toBe("***abcd");
+  });
+});
+
+describe("settings routes with environment config", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reports env-derived values masked, with source env", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-envkey99");
+    const app = makeApp();
+    const got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.anthropicApiKey).toBe("***ey99");
+    expect(got.sources.anthropicApiKey).toBe("env");
+  });
+
+  it("marks a stored value shadowing an env value as db-over-env", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-oai-fromenv");
+    const app = makeApp();
+    await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ openaiApiKey: "sk-oai-fromdb1" }),
+    });
+    const got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.openaiApiKey).toBe("***mdb1");
+    expect(got.sources.openaiApiKey).toBe("db-over-env");
+  });
+
+  it("round-trips maxCadRuns with env baseline and db override", async () => {
+    vi.stubEnv("CHAMFER_MAX_CAD_RUNS", "25");
+    const app = makeApp();
+    let got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.maxCadRuns).toBe("25");
+    expect(got.sources.maxCadRuns).toBe("env");
+
+    await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxCadRuns: "5" }),
+    });
+    got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.maxCadRuns).toBe("5");
+    expect(got.sources.maxCadRuns).toBe("db-over-env");
+  });
+
+  it("PUT null deletes the override and falls back to the env value", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-oai-fromenv");
+    const app = makeApp();
+    await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ openaiApiKey: "sk-oai-fromdb1" }),
+    });
+    await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ openaiApiKey: null }),
+    });
+    const got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.openaiApiKey).toBe("***menv");
+    expect(got.sources.openaiApiKey).toBe("env");
   });
 });

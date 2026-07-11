@@ -16,7 +16,8 @@ if (args.includes("--help") || args.includes("-h")) {
 Usage: npx chamfer [--port <n>]
 
 Data is stored in ~/.chamfer (override with CHAMFER_DATA_DIR).
-Add your API key in Settings after the app opens.`);
+Add your API key in Settings after the app opens, or put it in a
+.env / .env.local file in the directory you run chamfer from.`);
   process.exit(0);
 }
 
@@ -27,10 +28,14 @@ if (portFlag !== -1 && !Number.isInteger(port)) {
   process.exit(1);
 }
 
-const dataDir = process.env.CHAMFER_DATA_DIR ?? join(homedir(), ".chamfer");
 const here = dirname(fileURLToPath(import.meta.url));
 
-const { startServer } = await import(pathToFileURL(join(here, "../dist/server.mjs")).href);
+const { startServer, loadDotenv } = await import(pathToFileURL(join(here, "../dist/server.mjs")).href);
+for (const file of loadDotenv().files) {
+  console.log(`chamfer: loaded environment from ${file}`);
+}
+
+const dataDir = process.env.CHAMFER_DATA_DIR ?? join(homedir(), ".chamfer");
 startServer({
   dbPath: join(dataDir, "chamfer.db"),
   clientDist: join(here, "../dist/client"),

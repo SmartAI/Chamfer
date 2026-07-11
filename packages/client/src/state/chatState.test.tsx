@@ -1,6 +1,6 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ConversationDto, MessageDto, SettingsDto } from "@chamfer/shared";
+import type { ConversationDto, MessageDto, SettingsResponseDto } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import type { ChatSession, SessionState } from "@/agent/session";
 import { ChatProvider, useChatState } from "@/state/chatState";
@@ -52,7 +52,7 @@ describe("ChatProvider conversation switching", () => {
     const convA = makeConversation("conv-a");
     const convB = makeConversation("conv-b");
     mockedRest.listConversations.mockResolvedValue([convA, convB]);
-    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}" } as SettingsDto);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
     mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
 
     const sessionA = makeFakeSession("conv-a");
@@ -90,7 +90,7 @@ describe("ChatProvider conversation switching", () => {
   it("aborts the in-flight session when the active conversation is deleted", async () => {
     const convA = makeConversation("conv-a");
     mockedRest.listConversations.mockResolvedValue([convA]);
-    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}" } as SettingsDto);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
     mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
     mockedRest.deleteConversation.mockResolvedValue(undefined);
 
@@ -130,7 +130,7 @@ describe("ChatProvider conversation switching", () => {
       createdAt: Date.now(),
     } as MessageDto;
     mockedRest.listConversations.mockResolvedValue([convA]);
-    mockedRest.getSettings.mockResolvedValue({ modelJson: undefined } as SettingsDto);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: undefined, sources: {} } as SettingsResponseDto);
     mockedRest.listMessages.mockResolvedValue([savedMessage]);
     mockedRest.listArtifacts.mockResolvedValue([]);
 
@@ -152,10 +152,32 @@ describe("ChatProvider conversation switching", () => {
     expect(latest?.session).toBeNull();
   });
 
+  it("passes the configured maxCadRuns into the session it creates", async () => {
+    const convA = makeConversation("conv-a");
+    mockedRest.listConversations.mockResolvedValue([convA]);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", maxCadRuns: "7", sources: {} } as SettingsResponseDto);
+    mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
+    mockedRest.listArtifacts.mockResolvedValue([]);
+
+    const createSessionMock = vi.fn().mockReturnValue(makeFakeSession("conv-a"));
+    let latest: ReturnType<typeof useChatState> | undefined;
+    render(
+      <ChatProvider __createSession={createSessionMock}>
+        <Harness onValue={(v) => (latest = v)} />
+      </ChatProvider>,
+    );
+
+    await waitFor(() => expect(latest?.loading).toBe(false));
+    act(() => latest?.selectConversation("conv-a"));
+
+    await waitFor(() => expect(createSessionMock).toHaveBeenCalled());
+    expect(createSessionMock.mock.calls[0]?.[0]).toMatchObject({ maxCadRuns: 7 });
+  });
+
   it("refreshSettings re-fetches settings so settings-gated UI enables after saving", async () => {
     mockedRest.listConversations.mockResolvedValue([]);
     // No model configured at mount time.
-    mockedRest.getSettings.mockResolvedValue({} as SettingsDto);
+    mockedRest.getSettings.mockResolvedValue({ sources: {} } as SettingsResponseDto);
 
     let latest: ReturnType<typeof useChatState> | undefined;
 
@@ -169,7 +191,7 @@ describe("ChatProvider conversation switching", () => {
     expect(latest?.settingsPresent).toBe(false);
 
     // The user saves a model + key in SettingsModal, which calls refreshSettings().
-    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}" } as SettingsDto);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
     await act(async () => {
       await latest?.refreshSettings();
     });
@@ -220,7 +242,7 @@ describe("ChatProvider auto-titling", () => {
   async function renderWithConversation(title: string) {
     const conv = { ...makeConversation("conv-a"), title };
     mockedRest.listConversations.mockResolvedValue([conv]);
-    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}" } as SettingsDto);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
     mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
     mockedRest.listArtifacts.mockResolvedValue([]);
 

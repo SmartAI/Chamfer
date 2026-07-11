@@ -53,6 +53,9 @@ export interface CreateSessionOptions {
   tools?: unknown[];
   /** Replayed from REST: parsed AgentMessage history for this conversation. */
   priorMessages: unknown[];
+  /** Max run_build123d executions per turn before the turn is aborted;
+   * defaults to MAX_CAD_RUNS_PER_TURN. Configurable via settings/env. */
+  maxCadRuns?: number;
   /**
    * Internal test-only override for the stream function. Production callers must not set this;
    * it exists so tests can inject a fake streamFn without mocking the whole pi-agent-core module.
@@ -213,6 +216,10 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     });
   }
 
+  const maxCadRuns =
+    opts.maxCadRuns && Number.isInteger(opts.maxCadRuns) && opts.maxCadRuns > 0
+      ? opts.maxCadRuns
+      : MAX_CAD_RUNS_PER_TURN;
   let cadRunsThisTurn = 0;
   let cadRunLimitReached = false;
 
@@ -237,9 +244,9 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     }
     if (event.type === "tool_execution_start" && event.toolName === "run_build123d") {
       cadRunsThisTurn += 1;
-      if (cadRunsThisTurn > MAX_CAD_RUNS_PER_TURN) {
+      if (cadRunsThisTurn > maxCadRuns) {
         cadRunLimitReached = true;
-        lastError = { kind: "generic", message: `Stopped after ${MAX_CAD_RUNS_PER_TURN} CAD runs in one turn.` };
+        lastError = { kind: "generic", message: `Stopped after ${maxCadRuns} CAD runs in one turn.` };
         agent.abort();
       }
     }

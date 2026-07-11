@@ -4,7 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { PROXY_AUTH_TOKEN } from "@chamfer/shared";
 import type { ProxyAssistantMessageEvent } from "@earendil-works/pi-agent-core";
 import { toProxyEvent } from "../proxyEvents";
-import { readSettings } from "../settingsStore";
+import { readEffectiveSettings } from "../settingsStore";
 import { resolveProviderConfig } from "../providerConfig";
 import type { LlmStreamer } from "../llm";
 
@@ -31,7 +31,7 @@ export function streamRoutes(db: DatabaseSync, llm: LlmStreamer): Hono {
       context: unknown;
       options: Record<string, unknown>;
     };
-    const { requestModel, apiKey, env } = resolveProviderConfig(readSettings(db), model);
+    const { requestModel, apiKey, env } = resolveProviderConfig(readEffectiveSettings(db).settings, model);
     return streamSSE(c, async (stream) => {
       try {
         for await (const event of llm.stream(requestModel, context, {

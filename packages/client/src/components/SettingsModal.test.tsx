@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelInfoDto, SettingsDto } from "@chamfer/shared";
+import type { ModelInfoDto, SettingsResponseDto } from "@chamfer/shared";
 import { SettingsModal } from "./SettingsModal";
 import * as rest from "@/api/rest";
 
@@ -8,12 +8,13 @@ vi.mock("@/api/rest");
 
 const mockedRest = vi.mocked(rest);
 
-const SETTINGS: SettingsDto = {
+const SETTINGS: SettingsResponseDto = {
   anthropicApiKey: "***abcd",
   anthropicBaseUrl: "https://anthropic.example/v1",
   openaiApiKey: "***wxyz",
   googleApiKey: "",
   modelJson: JSON.stringify({ id: "claude-opus-4" }),
+  sources: {},
 };
 
 const MODELS: ModelInfoDto[] = [
@@ -126,5 +127,95 @@ describe("SettingsModal", () => {
 
     await screen.findByText(/boom/i);
     expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("badges env-sourced key and model fields with .env", async () => {
+    mockedRest.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      sources: { anthropicApiKey: "env", modelJson: "env" },
+    });
+    render(<SettingsModal open onOpenChange={() => {}} />);
+
+    await screen.findByLabelText("API key");
+    expect(screen.getAllByText(".env")).toHaveLength(2);
+  });
+
+  it("does not badge fields from other providers or without a source", async () => {
+    mockedRest.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      sources: { openaiApiKey: "env" },
+    });
+    render(<SettingsModal open onOpenChange={() => {}} />);
+
+    // Anthropic is selected; the env-sourced OpenAI key must not badge its fields.
+    await screen.findByLabelText("API key");
+    expect(screen.queryByText(".env")).toBeNull();
+  });
+
+  it("hides the .env badge once the field is edited", async () => {
+    mockedRest.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      sources: { anthropicApiKey: "env" },
+    });
+    render(<SettingsModal open onOpenChange={() => {}} />);
+
+    const apiKeyInput = (await screen.findByLabelText("API key")) as HTMLInputElement;
+    expect(screen.getByText(".env")).toBeTruthy();
+    fireEvent.change(apiKeyInput, { target: { value: "sk-ant-typed" } });
+    expect(screen.queryByText(".env")).toBeNull();
+  });
+
+  it("does not persist the model on save when it was not changed", async () => {
+    mockedRest.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      sources: { modelJson: "env" },
+    });
+    render(<SettingsModal open onOpenChange={() => {}} />);
+
+    const apiKeyInput = (await screen.findByLabelText("API key")) as HTMLInputElement;
+    fireEvent.change(apiKeyInput, { target: { value: "sk-ant-newkey" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(mockedRest.putSettings).toHaveBeenCalled());
+    const [patch] = mockedRest.putSettings.mock.calls[0] ?? [];
+    // No modelJson: an untouched (env-sourced) model must not become a db override.
+    expect(patch).toEqual({ anthropicApiKey: "sk-ant-newkey" });
+  });
+
+  it("shows the max CAD runs limit with its env badge and saves a changed value", async () => {
+    mockedRest.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      maxCadRuns: "25",
+      sources: { maxCadRuns: "env" },
+    });
+    render(<SettingsModal open onOpenChange={() => {}} />);
+
+    const input = (await screen.findByLabelText("Max CAD runs per turn")) as HTMLInputElement;
+    expect(input.value).toBe("25");
+    expect(screen.getByText(".env")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(mockedRest.putSettings).toHaveBeenCalled());
+    const [patch] = mockedRest.putSettings.mock.calls[0] ?? [];
+    expect(patch).toEqual({ maxCadRuns: "30" });
+  });
+
+  it("marks an override with saved and reverts it to env via reset", async () => {
+    mockedRest.getSettings.mockResolvedValue({
+      ...SETTINGS,
+      sources: { anthropicApiKey: "db-over-env" },
+    });
+    render(<SettingsModal open onOpenChange={() => {}} />);
+
+    await screen.findByLabelText("API key");
+    expect(screen.getByText("saved")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /reset to \.env/i }));
+
+    await waitFor(() => expect(mockedRest.putSettings).toHaveBeenCalledWith({ anthropicApiKey: null }));
+    // The modal re-fetches so the field shows the env value it fell back to.
+    await waitFor(() => expect(mockedRest.getSettings).toHaveBeenCalledTimes(2));
   });
 });

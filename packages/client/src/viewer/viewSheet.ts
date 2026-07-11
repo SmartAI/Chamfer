@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { MeshPayload } from "@chamfer/shared";
-import { meshToGeometry } from "./meshToGeometry";
+import { meshToGeometry, technicalEdges } from "./meshToGeometry";
 
 const TILE_SIZE = 350;
 const SHEET_COLUMNS = 4;
@@ -100,7 +100,9 @@ export async function renderViewSheet(mesh: MeshPayload): Promise<Blob> {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const material = new THREE.MeshStandardMaterial({ color: 0x91a0b2, roughness: 0.72, metalness: 0.05 });
-  const edgesGeometry = new THREE.EdgesGeometry(geometry);
+  // Same sharp-edge threshold as the interactive viewer: the LLM's self-check
+  // reads feature edges (silhouettes, hole rims), not tessellation seams.
+  const edgesGeometry = technicalEdges(geometry);
   const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x20242a });
   const scene = new THREE.Scene();
   scene.add(new THREE.Mesh(geometry, material));

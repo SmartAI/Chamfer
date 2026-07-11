@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_CONVERSATION_TITLE } from "@chamfer/shared";
 import { openDb } from "./db";
 import { createApp } from "./app";
@@ -169,6 +170,23 @@ describe("POST /api/conversations/:id/generate-title", () => {
       db2.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an env-configured model and key when no settings are stored", async () => {
+    const modelId = (builtinModels().getModels("anthropic")[0] as { id: string }).id;
+    vi.stubEnv("CHAMFER_MODEL", modelId);
+    vi.stubEnv("CHAMFER_PROVIDER", "anthropic");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-envonly");
+    try {
+      const llm = textStreamer("Env Config Title");
+      const { app, conversationId } = await setup(llm, { modelJson: null });
+      const res = await app.request(`/api/conversations/${conversationId}/generate-title`, { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { title: string }).title).toBe("Env Config Title");
+      expect(llm.calls[0]?.options.apiKey).toBe("sk-ant-envonly");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

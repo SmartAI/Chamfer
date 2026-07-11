@@ -277,24 +277,10 @@ describe("createSession", () => {
     }
   });
 
-  it("caps run_build123d at 10 executions per turn, aborts the 11th, surfaces a notice, and resets the cap on the next send", async () => {
-    // vi.clearAllMocks() does not undo mockImplementation() from earlier tests, so pin
-    // postMessage to a resolving implementation: this test drives dozens of persists and
-    // must not inherit a failing one (each failure costs a 250ms retry).
-    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
-    postMessage.mockImplementation(
-      async (_conversationId: string, message: { id: string; seq: number; role: string; contentJson: string }) => ({
-        id: message.id,
-        conversationId: "conv-1",
-        seq: message.seq,
-        role: message.role,
-        contentJson: message.contentJson,
-        createdAt: Date.now(),
-      }),
-    );
-
-    // Scripted streamFn: every turn requests one more run_build123d call, forever,
-    // until the abort signal is set; then it finishes with an aborted message.
+  /** Scripted streamFn requesting one more run_build123d call every turn, forever, until
+   * the abort signal is set; then it finishes with an aborted message. Drives the
+   * CAD-runs-per-turn cap tests. */
+  function makeCadLoopHarness() {
     let toolCallCounter = 0;
     const streamFn = vi.fn((_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) => {
       const stream = createAssistantMessageEventStream();
@@ -341,6 +327,39 @@ describe("createSession", () => {
       parameters: Type.Object({ code: Type.String() }),
       execute,
     };
+    return { streamFn, execute, tool };
+  }
+
+  it("honors a configured maxCadRuns instead of the default cap", async () => {
+    pinResolvingPostMessage();
+    const { streamFn, execute, tool } = makeCadLoopHarness();
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      maxCadRuns: 2,
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: { messages: unknown[]; error?: SessionError } | undefined;
+    const unsubscribe = session.subscribe((state) => {
+      latest = state;
+    });
+
+    await session.send("build a box");
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(latest?.error?.message).toContain("Stopped after 2 CAD runs");
+
+    unsubscribe();
+  });
+
+  it("caps run_build123d at 10 executions per turn, aborts the 11th, surfaces a notice, and resets the cap on the next send", async () => {
+    pinResolvingPostMessage();
+    const { streamFn, execute, tool } = makeCadLoopHarness();
 
     const session = createSession({
       conversationId: "conv-1",

@@ -5,7 +5,8 @@ import type {
   GenerateTitleDto,
   MessageDto,
   ModelInfoDto,
-  SettingsDto,
+  SettingsPatchDto,
+  SettingsResponseDto,
 } from "@chamfer/shared";
 
 async function throwOnError(res: Response): Promise<void> {
@@ -43,11 +44,11 @@ function jsonInit(method: string, body: unknown): RequestInit {
 
 // ---------- Settings ----------
 
-export function getSettings(): Promise<SettingsDto> {
-  return requestJson<SettingsDto>("/api/settings");
+export function getSettings(): Promise<SettingsResponseDto> {
+  return requestJson<SettingsResponseDto>("/api/settings");
 }
 
-export function putSettings(patch: SettingsDto): Promise<void> {
+export function putSettings(patch: SettingsPatchDto): Promise<void> {
   return requestVoid("/api/settings", jsonInit("PUT", patch));
 }
 
