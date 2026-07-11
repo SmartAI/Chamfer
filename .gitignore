@@ -16,3 +16,6 @@ __pycache__/
 
 # Internal working documents live in docs/internal/ and are never published
 docs/internal/
+
+# Local agent/session artifacts (launch configs, worktrees)
+.claude/

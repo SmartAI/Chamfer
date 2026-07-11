@@ -27,6 +27,32 @@ describe("systemPrompt", () => {
     expect(systemPrompt).toContain("hole_diameter = 6.5  # [2, 12] Mounting hole diameter in mm");
   });
 
+  it("specifies the agent-authored checks block and its full vocabulary", () => {
+    expect(systemPrompt).toContain("# --- checks ---");
+    expect(systemPrompt).toContain("CHECKS = [");
+    for (const kind of ["hole_through", "hole_blind", "clearance", "bbox", "volume", "count_faces", "count_edges", "symmetric"]) {
+      expect(systemPrompt).toContain(kind);
+    }
+    expect(systemPrompt).toContain("never weaken or delete a check to make the gate pass");
+  });
+
+  it("teaches the human build123d workflow: 2D first, fillets last, selectors, symmetry", () => {
+    expect(systemPrompt).toContain("Resolve geometry in two dimensions before three");
+    expect(systemPrompt).toContain("Apply fillets and chamfers last");
+    expect(systemPrompt).toContain("never raw indices");
+    expect(systemPrompt).toContain("Exploit symmetry");
+  });
+
+  it("requires full-request completion, not first-pass success", () => {
+    expect(systemPrompt).toContain("A passing gate on a partial model is not completion");
+    expect(systemPrompt).toContain("never stop after the first successful intermediate result");
+  });
+
+  it("points verification at the new diagnostics", () => {
+    expect(systemPrompt).toContain("holes (every detected bore");
+    expect(systemPrompt).toContain("clearances (pairwise child states)");
+  });
+
   it("stays below the prompt size budget", () => {
     expect(systemPrompt.length).toBeLessThan(16_000);
   });
