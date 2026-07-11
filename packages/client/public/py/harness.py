@@ -667,11 +667,16 @@ def _gate_check(name, passed, detail):
 
 
 def _resolve_target(shape, target):
-    """The shape a check applies to: the whole result, or one child by label.
+    """The shape a check applies to: the whole result, one child by label, or
+    the result itself when its own label matches (so a single-component run
+    with `result.label = "base"` satisfies the same targeted checks as the
+    assembly's "base" child does later).
 
     Returns (shape, error_detail); exactly one is None.
     """
     if target is None:
+        return shape, None
+    if (getattr(shape, "label", "") or "") == target:
         return shape, None
     labeled = _children_with_labels(shape)
     for label, child in labeled:

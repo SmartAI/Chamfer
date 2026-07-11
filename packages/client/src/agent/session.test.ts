@@ -932,7 +932,10 @@ describe("createSession agent-loop policies", () => {
 
   // --- plan enforcement ---
 
-  function acceptedPlanResult(components: { id: string; status: string }[]): unknown {
+  function acceptedPlanResult(
+    components: { id: string; status: string }[],
+    interfaces: object[] = [],
+  ): unknown {
     return {
       role: "toolResult",
       toolCallId: "plan-1",
@@ -942,7 +945,7 @@ describe("createSession agent-loop policies", () => {
         plan: {
           goal: "test goal",
           components: components.map((c) => ({ ...c, description: c.id })),
-          interfaces: [],
+          interfaces,
         },
       },
       isError: false,
@@ -1044,6 +1047,86 @@ describe("createSession agent-loop policies", () => {
     expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(1);
   });
 
+  it("demands an assembly run when every component is done but the interfaces have no evidence", async () => {
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("both components done, wrapping up."),
+      textMessage("still not running the assembly."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [
+        acceptedPlanResult(
+          [
+            { id: "base", status: "done" },
+            { id: "lid", status: "done" },
+          ],
+          [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
+        ),
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("finish it");
+
+    expect(turnContexts).toHaveLength(2);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    const nudge = (latest?.messages ?? []).find((m) =>
+      JSON.stringify(m).includes("interfaces are unverified"),
+    );
+    expect(nudge).toBeDefined();
+  });
+
+  it("skips the assembly nudge once a gate-passed run declared all components", async () => {
+    const { tool } = gateTool("passed");
+    const assemblyEvidence = {
+      role: "toolResult",
+      toolCallId: "asm-1",
+      toolName: "run_build123d",
+      content: [{ type: "text", text: "ran" }],
+      details: {
+        gate: { status: "passed", checks: [] },
+        measurements: { component: ["base", "lid"], checks: [] },
+      },
+      isError: false,
+      timestamp: 2,
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("call-1"),
+      textMessage("assembly verified, done."),
+      textMessage("final summary."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [
+        acceptedPlanResult(
+          [
+            { id: "base", status: "done" },
+            { id: "lid", status: "done" },
+          ],
+          [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
+        ),
+        assemblyEvidence,
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("finish it");
+
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(0);
+    expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(1);
+  });
+
   it("with an active plan, budgets runs per component bucket and aborts the bucket's overflow run", async () => {
     const { tool, execute } = gateTool("passed");
     const baseRun = (i: number) => toolCallWithCode(`call-${i}`, `COMPONENT = "base"\nresult = Box(1, 1, ${i})`);
@@ -1104,7 +1187,13 @@ describe("createSession agent-loop policies", () => {
     const plan = {
       goal: "single spacer",
       components: [
-        { id: "spacer", description: "a spacer", status: "todo", free_floating_reason: "single part" },
+        {
+          id: "spacer",
+          description: "a spacer",
+          status: "todo",
+          free_floating_reason: "single part",
+          checks: [{ kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
+        },
       ],
       interfaces: [],
     };

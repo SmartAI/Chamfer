@@ -82,6 +82,11 @@ export const KNOWN_CHECK_KINDS: ReadonlySet<string> = new Set([
 const COMPONENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export const PROBE_COMPONENT = "probe";
 
+/** A component's required volume check may span at most this hi/lo ratio; looser
+ * ranges cannot distinguish right topology from wrong (Phase 0's 200k-500k EXPECT
+ * happily contained both the open and the sealed housing). */
+export const VOLUME_RANGE_MAX_RATIO = 1.5;
+
 export const UPDATE_PLAN_TOOL_NAME = "update_plan";
 
 interface ToolResultLike {
@@ -110,6 +115,26 @@ export function latestPlan(messages: readonly unknown[]): Plan | undefined {
 /** True when the plan still has components to build (todo or building). */
 export function planIncompleteComponents(plan: Plan): PlanComponent[] {
   return plan.components.filter((c) => c.status === "todo" || c.status === "building");
+}
+
+/**
+ * Whether some gate-passed run declared every non-abandoned component at once -
+ * the assembly run where interface clearances are actually measured. Per-component
+ * "done" statuses cannot certify the interfaces (Phase 6 live run: both components
+ * were done while nothing had verified the lid actually rests on the flange), so a
+ * plan with interfaces only counts as finished once this evidence exists.
+ */
+export function hasAssemblyEvidence(plan: Plan, messages: readonly unknown[]): boolean {
+  const required = plan.components.filter((c) => c.status !== "abandoned").map((c) => c.id);
+  if (required.length < 2 || (plan.interfaces ?? []).length === 0) return true;
+  for (const message of messages) {
+    const m = message as ToolResultLike;
+    if (m?.role !== "toolResult" || m.toolName !== "run_build123d" || m.isError) continue;
+    if (m.details?.gate?.status !== "passed") continue;
+    const ids = new Set(runComponentIds(m.details?.measurements));
+    if (required.every((id) => ids.has(id))) return true;
+  }
+  return false;
 }
 
 /** Component ids a run declared, normalized to an array; [] when undeclared or malformed. */
@@ -218,6 +243,34 @@ export function validatePlanSnapshot({ next, previous, evidence }: ValidatePlanA
     for (const check of component.checks ?? []) {
       if (!check || typeof check.kind !== "string" || !KNOWN_CHECK_KINDS.has(check.kind)) {
         errors.push(`component "${id}": unknown check kind ${JSON.stringify(check?.kind)}`);
+      }
+    }
+    // Every buildable component must carry a targeted, bounded volume check.
+    // Volume is the cheapest topology detector: a sealed cavity, missing pocket,
+    // or eaten floor shifts it immediately, and the expected range is derived
+    // from the component's own intended dimensions - which is exactly the
+    // knowledge feature-level checks fail to encode. (Phase 6 live evidence: a
+    // gearbox base sealed shut passed holes+bbox+symmetry checks unnoticed.)
+    if (component.status !== "abandoned") {
+      const volume = (component.checks ?? []).find(
+        (check): check is PlanCheckEntry & { range_mm3?: unknown; target?: unknown } =>
+          Boolean(check) && check.kind === "volume",
+      );
+      if (!volume || volume.target !== id) {
+        errors.push(
+          `component "${id}": checks must include a volume check targeting it, e.g. {"kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
+        );
+      } else {
+        const range = Array.isArray(volume.range_mm3) ? (volume.range_mm3 as unknown[]) : undefined;
+        const lo = typeof range?.[0] === "number" ? (range[0] as number) : undefined;
+        const hi = typeof range?.[1] === "number" ? (range[1] as number) : undefined;
+        if (lo === undefined || hi === undefined || lo <= 0 || hi < lo) {
+          errors.push(`component "${id}": volume check needs range_mm3 [lo, hi] with 0 < lo <= hi`);
+        } else if (hi > VOLUME_RANGE_MAX_RATIO * lo) {
+          errors.push(
+            `component "${id}": volume range [${lo}, ${hi}] is too loose to catch topology mistakes; keep hi <= ${VOLUME_RANGE_MAX_RATIO}x lo (about ±10% around the derived volume)`,
+          );
+        }
       }
     }
   }

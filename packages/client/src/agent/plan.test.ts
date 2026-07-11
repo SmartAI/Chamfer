@@ -9,12 +9,16 @@ import {
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
 
+function volumeCheck(id: string, lo = 5000, hi = 6000) {
+  return { kind: "volume", range_mm3: [lo, hi], target: id };
+}
+
 function makePlan(overrides: Partial<Plan> = {}): Plan {
   return {
     goal: "two-part housing",
     components: [
-      { id: "base", description: "housing base", status: "todo" },
-      { id: "lid", description: "flat lid", status: "todo" },
+      { id: "base", description: "housing base", status: "todo", checks: [volumeCheck("base")] },
+      { id: "lid", description: "flat lid", status: "todo", checks: [volumeCheck("lid")] },
     ],
     interfaces: [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
     ...overrides,
@@ -75,9 +79,31 @@ describe("validatePlanSnapshot", () => {
 
   it("rejects unknown check kinds", () => {
     const plan = makePlan();
-    plan.components[0]!.checks = [{ kind: "hole_sideways", count: 2 }];
+    plan.components[0]!.checks = [...(plan.components[0]!.checks ?? []), { kind: "hole_sideways", count: 2 }];
     const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
     expect(errors.join("\n")).toMatch(/unknown check kind "hole_sideways"/);
+  });
+
+  it("requires a targeted, bounded volume check on every buildable component", () => {
+    const plan = makePlan();
+    plan.components[0]!.checks = [];
+    plan.components[1]!.checks = [{ kind: "volume", range_mm3: [1000, 10000], target: "lid" }];
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/component "base": checks must include a volume check/);
+    expect(errors.join("\n")).toMatch(/component "lid": volume range \[1000, 10000\] is too loose/);
+
+    // An untargeted volume check does not count: it would measure the whole
+    // assembly in a multi-component run.
+    plan.components[0]!.checks = [{ kind: "volume", range_mm3: [5000, 6000] }];
+    const untargeted = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(untargeted.join("\n")).toMatch(/component "base": checks must include a volume check/);
+
+    // Abandoned components are exempt.
+    plan.components[0]!.checks = [];
+    plan.components[0]!.status = "abandoned";
+    plan.components[0]!.abandon_reason = "no longer needed";
+    plan.components[1]!.checks = [volumeCheck("lid")];
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
   });
 
   it("requires interface coverage for every non-free-floating component", () => {
@@ -89,8 +115,8 @@ describe("validatePlanSnapshot", () => {
   it("accepts an uncovered component with a free_floating_reason", () => {
     const plan = makePlan({
       components: [
-        { id: "base", description: "base", status: "todo", free_floating_reason: "single part on the bench" },
-        { id: "lid", description: "lid", status: "todo", free_floating_reason: "user wants it beside the base" },
+        { id: "base", description: "base", status: "todo", free_floating_reason: "single part on the bench", checks: [volumeCheck("base")] },
+        { id: "lid", description: "lid", status: "todo", free_floating_reason: "user wants it beside the base", checks: [volumeCheck("lid")] },
       ],
       interfaces: [],
     });
@@ -129,7 +155,7 @@ describe("validatePlanSnapshot", () => {
   it("rejects silently dropping a previous component", () => {
     const previous = makePlan();
     const next = makePlan({
-      components: [{ id: "base", description: "base", status: "todo", free_floating_reason: "now single-part" }],
+      components: [{ id: "base", description: "base", status: "todo", free_floating_reason: "now single-part", checks: [volumeCheck("base")] }],
       interfaces: [],
     });
     const errors = validatePlanSnapshot({ next, previous, evidence: noEvidence });
@@ -140,14 +166,14 @@ describe("validatePlanSnapshot", () => {
     const check = { kind: "hole_through", diameter: 5.5, count: 4 };
     const plan = makePlan();
     plan.components[0]!.status = "done";
-    plan.components[0]!.checks = [check];
+    plan.components[0]!.checks = [check, volumeCheck("base")];
 
     const without = validatePlanSnapshot({ next: plan, previous: undefined, evidence: new Map() });
     expect(without.join("\n")).toMatch(/no gate-passed run has declared COMPONENT = "base"/);
 
     // Evidence with the check present in a different key order must pass.
     const evidence = collectComponentEvidence([
-      gatePassedRun("base", [{ count: 4, diameter: 5.5, kind: "hole_through" }]),
+      gatePassedRun("base", [{ count: 4, diameter: 5.5, kind: "hole_through" }, { target: "base", range_mm3: [5000, 6000], kind: "volume" }]),
     ]);
     expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence })).toEqual([]);
 

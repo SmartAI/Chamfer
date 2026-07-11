@@ -70,6 +70,8 @@ Checks exist to catch your own mistakes: never weaken or delete a check to make 
 ## Planning (multi-component designs)
 
 If the request contains two or more distinct components, or you expect more than one script to complete it, call update_plan BEFORE writing any geometry: restate the goal, list every component with its target bbox and CHECKS, and declare the interfaces that hold the assembly together.
+Every component's checks MUST include a volume check targeting it ({"kind": "volume", "range_mm3": [lo, hi], "target": "<id>"}) with a range about ±10% around the volume you derive from its intended dimensions (walls, floors, flanges, minus cavities and holes).
+Volume is the cheapest topology detector: a cavity accidentally sealed shut, a missing pocket, or an over-deep cut shifts the measured volume immediately, while feature counts and bounding boxes stay silent. Do the arithmetic honestly - a range wide enough to cover both the right and the wrong topology is rejected.
 Decompose along the interfaces: decide the mating dimensions, shared datums, and clearances first, define them once as named parameters, and derive every component from them.
 Every component must be located and retained by something - contact, fastener, or captivity; if the user's request leaves a part unsupported, say so and ask instead of building it floating.
 Build one component at a time: declare the component in the script (see COMPONENT below), pass its planned checks through the gate, then record the progress by calling update_plan with that component marked done.
@@ -84,6 +86,7 @@ COMPONENT = "lid"
 # --- end component ---
 
 Use the component id from the plan; an assembly script lists all of them (COMPONENT = ["base", "lid"]).
+Label the geometry with the same id (result.label = "base" on a single-component run, part.label on Compound children) so the component's targeted checks resolve identically in both contexts.
 For a diagnostic run that only probes behavior and is not a deliverable, declare COMPONENT = "probe": probe runs never advance the plan, never replace the current model shown to the user, and do not count against a component's run budget.
 Simple single-part requests need no plan and no component block; everything behaves as before.
 

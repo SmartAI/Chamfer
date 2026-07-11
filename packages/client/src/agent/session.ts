@@ -7,6 +7,7 @@ import { runCompaction } from "./compaction";
 import { withStreamRetry, type StreamRetryOptions } from "./retryStream";
 import {
   PROBE_COMPONENT,
+  hasAssemblyEvidence,
   latestPlan,
   parseComponentDeclaration,
   planIncompleteComponents,
@@ -324,16 +325,26 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       // follow-up queue only when the agent would otherwise end the run).
       const activePlan = latestPlan(agent.state.messages);
       const incomplete = activePlan ? planIncompleteComponents(activePlan) : [];
-      if (incomplete.length > 0 && !planNudgedWithoutRun) {
-        // Deterministic stop-gate: the plan of record says work remains. Never
-        // fires twice without an intervening run_build123d call.
+      const missingAssembly =
+        activePlan !== undefined &&
+        incomplete.length === 0 &&
+        !hasAssemblyEvidence(activePlan, agent.state.messages);
+      if ((incomplete.length > 0 || missingAssembly) && !planNudgedWithoutRun) {
+        // Deterministic stop-gate: the plan of record says work remains - either
+        // unfinished components, or interfaces nobody has measured because no
+        // gate-passed run declared all components together. Never fires twice
+        // without an intervening run_build123d call.
         planNudgedWithoutRun = true;
+        const text =
+          incomplete.length > 0
+            ? buildPlanNudgePrompt(incomplete)
+            : `${PLAN_NUDGE_MARKER} Every component is done, but the interfaces are unverified: no gate-passed run has declared ALL components together. Build the assembly script (COMPONENT lists every component, Compound children labeled, interface clearance checks included) and run it before finishing.`;
         agent.followUp({
           role: "user",
-          content: [{ type: "text", text: buildPlanNudgePrompt(incomplete) }],
+          content: [{ type: "text", text }],
           timestamp: Date.now(),
         } as AgentMessage);
-      } else if (incomplete.length === 0 && selfCheckArmed && gatePassedThisTurn) {
+      } else if (incomplete.length === 0 && !missingAssembly && selfCheckArmed && gatePassedThisTurn) {
         selfCheckArmed = false;
         agent.followUp({
           role: "user",

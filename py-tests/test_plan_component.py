@@ -160,6 +160,22 @@ result = core + top + bottom
     assert entry["passed"] is True, entry["detail"]
 
 
+def test_targeted_check_resolves_the_results_own_label():
+    body = """
+from build123d import *
+part = Box(10, 20, 30) - Cylinder(2, 40, rotation=(0, 0, 0))
+part.label = "plate"
+result = part
+"""
+    source = (
+        EXPECT_BOX
+        + '# --- checks ---\nCHECKS = [{"kind": "hole_through", "diameter": 4, "count": 1, "target": "plate"}]\n# --- end checks ---\n'
+        + body
+    )
+    entry = check_by_name(run(source)["gate"], "check:hole_through[0]")
+    assert entry["passed"] is True, entry["detail"]
+
+
 # ---------- clearance max_mm ----------
 
 
