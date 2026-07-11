@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectComponentEvidence,
+  hasAssemblyEvidence,
   latestPlan,
   planIncompleteComponents,
   runComponentIds,
@@ -181,6 +182,55 @@ describe("validatePlanSnapshot", () => {
     const wrongEvidence = collectComponentEvidence([gatePassedRun("base", [{ kind: "bbox", size_mm: [1, 2, 3] }])]);
     const missing = validatePlanSnapshot({ next: plan, previous: undefined, evidence: wrongEvidence });
     expect(missing.join("\n")).toMatch(/was not part of the gate-passed run/);
+  });
+});
+
+describe("hasAssemblyEvidence", () => {
+  const clearanceCheck = { kind: "clearance", a: "base", b: "lid", min_mm: 0, max_mm: 0 };
+
+  it("is vacuously true for single-component or interface-free plans", () => {
+    const single = makePlan({
+      components: [{ id: "base", description: "base", status: "todo", free_floating_reason: "solo" }],
+      interfaces: [],
+    });
+    expect(hasAssemblyEvidence(single, [])).toBe(true);
+    expect(hasAssemblyEvidence(makePlan({ interfaces: [] }), [])).toBe(true);
+  });
+
+  it("rejects a run that declares all components but never ran the interface check", () => {
+    const plan = makePlan();
+    const runWithoutCheck = gatePassedRun(["base", "lid"], [{ kind: "bbox", size_mm: [1, 2, 3], target: "base" }]);
+    expect(hasAssemblyEvidence(plan, [runWithoutCheck])).toBe(false);
+  });
+
+  it("accepts a run that declares all components and ran the interface check, either endpoint order", () => {
+    const plan = makePlan();
+    expect(hasAssemblyEvidence(plan, [gatePassedRun(["base", "lid"], [clearanceCheck])])).toBe(true);
+    const swapped = { kind: "clearance", a: "lid", b: "base", min_mm: 0, max_mm: 0 };
+    expect(hasAssemblyEvidence(plan, [gatePassedRun(["lid", "base"], [swapped])])).toBe(true);
+  });
+
+  it("rejects a run whose clearance bounds differ from the planned interface", () => {
+    const plan = makePlan();
+    const looser = { kind: "clearance", a: "base", b: "lid", min_mm: 0 };
+    expect(hasAssemblyEvidence(plan, [gatePassedRun(["base", "lid"], [looser])])).toBe(false);
+  });
+
+  it("ignores interfaces whose endpoint was abandoned and captive interfaces", () => {
+    const plan = makePlan({
+      components: [
+        { id: "base", description: "base", status: "todo", checks: [volumeCheck("base")] },
+        { id: "lid", description: "lid", status: "abandoned", abandon_reason: "dropped" },
+        { id: "pin", description: "pin", status: "todo", checks: [volumeCheck("pin")] },
+      ],
+      interfaces: [
+        { a: "base", b: "lid", kind: "clearance", min_mm: 0 },
+        { a: "base", b: "pin", kind: "captive" },
+      ],
+    });
+    // The only live interface is captive (unmeasurable), so any gate-passed run
+    // declaring the active components suffices.
+    expect(hasAssemblyEvidence(plan, [gatePassedRun(["base", "pin"], [])])).toBe(true);
   });
 });
 

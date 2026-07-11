@@ -118,21 +118,46 @@ export function planIncompleteComponents(plan: Plan): PlanComponent[] {
 }
 
 /**
- * Whether some gate-passed run declared every non-abandoned component at once -
- * the assembly run where interface clearances are actually measured. Per-component
- * "done" statuses cannot certify the interfaces (Phase 6 live run: both components
- * were done while nothing had verified the lid actually rests on the flange), so a
- * plan with interfaces only counts as finished once this evidence exists.
+ * The CHECKS entry a clearance interface compiles to, in both endpoint orders
+ * (clearance is symmetric, so either ordering in the script is legitimate).
+ * Captive interfaces have no measurable gate check and compile to nothing.
+ */
+function interfaceCheckForms(iface: PlanInterface): string[] {
+  if (iface.kind !== "clearance") return [];
+  const base: Record<string, unknown> = { kind: "clearance", min_mm: iface.min_mm };
+  if (iface.max_mm !== undefined) base.max_mm = iface.max_mm;
+  return [canonical({ ...base, a: iface.a, b: iface.b }), canonical({ ...base, a: iface.b, b: iface.a })];
+}
+
+/**
+ * Whether some gate-passed run measured the assembly: it must declare every
+ * non-abandoned component at once AND its echoed CHECKS must contain each
+ * clearance interface's check entry - declaring the components without running
+ * the interface checks proves nothing about the fit. Per-component "done"
+ * statuses cannot certify the interfaces (Phase 6 live run: both components
+ * were done while nothing had verified the lid actually rests on the flange),
+ * so a plan with interfaces only counts as finished once this evidence exists.
  */
 export function hasAssemblyEvidence(plan: Plan, messages: readonly unknown[]): boolean {
-  const required = plan.components.filter((c) => c.status !== "abandoned").map((c) => c.id);
-  if (required.length < 2 || (plan.interfaces ?? []).length === 0) return true;
+  const active = new Set(plan.components.filter((c) => c.status !== "abandoned").map((c) => c.id));
+  const interfaces = (plan.interfaces ?? []).filter((i) => active.has(i.a) && active.has(i.b));
+  if (active.size < 2 || interfaces.length === 0) return true;
   for (const message of messages) {
     const m = message as ToolResultLike;
     if (m?.role !== "toolResult" || m.toolName !== "run_build123d" || m.isError) continue;
     if (m.details?.gate?.status !== "passed") continue;
-    const ids = new Set(runComponentIds(m.details?.measurements));
-    if (required.every((id) => ids.has(id))) return true;
+    const measurements = m.details?.measurements;
+    const ids = new Set(runComponentIds(measurements));
+    if (![...active].every((id) => ids.has(id))) continue;
+    const rawChecks = Array.isArray(measurements?.checks) ? (measurements?.checks as unknown[]) : [];
+    const ran = new Set(rawChecks.map(canonical));
+    const allInterfacesRan = interfaces.every((iface) => {
+      const forms = interfaceCheckForms(iface);
+      // Captive interfaces compile to no measurable check; the all-components
+      // gate-passed run itself is the best available evidence for them.
+      return forms.length === 0 || forms.some((form) => ran.has(form));
+    });
+    if (allInterfacesRan) return true;
   }
   return false;
 }

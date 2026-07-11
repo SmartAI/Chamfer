@@ -1090,7 +1090,12 @@ describe("createSession agent-loop policies", () => {
       content: [{ type: "text", text: "ran" }],
       details: {
         gate: { status: "passed", checks: [] },
-        measurements: { component: ["base", "lid"], checks: [] },
+        measurements: {
+          component: ["base", "lid"],
+          // Assembly evidence requires the interface's clearance check to have
+          // actually run; declaring the components alone is not enough.
+          checks: [{ kind: "clearance", a: "base", b: "lid", min_mm: 0, max_mm: 0 }],
+        },
       },
       isError: false,
       timestamp: 2,

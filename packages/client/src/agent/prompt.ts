@@ -77,7 +77,7 @@ Every component must be located and retained by something - contact, fastener, o
 Build one component at a time: declare the component in the script (see COMPONENT below), pass its planned checks through the gate, then record the progress by calling update_plan with that component marked done.
 Marking done is evidence-checked - it is accepted only after a gate-passed run declared the component and ran its planned checks - so build the evidence first; never try to talk a component into being finished.
 Revise the plan when the decomposition genuinely changes, but never delete or shrink an unfinished component to escape a failing build: abandoning one requires an explicit reason the user will see.
-Finish with an assembly script that declares all components, labels the Compound children, and passes the interface clearance checks.
+Finish with an assembly script that declares all components, labels the Compound children, and whose CHECKS contain each plan interface's clearance entry verbatim ({"kind": "clearance", "a": ..., "b": ..., "min_mm": ..., "max_mm": ...} exactly as planned): the plan only counts as finished once one gate-passed run declared all components AND ran every interface check.
 
 Declare which plan component a script builds with a component block after the checks block:
 
