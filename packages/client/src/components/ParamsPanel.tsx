@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, GripVertical, SlidersHorizontal } from "lucide-react";
 import type { ParamSpec } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import { Input } from "@/components/ui/input";
@@ -114,13 +114,22 @@ export function ParamsPanel({ params, onChange }: ParamsPanelProps) {
 
   return (
     <section data-testid="params-panel" className="bg-background">
-      <button
-        type="button"
-        data-testid="params-panel-toggle"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-        className="flex h-10 w-full items-center gap-2 px-3 text-left text-sm font-medium transition-colors hover:bg-accent"
-      >
+      <div className="flex items-stretch">
+        <span
+          data-drag-handle
+          data-testid="params-drag-handle"
+          title="Move panel"
+          className="flex cursor-grab touch-none items-center pl-2 text-muted-foreground/70 hover:text-foreground active:cursor-grabbing"
+        >
+          <GripVertical className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <button
+          type="button"
+          data-testid="params-panel-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+          className="flex h-10 flex-1 items-center gap-2 px-2 text-left text-sm font-medium transition-colors hover:bg-accent"
+        >
         <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
         <span>Parameters</span>
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
@@ -129,7 +138,8 @@ export function ParamsPanel({ params, onChange }: ParamsPanelProps) {
         <ChevronDown
           className={`ml-auto h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
         />
-      </button>
+        </button>
+      </div>
       {expanded && (
         <div className="max-h-[38vh] overflow-y-auto border-t px-3 py-1.5">
           {params.map((spec) => {

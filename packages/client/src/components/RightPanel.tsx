@@ -3,6 +3,7 @@ import { LoaderCircle } from "lucide-react";
 import { Viewer } from "@/viewer/Viewer";
 import { meshToGeometry } from "@/viewer/meshToGeometry";
 import { useAppState } from "@/state/appState";
+import { DraggableOverlay } from "./DraggableOverlay";
 import { ExportButtons } from "./ExportButtons";
 import { ConnectedParamsPanel } from "./ParamsPanel";
 import { ScriptPanel } from "./ScriptPanel";
@@ -32,9 +33,13 @@ export function RightPanel() {
           </div>
         )}
         {params.length > 0 && (
-          <div className="absolute right-3 top-3 z-10 w-[min(360px,calc(100%-24px))] overflow-hidden rounded-md border bg-background/95 shadow-lg backdrop-blur-sm">
+          <DraggableOverlay
+            storageKey="chamfer.params-panel-pos.v1"
+            defaultPositionClassName="right-3 top-3"
+            className="z-10 w-[min(360px,calc(100%-24px))] overflow-hidden rounded-md border bg-background/95 shadow-lg backdrop-blur-sm"
+          >
             <ConnectedParamsPanel />
-          </div>
+          </DraggableOverlay>
         )}
       </div>
       <ExportButtons />
