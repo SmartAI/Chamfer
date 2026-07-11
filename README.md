@@ -24,6 +24,10 @@ Describe the part you want in plain words, or show it a photo, and it builds a r
 Fine-tune dimensions with live sliders, then export STEP, STL, or 3MF for 3D printing and manufacturing.
 Everything stays on your computer.
 
+**The finished part, live in the viewer:**
+
+![A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer](docs/media/plane-rotating.gif)
+
 **Text to CAD:**
 
 [![Watch the Chamfer demo](https://img.youtube.com/vi/QUC5HnAoHCI/maxresdefault.jpg)](https://youtu.be/QUC5HnAoHCI)
@@ -31,10 +35,6 @@ Everything stays on your computer.
 **Image to 3D, from a single 2D picture:**
 
 [![Watch Chamfer build a part from a 2D image](https://img.youtube.com/vi/n72PvB1WUfw/maxresdefault.jpg)](https://youtu.be/n72PvB1WUfw)
-
-**The finished part, live in the viewer:**
-
-![A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer](docs/media/plane-rotating.gif)
 
 ## Features
 
