@@ -7,6 +7,7 @@ import { ErrorBanner } from "./ErrorBanner";
 import { PresetPrompts } from "./PresetPrompts";
 import { VerificationChip } from "./VerificationChip";
 import { latestGateSummary } from "@/agent/gateSummary";
+import { SELF_CHECK_MARKER } from "@/agent/session";
 import { useChatState } from "@/state/chatState";
 
 const SETTINGS_HINT = "Configure a model and API key in Settings to start chatting.";
@@ -32,14 +33,18 @@ function lastUserMessageText(messages: unknown[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as { role?: string; content?: unknown };
     if (message?.role !== "user") continue;
-    if (typeof message.content === "string") return message.content;
-    if (Array.isArray(message.content)) {
+    let text: string | undefined;
+    if (typeof message.content === "string") text = message.content;
+    else if (Array.isArray(message.content)) {
       const textBlock = message.content.find(
         (block: { type?: string }) => block?.type === "text",
       ) as { text?: string } | undefined;
-      return textBlock?.text;
+      text = textBlock?.text;
     }
-    return undefined;
+    // Injected self-check nudges are user-role messages but not the user's prompt;
+    // retrying one would just re-ask the agent to checklist itself.
+    if (text?.startsWith(SELF_CHECK_MARKER)) continue;
+    return text;
   }
   return undefined;
 }
@@ -257,6 +262,21 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
           <span>
             CAD runs {stats.cadRunsThisTurn} / {maxCadRuns}
           </span>
+          {sessionState.notice?.kind === "retrying" && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-testid="retry-notice" className="text-amber-600 dark:text-amber-400">
+                rate-limited, retrying in {sessionState.notice.delaySeconds}s (attempt{" "}
+                {sessionState.notice.attempt} of {sessionState.notice.maxAttempts})
+              </span>
+            </>
+          )}
+          {sessionState.notice?.kind === "compacting" && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span data-testid="compacting-notice">compacting context…</span>
+            </>
+          )}
         </div>
       )}
       <Composer

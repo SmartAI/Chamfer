@@ -54,6 +54,20 @@ export function fakeLlm(): LlmStreamer {
         yield { type: "done", reason: "stop", message: partial };
         return;
       }
+      // The self-check nudge the session injects after a gate pass arrives as a
+      // trailing user message; answer it with a completed checklist instead of
+      // falling through to the tool-call branch (which would start a second,
+      // duplicate CAD run and hang the e2e flow).
+      if (JSON.stringify(messages.at(-1)).includes("[Chamfer self-check]")) {
+        const text = "Checked the request: single box, all dimensions satisfied. Nothing missing.";
+        const partial = message([{ type: "text", text }], "stop");
+        yield { type: "start", partial };
+        yield { type: "text_start", contentIndex: 0, partial };
+        yield { type: "text_delta", contentIndex: 0, delta: text, partial };
+        yield { type: "text_end", contentIndex: 0, content: text, partial };
+        yield { type: "done", reason: "stop", message: partial };
+        return;
+      }
       // The gate-fail scenario (triggered by "gate-fail" anywhere in the
       // transcript) emits a script whose EXPECT bbox is deliberately wrong,
       // so e2e can exercise a failing verify gate end to end.

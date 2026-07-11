@@ -19,3 +19,4 @@ docs/internal/
 
 # Local agent/session artifacts (launch configs, worktrees)
 .claude/
+/.playwright-mcp
