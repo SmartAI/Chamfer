@@ -10,8 +10,9 @@ import {
   PerspectiveCamera,
   useBounds,
 } from "@react-three/drei";
-import { Box, Focus, Scan } from "lucide-react";
-import * as THREE from "three";
+import { Box, Focus, Grid3x3, Scan } from "lucide-react";
+import type * as THREE from "three";
+import { technicalEdges } from "./meshToGeometry";
 import { cn } from "@/lib/utils";
 
 interface ViewerProps {
@@ -22,7 +23,7 @@ type Projection = "orthographic" | "perspective";
 
 /** Technical-edge overlay: a line-segment rendering of the geometry's sharp edges. */
 function EdgeOverlay({ geometry }: { geometry: THREE.BufferGeometry }) {
-  const edges = useMemo(() => new THREE.EdgesGeometry(geometry), [geometry]);
+  const edges = useMemo(() => technicalEdges(geometry), [geometry]);
 
   useEffect(() => () => edges.dispose(), [edges]);
 
@@ -55,10 +56,12 @@ function Model({
   geometry,
   fitRequest,
   projection,
+  showEdges,
 }: {
   geometry: THREE.BufferGeometry;
   fitRequest: number;
   projection: Projection;
+  showEdges: boolean;
 }) {
   return (
     <Bounds margin={1.5} observe>
@@ -66,7 +69,7 @@ function Model({
         <mesh geometry={geometry} castShadow receiveShadow>
           <meshStandardMaterial color="#8b9bad" metalness={0.08} roughness={0.68} />
         </mesh>
-        <EdgeOverlay geometry={geometry} />
+        {showEdges && <EdgeOverlay geometry={geometry} />}
       </group>
       <FitModel geometry={geometry} request={fitRequest} projection={projection} />
     </Bounds>
@@ -103,6 +106,7 @@ function ProjectionButton({
 
 export function Viewer({ geometry }: ViewerProps) {
   const [projection, setProjection] = useState<Projection>("orthographic");
+  const [showEdges, setShowEdges] = useState(true);
   const [fitRequest, setFitRequest] = useState(0);
 
   function selectProjection(next: Projection) {
@@ -115,6 +119,7 @@ export function Viewer({ geometry }: ViewerProps) {
       data-testid="viewer"
       data-has-geometry={geometry !== null}
       data-projection={projection}
+      data-edges={showEdges}
       className="relative h-full w-full overflow-hidden bg-[#f4f5f7]"
     >
       <Canvas shadows dpr={[1, 2]}>
@@ -136,7 +141,9 @@ export function Viewer({ geometry }: ViewerProps) {
           fadeDistance={800}
           fadeStrength={1.5}
         />
-        {geometry && <Model geometry={geometry} fitRequest={fitRequest} projection={projection} />}
+        {geometry && (
+          <Model geometry={geometry} fitRequest={fitRequest} projection={projection} showEdges={showEdges} />
+        )}
         <OrbitControls
           makeDefault
           enableDamping
@@ -176,6 +183,14 @@ export function Viewer({ geometry }: ViewerProps) {
           onClick={() => selectProjection("perspective")}
         >
           <Box className="h-4 w-4" />
+        </ProjectionButton>
+        <div className="mx-0.5 h-5 w-px bg-border" />
+        <ProjectionButton
+          active={showEdges}
+          label="Toggle edge lines"
+          onClick={() => setShowEdges((value) => !value)}
+        >
+          <Grid3x3 className="h-4 w-4" />
         </ProjectionButton>
       </div>
     </div>
