@@ -180,6 +180,23 @@ describe("validatePlanSnapshot", () => {
     expect(errors.join("\n")).toMatch(/abandon_reason/);
   });
 
+  it("requires a reason for blocked components and allows them to resume building", () => {
+    const blocked = makePlan();
+    blocked.components[0]!.status = "blocked";
+    expect(validatePlanSnapshot({ next: blocked, previous: undefined, evidence: noEvidence }).join("\n")).toMatch(
+      /blocked_reason/,
+    );
+
+    blocked.components[0]!.blocked_reason = "The requested loft collapses in the geometry kernel.";
+    expect(validatePlanSnapshot({ next: blocked, previous: undefined, evidence: noEvidence })).toEqual([]);
+
+    const resumed = structuredClone(blocked);
+    resumed.components[0]!.status = "building";
+    delete resumed.components[0]!.blocked_reason;
+    expect(validatePlanSnapshot({ next: resumed, previous: blocked, evidence: noEvidence })).toEqual([]);
+    expect(planIncompleteComponents(resumed).map((component) => component.id)).toContain("base");
+  });
+
   it("rejects unknown check kinds", () => {
     const plan = makePlan();
     plan.components[0]!.checks = [
@@ -741,13 +758,14 @@ describe("evidence and plan derivation from the transcript", () => {
     expect(latestPlan([])).toBeUndefined();
   });
 
-  it("planIncompleteComponents excludes done and abandoned", () => {
+  it("planIncompleteComponents excludes done, abandoned, and blocked", () => {
     const plan = makePlan({
       components: [
         { id: "a1", description: "a", status: "done" },
         { id: "a2", description: "b", status: "building" },
         { id: "a3", description: "c", status: "abandoned", abandon_reason: "gone" },
         { id: "a4", description: "d", status: "todo" },
+        { id: "a5", description: "e", status: "blocked", blocked_reason: "kernel limitation" },
       ],
     });
     expect(planIncompleteComponents(plan).map((c) => c.id)).toEqual(["a2", "a4"]);

@@ -9,6 +9,12 @@ const plan: Plan = {
     { id: "base", description: "housing base", status: "done" },
     { id: "lid", description: "flat lid", status: "building" },
     { id: "rib", description: "stiffening rib", status: "abandoned", abandon_reason: "user removed it" },
+    {
+      id: "boss",
+      description: "internal mounting boss",
+      status: "blocked",
+      blocked_reason: "The required loft repeatedly collapses in the geometry kernel.",
+    },
   ],
   interfaces: [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
   spec_sheet: [
@@ -30,7 +36,7 @@ const plan: Plan = {
 describe("PlanCard", () => {
   it("collapsed: shows progress over non-abandoned components and the goal", () => {
     render(<PlanCard plan={plan} />);
-    expect(screen.getByTestId("plan-progress").textContent).toBe("1/2 components");
+    expect(screen.getByTestId("plan-progress").textContent).toBe("1/3 components");
     expect(screen.getByTestId("plan-card").textContent).toContain("two-part gearbox housing");
     expect(screen.queryAllByTestId("plan-component")).toHaveLength(0);
   });
@@ -40,12 +46,15 @@ describe("PlanCard", () => {
     fireEvent.click(screen.getByTestId("plan-card-toggle"));
 
     const components = screen.getAllByTestId("plan-component");
-    expect(components).toHaveLength(3);
-    expect(components.map((c) => c.dataset.status)).toEqual(["done", "building", "abandoned"]);
+    expect(components).toHaveLength(4);
+    expect(components.map((c) => c.dataset.status)).toEqual(["done", "building", "abandoned", "blocked"]);
     expect(screen.getByTestId("plan-abandon-reason").textContent).toContain("user removed it");
     const iface = screen.getByTestId("plan-interface");
     expect(iface.textContent).toContain("base·lid");
     expect(iface.textContent).toContain("≤0mm");
+    const blockedReason = screen.getByTestId("plan-blocked-reason");
+    expect(blockedReason.textContent).toContain("required loft repeatedly collapses");
+    expect(blockedReason.className).toContain("text-red-700");
   });
 
   it("expanded: links spec rows to component checks by id and distinguishes unverifiable rows", () => {

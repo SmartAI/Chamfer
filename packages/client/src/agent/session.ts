@@ -124,7 +124,7 @@ export const IMAGE_PLAN_GATE_ERROR =
 
 export function buildPlanNudgePrompt(incomplete: readonly { id: string; status: string }[]): string {
   const list = incomplete.map((c) => `"${c.id}" (${c.status})`).join(", ");
-  return `${PLAN_NUDGE_MARKER} The plan still has unfinished components: ${list}. A component only counts as done after a gate-passed run declares it via COMPONENT and passes its planned checks, and update_plan records it. Continue with the next unfinished component now, or - only if the request genuinely changed - revise the plan with update_plan and state why. Do not stop while the plan has unfinished components and budget remains.`;
+  return `${PLAN_NUDGE_MARKER} The plan still has unfinished components: ${list}. A component only counts as done after a gate-passed run declares it via COMPONENT and passes its planned checks, and update_plan records it. For each unfinished component, either continue building it now, or mark it blocked with a non-empty blocked_reason that clearly states the genuine limitation. Weakening checks to force closure is never acceptable. Do not stop while the plan has unfinished components and budget remains.`;
 }
 const persistenceIds = new WeakMap<object, string>();
 
