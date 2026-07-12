@@ -86,10 +86,11 @@ export interface CreateSessionOptions {
   __retryOptions?: Pick<StreamRetryOptions, "sleep" | "maxAttempts" | "baseDelayMs" | "maxDelayMs">;
 }
 
-function buildStreamFn(): StreamFn {
+function buildStreamFn(conversationId: string): StreamFn {
   return (model, context, options) =>
     streamProxy(model, context, {
       ...options,
+      sessionId: conversationId,
       authToken: PROXY_AUTH_TOKEN,
       proxyUrl: window.location.origin,
     });
@@ -175,7 +176,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
 
   // Pre-content 429/529 failures are retried inside the stream function, invisibly to
   // the agent loop; the notice keeps the user informed while the session waits.
-  const streamFn = withStreamRetry(opts.__streamFn ?? buildStreamFn(), {
+  const streamFn = withStreamRetry(opts.__streamFn ?? buildStreamFn(opts.conversationId), {
     ...opts.__retryOptions,
     onWait: ({ attempt, maxAttempts, delayMs }) => {
       notice = { kind: "retrying", attempt, maxAttempts, delaySeconds: Math.ceil(delayMs / 1000) };

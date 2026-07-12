@@ -1,6 +1,6 @@
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
-import { startObservation } from "@langfuse/tracing";
+import { propagateAttributes, startObservation } from "@langfuse/tracing";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { LlmStreamer } from "./llm";
 
@@ -65,15 +65,20 @@ export function observeLlm(llm: LlmStreamer, name: string): LlmStreamer {
   return {
     async *stream(model, context, options) {
       const provider = stringField(model, "provider");
-      const generation = startObservation(
-        name,
-        {
-          model: stringField(model, "id"),
-          input: context,
-          ...(provider ? { metadata: { provider } } : {}),
-        },
-        { asType: "generation" },
-      );
+      const sessionId = langfuseSessionId(options.sessionId);
+      const createGeneration = () =>
+        startObservation(
+          name,
+          {
+            model: stringField(model, "id"),
+            input: context,
+            ...(provider ? { metadata: { provider } } : {}),
+          },
+          { asType: "generation" },
+        );
+      const generation = sessionId
+        ? propagateAttributes({ sessionId }, createGeneration)
+        : createGeneration();
       try {
         for await (const event of llm.stream(model, context, options)) {
           if (event.type === "done") {
@@ -98,6 +103,12 @@ export function observeLlm(llm: LlmStreamer, name: string): LlmStreamer {
       }
     },
   };
+}
+
+/** Langfuse accepts US-ASCII session IDs shorter than 200 characters. */
+export function langfuseSessionId(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length >= 200) return undefined;
+  return /^[\x20-\x7E]+$/.test(value) ? value : undefined;
 }
 
 function stringField(value: unknown, key: string): string | undefined {

@@ -63,7 +63,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer): Hono {
     const { requestModel, apiKey, env } = resolveProviderConfig(settings, model);
     let title: string;
     try {
-      title = await generateTitleText(llm, requestModel, transcript, { apiKey, env });
+      title = await generateTitleText(llm, requestModel, transcript, { apiKey, env, sessionId: id });
     } catch (err) {
       // Only the error's own message is forwarded, mirroring /api/stream: no
       // options/env, so key material can't leak into the response body.
