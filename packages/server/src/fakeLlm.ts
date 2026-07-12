@@ -264,7 +264,18 @@ function* imagePlanGateStep(transcript: string, lastMessage: string): Generator<
   if (plans === 2) {
     yield* streamToolCall("image-plan-done", "update_plan", {
       ...IMAGE_PLAN,
-      components: IMAGE_PLAN.components.map((component) => ({ ...component, status: "done" })),
+      components: IMAGE_PLAN.components.map((component) => ({
+        ...component,
+        status: "done",
+        form_review: {
+          evidence_id: "image-plan-run-valid",
+          views: ["isometric", "front", "back", "left", "right", "top", "bottom"].map((view) => ({
+            view,
+            verdict: "match",
+            note: `${view} view matches the dimensioned cube drawing.`,
+          })),
+        },
+      })),
     });
     return;
   }
