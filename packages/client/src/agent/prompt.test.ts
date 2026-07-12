@@ -30,9 +30,12 @@ describe("systemPrompt", () => {
   it("specifies the agent-authored checks block and its full vocabulary", () => {
     expect(systemPrompt).toContain("# --- checks ---");
     expect(systemPrompt).toContain("CHECKS = [");
-    for (const kind of ["hole_through", "hole_blind", "clearance", "bbox", "volume", "count_faces", "count_edges", "symmetric"]) {
+    for (const kind of ["hole_through", "hole_blind", "hole_internal", "clearance", "bbox", "volume", "wall_thickness", "count_faces", "count_edges", "symmetric"]) {
       expect(systemPrompt).toContain(kind);
     }
+    expect(systemPrompt).toContain("at_mm [x, y, z]");
+    expect(systemPrompt).toContain("symmetric");
+    expect(systemPrompt).toContain("optional target (child label)");
     expect(systemPrompt).toContain("never weaken or delete a check to make the gate pass");
   });
 

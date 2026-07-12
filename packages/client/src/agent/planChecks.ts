@@ -14,6 +14,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       kind: Type.Union([Type.Literal("hole_through"), Type.Literal("hole_blind"), Type.Literal("hole_internal")]),
       diameter: positive,
       count: Type.Integer({ minimum: 0 }),
+      at_mm: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number()])),
       tol: Type.Optional(positive),
       target,
     },
@@ -47,6 +48,14 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
+    {
+      kind: Type.Literal("wall_thickness"),
+      range_mm: Type.Tuple([positive, positive]),
+      target,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { kind: Type.Union([Type.Literal("count_faces"), Type.Literal("count_edges")]), count, target },
     { additionalProperties: false },
   ),
@@ -55,6 +64,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       kind: Type.Literal("symmetric"),
       plane: Type.Union([Type.Literal("XY"), Type.Literal("XZ"), Type.Literal("YZ")]),
       tol_pct: Type.Optional(positive),
+      target,
     },
     { additionalProperties: false },
   ),
@@ -63,15 +73,16 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
 export type PlanCheckEntry = Static<typeof PLAN_CHECK_ENTRY_SCHEMA>;
 
 const CHECK_KEYS: Record<string, { required: string[]; optional: string[] }> = {
-  hole_through: { required: ["diameter", "count"], optional: ["tol", "target"] },
-  hole_blind: { required: ["diameter", "count"], optional: ["tol", "target"] },
-  hole_internal: { required: ["diameter", "count"], optional: ["tol", "target"] },
+  hole_through: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
+  hole_blind: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
+  hole_internal: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
   clearance: { required: ["a", "b", "min_mm"], optional: ["max_mm"] },
   bbox: { required: ["size_mm"], optional: ["target", "tol"] },
   volume: { required: ["range_mm3"], optional: ["target"] },
+  wall_thickness: { required: ["range_mm"], optional: ["target"] },
   count_faces: { required: ["count"], optional: ["target"] },
   count_edges: { required: ["count"], optional: ["target"] },
-  symmetric: { required: ["plane"], optional: ["tol_pct"] },
+  symmetric: { required: ["plane"], optional: ["target", "tol_pct"] },
 };
 
 function isNumber(value: unknown): value is number {
@@ -107,6 +118,7 @@ export function validatePlanCheck(value: unknown): string[] {
   if (kind.startsWith("hole_")) {
     if (!isNumber(check.diameter) || check.diameter <= 0) errors.push("diameter must be a positive number");
     if (!validCount(check.count, false)) errors.push("count must be an integer >= 0");
+    if (check.at_mm !== undefined && (!Array.isArray(check.at_mm) || check.at_mm.length !== 3 || check.at_mm.some((v) => !isNumber(v)))) errors.push("at_mm must be three numbers");
     if (check.tol !== undefined && (!isNumber(check.tol) || check.tol <= 0)) errors.push("tol must be positive");
   } else if (kind === "clearance") {
     if (typeof check.a !== "string" || !check.a || typeof check.b !== "string" || !check.b) errors.push("a and b must be non-empty strings");
@@ -117,6 +129,8 @@ export function validatePlanCheck(value: unknown): string[] {
     if (check.tol !== undefined && (!isNumber(check.tol) || check.tol <= 0)) errors.push("tol must be positive");
   } else if (kind === "volume") {
     if (!Array.isArray(check.range_mm3) || check.range_mm3.length !== 2 || check.range_mm3.some((v) => !isNumber(v)) || (isNumber(check.range_mm3?.[0]) && isNumber(check.range_mm3?.[1]) && check.range_mm3[0] > check.range_mm3[1])) errors.push("range_mm3 must be [min, max] with min <= max");
+  } else if (kind === "wall_thickness") {
+    if (!Array.isArray(check.range_mm) || check.range_mm.length !== 2 || check.range_mm.some((v) => !isNumber(v) || v <= 0) || (isNumber(check.range_mm?.[0]) && isNumber(check.range_mm?.[1]) && check.range_mm[0] > check.range_mm[1])) errors.push("range_mm must be [min, max] with 0 < min <= max");
   } else if (kind === "count_faces" || kind === "count_edges") {
     if (!validCount(check.count, true)) errors.push("count must be an integer >= 0 or [min, max]");
   } else if (kind === "symmetric") {

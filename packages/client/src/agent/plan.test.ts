@@ -110,6 +110,30 @@ describe("validatePlanSnapshot", () => {
     expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
   });
 
+  it("accepts wall thickness, anchored holes, and targeted symmetry checks", () => {
+    const plan = makePlan();
+    const checks: PlanCheckEntry[] = [
+      volumeCheck("base"),
+      { kind: "wall_thickness", range_mm: [3.4, 3.6], target: "base" },
+      { kind: "hole_through", diameter: 6.5, count: 1, at_mm: [30, 15, 0], tol: 0.25, target: "base" },
+      { kind: "symmetric", plane: "YZ", target: "base" },
+    ];
+    plan.components[0]!.checks = checks;
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("rejects malformed wall thickness and hole anchor fields", () => {
+    const plan = makePlan();
+    plan.components[0]!.checks = [
+      volumeCheck("base"),
+      { kind: "wall_thickness", range_mm: [4, 3], target: "base" },
+      { kind: "hole_blind", diameter: 5, count: 1, at_mm: [1, 2], target: "base" },
+    ] as unknown as PlanCheckEntry[];
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence }).join("\n");
+    expect(errors).toMatch(/range_mm must be \[min, max\] with 0 < min <= max/);
+    expect(errors).toMatch(/at_mm must be three numbers/);
+  });
+
   it("requires a targeted, bounded volume check on every buildable component", () => {
     const plan = makePlan();
     plan.components[0]!.checks = [];

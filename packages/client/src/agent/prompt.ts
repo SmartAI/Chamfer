@@ -55,12 +55,13 @@ CHECKS = [
 # --- end checks ---
 
 CHECKS must be one literal list of dicts. Available kinds:
-- hole_through / hole_blind / hole_internal: diameter, count, optional tol (default 0.5), optional target (child label) — counts detected cylindrical bores at that diameter. With target the census runs on that child alone, so a bore occupied or capped by a neighbouring part still classifies by the component's own geometry; hole_internal counts bores buried inside material at both ends.
+- hole_through / hole_blind / hole_internal: diameter, count, optional at_mm [x, y, z], optional tol (default 0.5), optional target (child label) - counts detected cylindrical bores at that diameter. With at_mm, only bores whose axis center is within tol of that anchor match. With target the census runs on that child alone, so a bore occupied or capped by a neighbouring part still classifies by the component's own geometry; hole_internal counts bores buried inside material at both ends.
 - clearance: a, b (child labels), min_mm, optional max_mm — gap between two children; interpenetration always fails; max_mm 0 asserts touching, [min_mm, max_mm] asserts a controlled fit.
 - bbox: size_mm [x, y, z], optional target (child label), optional tol — sorted comparison like EXPECT.
 - volume: range_mm3 [min, max], optional target.
+- wall_thickness: range_mm [min, max], optional target (child label) - samples faces and measures inward to the first material exit; every measured thickness must be in range.
 - count_faces / count_edges: count (exact int or [min, max]), optional target.
-- symmetric: plane "XY", "XZ", or "YZ", optional tol_pct (default 1.0).
+- symmetric: plane "XY", "XZ", or "YZ", optional tol_pct (default 1.0), optional target (child label).
 
 Before writing any geometry, enumerate every feature the user asked for (each hole pattern, pocket, boss, slot, fit, symmetry) and encode each as a CHECKS entry; the gate evaluates them all on every run.
 Give Compound children stable labels (part.label = "lid") so clearance, bbox, and volume checks can reference them.

@@ -266,15 +266,16 @@ def parse_expect(source: str) -> dict:
 
 # Each kind maps to {required keys, optional keys}; "kind" itself is implicit.
 _CHECK_KEYS = {
-    "hole_through": ({"diameter", "count"}, {"tol", "target"}),
-    "hole_blind": ({"diameter", "count"}, {"tol", "target"}),
-    "hole_internal": ({"diameter", "count"}, {"tol", "target"}),
+    "hole_through": ({"diameter", "count"}, {"at_mm", "tol", "target"}),
+    "hole_blind": ({"diameter", "count"}, {"at_mm", "tol", "target"}),
+    "hole_internal": ({"diameter", "count"}, {"at_mm", "tol", "target"}),
     "clearance": ({"a", "b", "min_mm"}, {"max_mm"}),
     "bbox": ({"size_mm"}, {"target", "tol"}),
     "volume": ({"range_mm3"}, {"target"}),
+    "wall_thickness": ({"range_mm"}, {"target"}),
     "count_faces": ({"count"}, {"target"}),
     "count_edges": ({"count"}, {"target"}),
-    "symmetric": ({"plane"}, {"tol_pct"}),
+    "symmetric": ({"plane"}, {"target", "tol_pct"}),
 }
 _HOLE_CHECK_KINDS = {"hole_through": "through", "hole_blind": "blind", "hole_internal": "internal"}
 _SYMMETRY_PLANES = ("XY", "XZ", "YZ")
@@ -330,6 +331,15 @@ def _validate_check(index, raw):
             count=_validate_count(index, raw["count"], allow_range=False),
             target=_target(index, raw),
         )
+        if "at_mm" in raw:
+            at = raw["at_mm"]
+            if (
+                not isinstance(at, (list, tuple))
+                or len(at) != 3
+                or not all(_is_number(v) for v in at)
+            ):
+                raise _check_error(index, "at_mm must be three numbers.")
+            spec["at_mm"] = [float(v) for v in at]
     elif kind == "clearance":
         for key in ("a", "b"):
             if not isinstance(raw[key], str) or not raw[key]:
@@ -365,6 +375,16 @@ def _validate_check(index, raw):
         ):
             raise _check_error(index, "range_mm3 must be [min, max] with min <= max.")
         spec.update(range_mm3=[float(rng[0]), float(rng[1])], target=_target(index, raw))
+    elif kind == "wall_thickness":
+        rng = raw["range_mm"]
+        if (
+            not isinstance(rng, (list, tuple))
+            or len(rng) != 2
+            or not all(_is_number(v) and v > 0 for v in rng)
+            or rng[0] > rng[1]
+        ):
+            raise _check_error(index, "range_mm must be [min, max] with 0 < min <= max.")
+        spec.update(range_mm=[float(rng[0]), float(rng[1])], target=_target(index, raw))
     elif kind in ("count_faces", "count_edges"):
         spec.update(
             count=_validate_count(index, raw["count"], allow_range=True),
@@ -377,7 +397,7 @@ def _validate_check(index, raw):
         tol_pct = raw.get("tol_pct", DEFAULT_SYMMETRY_TOL_PCT)
         if not _is_number(tol_pct) or tol_pct <= 0:
             raise _check_error(index, "tol_pct must be a positive number.")
-        spec.update(plane=plane, tol_pct=float(tol_pct))
+        spec.update(plane=plane, tol_pct=float(tol_pct), target=_target(index, raw))
     return spec
 
 
@@ -686,6 +706,14 @@ def _eval_hole_check(spec, holes, label):
     wanted_kind = _HOLE_CHECK_KINDS[spec["kind"]]
     d, tol = spec["diameter"], spec["tol"]
     matching = [h for h in holes if abs(h["diameterMm"] - d) <= tol]
+    at = spec.get("at_mm")
+    if at is not None:
+        matching = [
+            h
+            for h in matching
+            if sum((found - wanted) ** 2 for found, wanted in zip(h["centerMm"], at)) ** 0.5
+            <= tol
+        ]
     found = sum(1 for h in matching if h["kind"] == wanted_kind)
     others = {
         kind: sum(1 for h in matching if h["kind"] == kind)
@@ -694,8 +722,10 @@ def _eval_hole_check(spec, holes, label):
     }
     other_text = ", ".join(f"{n} {kind}" for kind, n in others.items() if n)
     scope = f" in {label}" if label else ""
+    anchor = f" at {[round(v, 6) for v in at]}" if at is not None else ""
     detail = (
-        f"{wanted_kind} holes{scope} d={d:g}±{tol:g} mm: expected {spec['count']}, found {found}"
+        f"{wanted_kind} holes{scope}{anchor} d={d:g}±{tol:g} mm: "
+        f"expected {spec['count']}, found {found}"
         + (f" (also {other_text} at this diameter)" if other_text else "")
     )
     return found == spec["count"], detail
@@ -734,6 +764,34 @@ def _count_matches(count, found):
     return found == count, str(count)
 
 
+def _wall_thickness_samples(shape):
+    """Cast one inward-normal ray per face and return first-exit distances."""
+    from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
+    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
+
+    bb = shape.bounding_box()
+    ray_length = 2 * (bb.size.X ** 2 + bb.size.Y ** 2 + bb.size.Z ** 2) ** 0.5
+    if ray_length <= 0:
+        return []
+
+    intersector = IntCurvesFace_ShapeIntersector()
+    intersector.Load(shape.wrapped, 1e-7)
+    samples = []
+    for face in shape.faces():
+        point = face.center()
+        inward = -face.normal_at(point)
+        line = gp_Lin(gp_Pnt(*point), gp_Dir(*inward))
+        intersector.Perform(line, 1e-6, ray_length)
+        distances = [
+            intersector.WParameter(i)
+            for i in range(1, intersector.NbPnt() + 1)
+            if intersector.WParameter(i) > 1e-6
+        ]
+        if distances:
+            samples.append(min(distances))
+    return samples
+
+
 def _eval_check(spec, shape, holes):
     """(passed, detail) for one normalized check spec. May raise; the caller
     converts exceptions into a failed check."""
@@ -756,13 +814,17 @@ def _eval_check(spec, shape, holes):
         from build123d import Plane
 
         plane = getattr(Plane, spec["plane"])
+        target_label = spec.get("target")
+        target, err = _resolve_target(shape, target_label)
+        if err:
+            return False, f"symmetric on {target_label}: {err}"
         # Cutting a multi-child Compound against its mirror hands OCC several
         # exactly-coincident tools at once; its same-domain detection handles
         # that unreliably and children can come back uncut, reporting >100%
         # "asymmetric" volume on symmetric assemblies. Fuse to a single body
         # first so the mirror-difference is one well-posed boolean.
-        solids = shape.solids()
-        body = solids[0].fuse(*solids[1:]) if solids else shape
+        solids = target.solids()
+        body = solids[0].fuse(*solids[1:]) if solids else target
         mirrored = body.mirror(plane)
         volume = float(body.volume)
         # Mirroring is an isometry, so both difference directions enclose the
@@ -770,8 +832,9 @@ def _eval_check(spec, shape, holes):
         # reported ratio within 0-100%).
         asymmetry = float((body - mirrored).volume)
         ratio_pct = 100 * asymmetry / volume if volume > 0 else float("inf")
+        subject = f"symmetry of {target_label} about" if target_label else "symmetry about"
         return ratio_pct <= spec["tol_pct"], (
-            f"symmetry about {spec['plane']}: asymmetric volume {ratio_pct:.3g}% "
+            f"{subject} {spec['plane']}: asymmetric volume {ratio_pct:.3g}% "
             f"of total, allowed <= {spec['tol_pct']:g}%"
         )
 
@@ -794,6 +857,16 @@ def _eval_check(spec, shape, holes):
         volume = float(target.volume)
         return lo <= volume <= hi, (
             f"volume of {label}: expected [{lo:.6g}, {hi:.6g}] mm^3, measured {volume:.6g}"
+        )
+    if kind == "wall_thickness":
+        samples = _wall_thickness_samples(target)
+        if not samples:
+            return False, f"wall_thickness on {label}: no measurable face samples"
+        measured_min, measured_max = min(samples), max(samples)
+        lo, hi = spec["range_mm"]
+        return lo <= measured_min and measured_max <= hi, (
+            f"wall_thickness on {label}: expected [{lo:g}, {hi:g}] mm, measured "
+            f"[{measured_min:.6g}, {measured_max:.6g}] mm from {len(samples)} faces"
         )
     if kind in ("count_faces", "count_edges"):
         found = len(target.faces() if kind == "count_faces" else target.edges())
