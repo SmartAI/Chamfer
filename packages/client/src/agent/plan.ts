@@ -111,8 +111,14 @@ interface ToolResultLike {
   isError?: unknown;
   details?: {
     plan?: unknown;
-    gate?: { status?: unknown };
-    measurements?: { component?: unknown; checks?: unknown };
+    gate?: { status?: unknown; checks?: Array<{ name?: unknown; detail?: unknown }> };
+    measurements?: {
+      component?: unknown;
+      checks?: unknown;
+      volumeMm3?: unknown;
+      topology?: { faces?: unknown; edges?: unknown };
+      children?: Array<{ label?: unknown; volumeMm3?: unknown }>;
+    };
   };
 }
 
@@ -216,6 +222,49 @@ export interface ComponentEvidence {
   checks: Set<string>;
   /** Tool-call id of this newest gate-passed run. */
   evidenceId?: string;
+  /** Newest successful CAD execution measurements, retained even when its gate failed. */
+  latestMeasurements?: ComponentMeasurements;
+}
+
+export interface ComponentMeasurements {
+  volumeMm3?: number;
+  wallThicknessMm?: [number, number];
+  faceCount?: number;
+  edgeCount?: number;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function measurementsForComponent(
+  id: string,
+  measurements: NonNullable<ToolResultLike["details"]>["measurements"],
+  gate: NonNullable<ToolResultLike["details"]>["gate"],
+): ComponentMeasurements {
+  const child = measurements?.children?.find((candidate) => candidate.label === id);
+  const declared = runComponentIds(measurements);
+  const isWholeResult = declared.length === 1 && declared[0] === id;
+  const latest: ComponentMeasurements = {};
+  const volume = finiteNumber(child?.volumeMm3) ?? (isWholeResult ? finiteNumber(measurements?.volumeMm3) : undefined);
+  if (volume !== undefined) latest.volumeMm3 = volume;
+  if (isWholeResult) {
+    const faces = finiteNumber(measurements?.topology?.faces);
+    const edges = finiteNumber(measurements?.topology?.edges);
+    if (faces !== undefined) latest.faceCount = faces;
+    if (edges !== undefined) latest.edgeCount = edges;
+  }
+  const rawChecks = Array.isArray(measurements?.checks) ? measurements.checks : [];
+  for (const [index, raw] of rawChecks.entries()) {
+    const check = raw as { kind?: unknown; target?: unknown };
+    if (check.kind !== "wall_thickness" || (check.target !== undefined && check.target !== id)) continue;
+    const result = gate?.checks?.find((candidate) => candidate.name === `check:wall_thickness[${index}]`);
+    const match = typeof result?.detail === "string"
+      ? /measured \[(-?[\d.eE+]+), (-?[\d.eE+]+)\] mm/.exec(result.detail)
+      : undefined;
+    if (match) latest.wallThicknessMm = [Number(match[1]), Number(match[2])];
+  }
+  return latest;
 }
 
 /**
@@ -240,6 +289,20 @@ export function collectComponentEvidence(messages: readonly unknown[]): Map<stri
     for (const id of ids) evidence.set(id, { checks, evidenceId });
   }
   return evidence;
+}
+
+/** Newest measurements per declared component, including failed verification-gate runs. */
+export function collectComponentMeasurements(messages: readonly unknown[]): Map<string, ComponentMeasurements> {
+  const latest = new Map<string, ComponentMeasurements>();
+  for (const message of messages) {
+    const m = message as ToolResultLike;
+    if (m?.role !== "toolResult" || m.toolName !== "run_build123d" || m.isError) continue;
+    const measurements = m.details?.measurements;
+    for (const id of runComponentIds(measurements).filter((candidate) => candidate !== PROBE_COMPONENT)) {
+      latest.set(id, measurementsForComponent(id, measurements, m.details?.gate));
+    }
+  }
+  return latest;
 }
 
 export interface ValidatePlanArgs {
@@ -289,7 +352,7 @@ function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): 
     if (newTolerance > oldTolerance) reasons.push(`${toleranceKey} raised from ${oldTolerance} to ${newTolerance}`);
   }
 
-  const freelyComparable = new Set(["id", "revision_reason", "removed", "kind", "target", "range_mm3", "range_mm", "tol", "tol_pct"]);
+  const freelyComparable = new Set(["id", "revision_reason", "removed", "refit_to_measurement", "kind", "target", "range_mm3", "range_mm", "tol", "tol_pct"]);
   for (const key of new Set([...Object.keys(prior), ...Object.keys(current)])) {
     if (freelyComparable.has(key)) continue;
     let before = prior[key];
@@ -301,6 +364,61 @@ function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): 
     if (!sameValue(after, before)) reasons.push(`${key} changed from ${JSON.stringify(prior[key])} to ${JSON.stringify(current[key])}`);
   }
   return reasons;
+}
+
+function rangeAndMeasurement(
+  check: PlanCheckEntry,
+  measurements: ComponentMeasurements | undefined,
+): { interval: [number, number]; measured: number[] } | undefined {
+  if (!measurements) return undefined;
+  if (check.kind === "volume" && measurements.volumeMm3 !== undefined) {
+    return { interval: check.range_mm3 as [number, number], measured: [measurements.volumeMm3] };
+  }
+  if (check.kind === "wall_thickness" && measurements.wallThicknessMm) {
+    return { interval: check.range_mm as [number, number], measured: measurements.wallThicknessMm };
+  }
+  if (check.kind === "count_faces" && Array.isArray(check.count) && measurements.faceCount !== undefined) {
+    return { interval: check.count as [number, number], measured: [measurements.faceCount] };
+  }
+  if (check.kind === "count_edges" && Array.isArray(check.count) && measurements.edgeCount !== undefined) {
+    return { interval: check.count as [number, number], measured: [measurements.edgeCount] };
+  }
+  return undefined;
+}
+
+function containsEvery(interval: [number, number], measured: number[]): boolean {
+  return measured.every((value) => interval[0] <= value && value <= interval[1]);
+}
+
+/** Adds deterministic audit flags without mutating the submitted snapshot. */
+export function applyPlanSnapshotEvidence(
+  next: Plan,
+  previous: Plan | undefined,
+  evidence: Map<string, ComponentEvidence>,
+): Plan {
+  const annotated = structuredClone(next);
+  if (!previous) return annotated;
+  for (const component of annotated.components) {
+    const oldComponent = previous.components.find((candidate) => candidate.id === component.id);
+    if (!oldComponent) continue;
+    const oldById = new Map((oldComponent.checks ?? []).map((check) => [check.id, check]));
+    for (const check of component.checks ?? []) {
+      const oldCheck = oldById.get(check.id);
+      if (!oldCheck) continue;
+      if (oldCheck.refit_to_measurement === true) {
+        check.refit_to_measurement = true;
+        continue;
+      }
+      const latest = evidence.get(component.id)?.latestMeasurements;
+      const current = rangeAndMeasurement(check, latest);
+      const prior = rangeAndMeasurement(oldCheck, latest);
+      if (!current || !prior || sameValue(current.interval, prior.interval)) continue;
+      if (containsEvery(current.interval, current.measured) && !containsEvery(prior.interval, prior.measured)) {
+        check.refit_to_measurement = true;
+      }
+    }
+  }
+  return annotated;
 }
 
 function pairedPreviousChecks(nextChecks: PlanCheckEntry[], previousChecks: PlanCheckEntry[]): Map<PlanCheckEntry, PlanCheckEntry> {
@@ -354,6 +472,9 @@ function validateCheckMonotonicity(next: Plan, previous: Plan): string[] {
       }
       if (oldCheck.removed !== true && oldCheck.revision_reason?.trim() && !newCheck.revision_reason?.trim()) {
         errors.push(`component "${component.id}": check "${id}": revision_reason cannot be dropped once recorded`);
+      }
+      if (oldCheck.refit_to_measurement === true && newCheck.refit_to_measurement !== true) {
+        errors.push(`component "${component.id}": check "${id}": refit_to_measurement cannot be dropped once recorded`);
       }
       const weakenings = checkWeakeningReasons(newCheck, oldCheck);
       if (weakenings.length > 0 && !newCheck.revision_reason?.trim()) {

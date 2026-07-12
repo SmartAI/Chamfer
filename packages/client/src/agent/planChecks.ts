@@ -25,6 +25,11 @@ const removed = Type.Optional(
       "Retires this check from the acceptance criteria while keeping it visible as an audit tombstone. Requires revision_reason; the entry must stay in every later snapshot.",
   }),
 );
+const refitToMeasurement = Type.Optional(
+  Type.Literal(true, {
+    description: "Permanent audit flag set when a revised range newly captures the latest measured value.",
+  }),
+);
 // Fixed-length homogeneous arrays instead of Type.Tuple throughout this file:
 // TypeBox tuples serialize to draft-07 syntax (items: [...] + additionalItems),
 // which the Anthropic API rejects under its JSON Schema draft 2020-12 validation.
@@ -41,6 +46,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Union([Type.Literal("hole_through"), Type.Literal("hole_blind"), Type.Literal("hole_internal")]),
       diameter: positive,
       count: Type.Integer({ minimum: 0 }),
@@ -55,6 +61,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Literal("clearance"),
       a: Type.String({ minLength: 1 }),
       b: Type.String({ minLength: 1 }),
@@ -68,6 +75,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Literal("bbox"),
       size_mm: fixedNumbers(positive, 3),
       tol: Type.Optional(positive),
@@ -80,6 +88,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Literal("volume"),
       range_mm3: fixedNumbers(Type.Number(), 2),
       target,
@@ -91,6 +100,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Literal("wall_thickness"),
       range_mm: fixedNumbers(positive, 2),
       target,
@@ -102,6 +112,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Union([Type.Literal("count_faces"), Type.Literal("count_edges")]),
       count,
       target,
@@ -113,6 +124,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       id: checkId,
       revision_reason: revisionReason,
       removed,
+      refit_to_measurement: refitToMeasurement,
       kind: Type.Literal("symmetric"),
       plane: Type.Union([Type.Literal("XY"), Type.Literal("XZ"), Type.Literal("YZ")]),
       tol_pct: Type.Optional(positive),
@@ -205,7 +217,7 @@ export const CHECK_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
  * Keys that exist only on plan checks (identity and audit metadata); run CHECKS
  * entries never carry them, so they are stripped before any plan-to-run comparison.
  */
-export const PLAN_CHECK_METADATA_KEYS: readonly string[] = ["id", "revision_reason", "removed"];
+export const PLAN_CHECK_METADATA_KEYS: readonly string[] = ["id", "revision_reason", "removed", "refit_to_measurement"];
 
 /**
  * Runtime mirror of the harness CHECKS contract plus the plan-only metadata
@@ -228,6 +240,7 @@ export function validatePlanCheck(value: unknown): string[] {
     errors.push("revision_reason must be a non-empty string when provided");
   }
   if (check.removed !== undefined && check.removed !== true) errors.push("removed must be true when provided");
+  if (check.refit_to_measurement !== undefined && check.refit_to_measurement !== true) errors.push("refit_to_measurement must be true when provided");
   if (check.removed === true && (typeof check.revision_reason !== "string" || check.revision_reason.trim() === "")) {
     errors.push("removed checks require a non-empty revision_reason");
   }

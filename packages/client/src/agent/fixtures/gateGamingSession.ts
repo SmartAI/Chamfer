@@ -138,6 +138,22 @@ export const SEQ80_PLAN: Plan = midSessionPlan([
   { id: "volume", kind: "volume", range_mm3: [220000, 300000], target: "shell" },
 ]);
 
+/** Seq 91: the newest gate measurement before the seq 100 plan revision. */
+export const SEQ91_SHELL_MEASUREMENT = 329246.16526363464;
+
+/** Seq 100: the volume interval moved just far enough to capture seq 91. */
+export const SEQ100_PLAN: Plan = midSessionPlan([
+  { id: "envelope", kind: "bbox", size_mm: [95, 180, 260], tol: 2, target: "shell" },
+  { id: "nozzle", kind: "hole_through", diameter: 8, count: 1, tol: 0.8, target: "shell" },
+  {
+    id: "volume",
+    kind: "volume",
+    range_mm3: [300000, 345000],
+    target: "shell",
+    revision_reason: "The measured shell includes the swept neck and nozzle wall.",
+  },
+]);
+
 /**
  * The seq 5 weakening, translated to id-based refs: the wall_thickness and boss
  * checks were deleted, the volume range moved off the drawing-derived value, and

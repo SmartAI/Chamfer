@@ -6,7 +6,9 @@ import {
   PLAN_INTERFACE_KINDS,
   UPDATE_PLAN_TOOL_NAME,
   acceptedCheckRevisions,
+  applyPlanSnapshotEvidence,
   collectComponentEvidence,
+  collectComponentMeasurements,
   describePlanStatus,
   latestPlan,
   validatePlanSnapshot,
@@ -109,12 +111,18 @@ export function createUpdatePlanTool(deps: {
     parameters,
     execute: async (_toolCallId, args) => {
       const messages = deps.getMessages();
-      const next = args as unknown as Plan;
+      const submitted = args as unknown as Plan;
       const previous = latestPlan(messages);
+      const evidence = collectComponentEvidence(messages);
+      for (const [componentId, latestMeasurements] of collectComponentMeasurements(messages)) {
+        const prior = evidence.get(componentId);
+        evidence.set(componentId, { checks: prior?.checks ?? new Set<string>(), evidenceId: prior?.evidenceId, latestMeasurements });
+      }
+      const next = applyPlanSnapshotEvidence(submitted, previous, evidence);
       const errors = validatePlanSnapshot({
         next,
         previous,
-        evidence: collectComponentEvidence(messages),
+        evidence,
         requireSpecSheet: deps.requireSpecSheet?.() ?? false,
       });
       if (errors.length > 0) {
@@ -124,12 +132,21 @@ export function createUpdatePlanTool(deps: {
       const revisionText = revisions.length === 0
         ? ""
         : `\nCheck revisions recorded and shown to the user:\n${revisions.map((revision) => `- ${revision.componentId}/${revision.checkId}: ${revision.reason}`).join("\n")}`;
+      const refits = next.components.flatMap((component) =>
+        (component.checks ?? [])
+          .filter((check) => check.refit_to_measurement === true && previous?.components
+            .find((candidate) => candidate.id === component.id)?.checks?.find((prior) => prior.id === check.id)?.refit_to_measurement !== true)
+          .map((check) => `${component.id}/${check.id}`),
+      );
+      const refitText = refits.length === 0
+        ? ""
+        : `\nRefit-to-measurement checks shown to the user:\n${refits.map((refit) => `- ${refit}`).join("\n")}`;
       deps.onAccepted?.(next);
       return {
         content: [
           {
             type: "text",
-            text: `Plan accepted: ${describePlanStatus(next)}.${revisionText}\n${JSON.stringify(next)}`,
+            text: `Plan accepted: ${describePlanStatus(next)}.${revisionText}${refitText}\n${JSON.stringify(next)}`,
           },
         ],
         details: { plan: next },

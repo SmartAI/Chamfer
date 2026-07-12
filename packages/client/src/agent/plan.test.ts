@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   collectComponentEvidence,
+  collectComponentMeasurements,
+  applyPlanSnapshotEvidence,
   hasAssemblyEvidence,
   latestPlan,
   parseComponentDeclaration,
@@ -11,7 +13,16 @@ import {
   type PlanCheckEntry,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
-import { SEQ1_PLAN, SEQ5_PLAN, SEQ44_PLAN, SEQ52_PLAN, SEQ74_PLAN, SEQ80_PLAN } from "./fixtures/gateGamingSession";
+import {
+  SEQ1_PLAN,
+  SEQ5_PLAN,
+  SEQ44_PLAN,
+  SEQ52_PLAN,
+  SEQ74_PLAN,
+  SEQ80_PLAN,
+  SEQ91_SHELL_MEASUREMENT,
+  SEQ100_PLAN,
+} from "./fixtures/gateGamingSession";
 
 function volumeCheck(id: string, lo = 5000, hi = 6000): PlanCheckEntry {
   return { id: "volume", kind: "volume", range_mm3: [lo, hi], target: id };
@@ -804,6 +815,54 @@ describe("check monotonicity", () => {
     } as PlanCheckEntry);
     expect(validatePlanSnapshot({ next: reasoned, previous: SEQ74_PLAN, evidence: noEvidence })).toEqual([]);
   });
+
+  it("flags the scrubbed seq 80 to 100 volume refit around the latest failed-gate measurement", () => {
+    const evidence = new Map([
+      ["shell", { checks: new Set<string>(), latestMeasurements: { volumeMm3: SEQ91_SHELL_MEASUREMENT } }],
+    ]);
+    const annotated = applyPlanSnapshotEvidence(SEQ100_PLAN, SEQ80_PLAN, evidence);
+    expect(annotated.components[0]!.checks!.find((check) => check.id === "volume")).toMatchObject({
+      refit_to_measurement: true,
+      revision_reason: "The measured shell includes the swept neck and nozzle wall.",
+    });
+    expect(validatePlanSnapshot({ next: annotated, previous: SEQ80_PLAN, evidence })).toEqual([]);
+  });
+
+  it("flags every range-shaped check only when its revision newly captures the latest measurement", () => {
+    const previous = checkedPlan([
+      baseVolume,
+      { id: "wall", kind: "wall_thickness", range_mm: [2, 3], target: "base" },
+      { id: "faces", kind: "count_faces", count: [10, 20], target: "base" },
+      { id: "edges", kind: "count_edges", count: [20, 30], target: "base" },
+    ]);
+    const next = checkedPlan([
+      { ...baseVolume, range_mm3: [5900, 6500], revision_reason: "Recomputed material volume." },
+      { id: "wall", kind: "wall_thickness", range_mm: [3, 4], target: "base", revision_reason: "Corrected the wall interval." },
+      { id: "faces", kind: "count_faces", count: [20, 30], target: "base", revision_reason: "Included blended faces." },
+      { id: "edges", kind: "count_edges", count: [25, 35], target: "base", revision_reason: "Included seam edges." },
+    ]);
+    const evidence = new Map([
+      ["base", { checks: new Set<string>(), latestMeasurements: { volumeMm3: 6200, wallThicknessMm: [3.2, 3.8] as [number, number], faceCount: 24, edgeCount: 25 } }],
+    ]);
+    const checks = applyPlanSnapshotEvidence(next, previous, evidence).components[0]!.checks!;
+    expect(checks.map((check) => [check.id, check.refit_to_measurement])).toEqual([
+      ["volume", true],
+      ["wall", true],
+      ["faces", true],
+      ["edges", undefined],
+    ]);
+  });
+
+  it("does not flag without a measurement or when the previous interval already contained it, and preserves old flags", () => {
+    const previous = checkedPlan([{ ...baseVolume, refit_to_measurement: true } as PlanCheckEntry]);
+    const revised = checkedPlan([{ ...baseVolume, range_mm3: [4500, 6500], revision_reason: "Re-estimated volume." }]);
+    expect(applyPlanSnapshotEvidence(revised, previous, new Map()).components[0]!.checks![0]).toMatchObject({
+      refit_to_measurement: true,
+    });
+    const unflaggedPrevious = checkedPlan([baseVolume]);
+    const evidence = new Map([["base", { checks: new Set<string>(), latestMeasurements: { volumeMm3: 5500 } }]]);
+    expect(applyPlanSnapshotEvidence(revised, unflaggedPrevious, evidence).components[0]!.checks![0]!.refit_to_measurement).toBeUndefined();
+  });
 });
 
 describe("hasAssemblyEvidence", () => {
@@ -867,6 +926,31 @@ describe("evidence and plan derivation from the transcript", () => {
       },
     ]);
     expect([...evidence.keys()].sort()).toEqual(["base", "lid"]);
+  });
+
+  it("retains the newest measurements from a failed gate separately from completion evidence", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolName: "run_build123d",
+        isError: false,
+        details: {
+          gate: { status: "passed", checks: [] },
+          measurements: { component: "shell", checks: [], volumeMm3: 250000 },
+        },
+      },
+      {
+        role: "toolResult",
+        toolName: "run_build123d",
+        isError: false,
+        details: {
+          gate: { status: "failed", checks: [] },
+          measurements: { component: "shell", checks: [], volumeMm3: SEQ91_SHELL_MEASUREMENT },
+        },
+      },
+    ];
+    expect(collectComponentMeasurements(messages).get("shell")?.volumeMm3).toBe(SEQ91_SHELL_MEASUREMENT);
+    expect(collectComponentEvidence(messages).get("shell")?.checks).toEqual(new Set());
   });
 
   it("latestPlan returns the newest accepted snapshot and skips errored results", () => {
@@ -967,6 +1051,28 @@ describe("createUpdatePlanTool", () => {
     const repeatText = (repeat.content[0] as { text: string }).text;
     expect(repeatText).not.toContain("Check revisions recorded and shown to the user:");
     expect(again).toBeDefined();
+  });
+
+  it("persists a refit flag and names the flagged check in the tool result", async () => {
+    const previous = makePlan();
+    const failedRun = {
+      role: "toolResult",
+      toolName: "run_build123d",
+      isError: false,
+      content: [],
+      details: {
+        gate: { status: "failed", checks: [] },
+        measurements: { component: "base", checks: [], volumeMm3: 6200 },
+      },
+    };
+    const tool = createUpdatePlanTool({ getMessages: () => [planResult(previous), failedRun] });
+    const next = makePlan();
+    next.components[0]!.checks = [
+      { id: "volume", kind: "volume", range_mm3: [5900, 6500], target: "base", revision_reason: "Recomputed the pocket subtraction." },
+    ];
+    const result = await tool.execute("t1", next as never, undefined as never, undefined as never);
+    expect(result.details?.plan.components[0]!.checks![0]).toMatchObject({ refit_to_measurement: true });
+    expect((result.content[0] as { text: string }).text).toContain("Refit-to-measurement checks shown to the user:\n- base/volume");
   });
 
   it("returns a row-level update_plan error for an unmapped spec row", async () => {

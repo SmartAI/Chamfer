@@ -127,6 +127,7 @@ describe("PlanCard", () => {
                   range_mm3: [4500, 6500],
                   target: "base",
                   revision_reason: "Included the drawing's internal rib.",
+                  refit_to_measurement: true,
                 },
                 {
                   id: "holes",
@@ -148,6 +149,7 @@ describe("PlanCard", () => {
     const revisions = screen.getAllByTestId("plan-check-revision");
     expect(revisions).toHaveLength(2);
     expect(revisions[0]?.textContent).toContain("Revised: Included the drawing's internal rib.");
+    expect(revisions[0]?.textContent).toContain("Refit to latest measurement");
     expect(revisions[1]?.textContent).toContain("hole_through (removed)");
     expect(revisions[1]?.textContent).toContain("surface marks");
   });

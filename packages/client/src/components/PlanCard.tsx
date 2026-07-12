@@ -92,6 +92,7 @@ export function PlanCard({ plan }: PlanCardProps) {
                         {check.kind}
                         {check.removed ? " (removed)" : ""}
                         {check.revision_reason ? ` - Revised: ${check.revision_reason}` : ""}
+                        {check.refit_to_measurement ? " - Refit to latest measurement" : ""}
                       </span>
                     );
                   })}
