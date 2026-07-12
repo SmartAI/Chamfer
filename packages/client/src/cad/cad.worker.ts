@@ -1,5 +1,4 @@
 import type { CadBootStatus, CadRequest, CadResponse } from "@chamfer/shared";
-import { BUILD123D_VERSION } from "./versions";
 
 // Pyodide runtime version. Must match a Python ABI that OCP.wasm publishes
 // wheels for (see packages/client/public/py/bootstrap.py header for the
@@ -15,6 +14,9 @@ import { BUILD123D_VERSION } from "./versions";
 // worker and matches OCP.wasm's cp313 emscripten wheels.
 const PYODIDE_VERSION = "0.29.4";
 const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+// Keep this local: the classic worker cannot contain runtime imports in Vite dev mode.
+// This must match BUILD123D_VERSION in versions.ts.
+const BUILD123D_VERSION = "0.11.1";
 const PACKAGE_CACHE_DIR = "/chamfer-cache";
 const PACKAGE_CACHE_FILE = `${PACKAGE_CACHE_DIR}/cad-packages-${PYODIDE_VERSION}-${BUILD123D_VERSION}.zip`;
 
