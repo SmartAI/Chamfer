@@ -30,6 +30,15 @@ describe("skill nudge", () => {
     }
   });
 
+  it("points the repeated session-derived multiple-bodies failure at the disjoint-solids recipe", () => {
+    const failure = "bodies: expected 1, found 3";
+    const messages = [user("add two internal bosses"), runFailure(`- ${failure}`)];
+
+    expect(skillNudgeLine(messages, `Verify gate: FAILED\n- ${failure}`)).toBe(
+      `${SKILL_HINT_PREFIX} load_skill("recover-disjoint-solids") covers this failure pattern.`,
+    );
+  });
+
   it("stays silent on the first matching failure and fires on the second", () => {
     const first = skillNudgeLine([user("make a handle")], SWEEP_ERROR);
     expect(first).toBeUndefined();

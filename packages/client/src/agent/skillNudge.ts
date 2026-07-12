@@ -25,6 +25,9 @@ interface SkillNudgeRule {
 // signatures come first. surgical-edits has no rule - "the edit regressed
 // something" is not detectable from a single failure text.
 export const SKILL_NUDGE_RULES: readonly SkillNudgeRule[] = [
+  { skill: "recover-disjoint-solids", pattern: /bodies:\s*expected\s+1,\s*found\s+[2-9]\d*/i },
+  { skill: "recover-collapsing-lofts", pattern: /(?:loft[^\n]*(?:tessell|BRep|collaps|pinch|twist)|tessell[^\n]*loft)/i },
+  { skill: "recover-coincident-booleans", pattern: /coincident(?:-face)?|zero[- ]thickness/i },
   { skill: "sweep-and-loft", pattern: /\b(sweep|loft)\b/i },
   { skill: "holes-and-threads", pattern: /hole_through|hole_blind|hole_internal|CounterBore|CounterSink|\bHole\b/ },
   { skill: "selectors-and-patterns", pattern: /filter_by|sort_by|group_by|Select\.|GridLocations|PolarLocations|HexLocations|symmetric/ },

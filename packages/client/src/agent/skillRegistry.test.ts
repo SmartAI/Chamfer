@@ -39,6 +39,16 @@ describe("skill registry", () => {
     expect(catalog).toContain('load_skill(name, resource)');
   });
 
+  it("lists topology recovery recipes by the failure symptoms an agent sees", () => {
+    const catalog = skillCatalog();
+    expect(catalog).toContain("recover-disjoint-solids");
+    expect(catalog).toContain("bodies: expected 1, found 3");
+    expect(catalog).toContain("recover-coincident-booleans");
+    expect(catalog).toContain("coincident-face");
+    expect(catalog).toContain("recover-collapsing-lofts");
+    expect(catalog).toContain("tessellation failure");
+  });
+
   it("counts prose without charging for code blocks", () => {
     expect(proseWordCount("one two\n```python\nthree four five six\n```\nseven")).toBe(3);
   });

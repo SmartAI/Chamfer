@@ -20,6 +20,19 @@ describe("load_skill tool", () => {
     expect(result.details).toEqual({ skill: "sweep-and-loft", loaded: true });
   });
 
+  it.each([
+    ["recover-disjoint-solids", ["bury", "1-2 mm", "Never abandon the feature"]],
+    ["recover-coincident-booleans", ["Extend subtractive tools", "zero-thickness"]],
+    ["recover-collapsing-lofts", ["respac", "ruled=True", "overlapping bodies", "revolve", "sweep"]],
+  ])("loads concrete topology recovery guidance from %s", async (name, expectedPhrases) => {
+    const tool = createLoadSkillTool({ getMessages: () => [] });
+    const result = await execute(tool, { name });
+    const text = (result.content[0] as { text: string }).text;
+
+    for (const phrase of expectedPhrases) expect(text).toContain(phrase);
+    expect(result.details).toEqual({ skill: name, loaded: true });
+  });
+
   it("returns a referenced resource file by skill-relative path", async () => {
     const tool = createLoadSkillTool({ getMessages: () => [] });
     const result = await execute(tool, { name: "sweep-and-loft", resource: "snippets/sweep_diagnose.py" });

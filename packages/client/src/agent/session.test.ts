@@ -1443,10 +1443,10 @@ describe("createSession agent-loop policies", () => {
     expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
   });
 
-  function loadSkillCall(id: string): AssistantMessage {
+  function loadSkillCall(id: string, name = "sweep-and-loft"): AssistantMessage {
     return {
       ...textMessage("", "toolUse"),
-      content: [{ type: "toolCall", id, name: "load_skill", arguments: { name: "sweep-and-loft" } }],
+      content: [{ type: "toolCall", id, name: "load_skill", arguments: { name } }],
     };
   }
 
@@ -1492,6 +1492,47 @@ describe("createSession agent-loop policies", () => {
     const textOf = (result: typeof first) => (result?.content ?? []).map((block) => block.text ?? "").join("\n");
     expect(textOf(first)).not.toContain("Skill hint:");
     expect(textOf(second)).toContain('Skill hint: load_skill("sweep-and-loft") covers this failure pattern.');
+  });
+
+  it("reaches the disjoint-solids recipe in one load after the repeated session-derived gate failure", async () => {
+    const multipleBodies = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Verify gate: FAILED\n- bodies: expected 1, found 3" }],
+      details: { gate: { status: "failed", checks: [] } },
+    }));
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: multipleBodies,
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("boss-run-1"),
+      toolCallMessage("boss-run-2"),
+      loadSkillCall("boss-recovery", "recover-disjoint-solids"),
+      textMessage("I will preserve and overlap the bosses."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-boss-recovery",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("add two internal bosses");
+
+    const secondFailure = resultFor(latest, "boss-run-2");
+    const failureText = (secondFailure?.content ?? []).map((block) => block.text ?? "").join("\n");
+    expect(failureText).toContain('load_skill("recover-disjoint-solids")');
+
+    const recovery = resultFor(latest, "boss-recovery");
+    const recoveryText = (recovery?.content ?? []).map((block) => block.text ?? "").join("\n");
+    expect(recoveryText).toContain("Never abandon the feature");
+    expect(recovery?.details).toEqual({ skill: "recover-disjoint-solids", loaded: true });
   });
 
   it("serves load_skill in the default treatment and withholds it from the pre-skill arms", async () => {
