@@ -421,6 +421,60 @@ export function applyPlanSnapshotEvidence(
   return annotated;
 }
 
+export interface RunCheckMeasurements {
+  component?: unknown;
+  checks?: unknown;
+}
+
+/**
+ * Checks a completed run against the active plan using the same strength
+ * comparator as plan revisions. Run CHECKS do not carry plan ids, so entries
+ * are paired by check kind and target and accepted when any candidate matches
+ * or tightens the planned criterion.
+ */
+export function validateRunChecksConformance(plan: Plan, measurements: RunCheckMeasurements): string[] {
+  const componentIds = runComponentIds(measurements);
+  if (componentIds.includes(PROBE_COMPONENT)) return [];
+  const runChecks = Array.isArray(measurements.checks)
+    ? (measurements.checks.filter(
+        (check): check is Record<string, unknown> => Boolean(check) && typeof check === "object" && !Array.isArray(check),
+      ) as Record<string, unknown>[])
+    : [];
+  const errors: string[] = [];
+  const recovery = "revise the plan first with update_plan and a revision_reason, then rerun matching CHECKS";
+
+  for (const componentId of componentIds) {
+    const component = plan.components.find((candidate) => candidate.id === componentId);
+    if (!component || component.status === "abandoned") continue;
+    for (const planned of component.checks ?? []) {
+      if (planned.removed) continue;
+      const plannedRecord = planned as Record<string, unknown>;
+      const candidates = runChecks.filter(
+        (check) => check.kind === plannedRecord.kind && sameValue(check.target, plannedRecord.target),
+      );
+      if (candidates.length === 0) {
+        errors.push(
+          `component "${componentId}" planned check "${planned.id}" is missing from this run; ${recovery}`,
+        );
+        continue;
+      }
+      const conforms = candidates.some((candidate) =>
+        checkWeakeningReasons({ ...candidate, id: planned.id } as PlanCheckEntry, planned).length === 0,
+      );
+      if (!conforms) {
+        const divergence = checkWeakeningReasons(
+          { ...candidates[0], id: planned.id } as PlanCheckEntry,
+          planned,
+        ).join(", ");
+        errors.push(
+          `component "${componentId}" planned check "${planned.id}" is weaker in this run (${divergence}); ${recovery}`,
+        );
+      }
+    }
+  }
+  return errors;
+}
+
 function pairedPreviousChecks(nextChecks: PlanCheckEntry[], previousChecks: PlanCheckEntry[]): Map<PlanCheckEntry, PlanCheckEntry> {
   const pairs = new Map<PlanCheckEntry, PlanCheckEntry>();
   const unused = new Set(nextChecks);

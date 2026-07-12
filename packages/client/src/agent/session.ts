@@ -12,6 +12,7 @@ import {
   parseComponentDeclaration,
   planIncompleteComponents,
   runBudgetBucket,
+  validateRunChecksConformance,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
 import { createLoadSkillTool } from "./tools/loadSkill";
@@ -235,7 +236,29 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       return undefined;
     },
     afterToolCall: async ({ toolCall, result, isError, context }) => {
-      if (toolCall.name !== "run_build123d" || skillTools.length === 0) return undefined;
+      if (toolCall.name !== "run_build123d") return undefined;
+      if (!isError) {
+        const activePlan = latestPlan(context.messages);
+        const measurements = (result.details as { measurements?: unknown } | undefined)?.measurements;
+        if (activePlan && measurements && typeof measurements === "object") {
+          const errors = validateRunChecksConformance(activePlan, measurements);
+          if (errors.length > 0) {
+            const content = Array.isArray(result.content) ? result.content : [];
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Plan conformance: FAILED\n${errors.map((error) => `- ${error}`).join("\n")}`,
+                },
+                ...content,
+              ],
+              details: result.details,
+              isError: true,
+            };
+          }
+        }
+      }
+      if (skillTools.length === 0) return undefined;
       const nudge = skillNudgeBlock(context.messages, result, isError);
       if (!nudge) return undefined;
       const content = Array.isArray(result.content) ? result.content : [];

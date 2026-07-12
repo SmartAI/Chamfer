@@ -1037,6 +1037,80 @@ describe("createSession agent-loop policies", () => {
     };
   }
 
+  it("marks a gate-passed run as an error when its CHECKS weaken the active plan", async () => {
+    const plan = {
+      goal: "checked housing",
+      components: [
+        {
+          id: "housing",
+          description: "single housing",
+          bbox_mm: [100, 80, 30],
+          status: "building",
+          free_floating_reason: "single part",
+          checks: [
+            { id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "housing" },
+            { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "housing" },
+          ],
+        },
+      ],
+      interfaces: [],
+    };
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "gate passed" }],
+        details: {
+          gate: { status: "passed", checks: [] },
+          measurements: {
+            component: "housing",
+            checks: [{ kind: "volume", range_mm3: [4500, 6500], target: "housing" }],
+          },
+        },
+      })),
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallWithCode("weak-run", 'COMPONENT = "housing"\nresult = Box(1, 1, 1)'),
+      textMessage("The run finished."),
+      textMessage("I will restore the planned checks."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [
+        {
+          role: "toolResult",
+          toolCallId: "plan-1",
+          toolName: "update_plan",
+          content: [{ type: "text", text: "Plan accepted" }],
+          details: { plan },
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    const run = (latest?.messages ?? []).find(
+      (message) =>
+        (message as { role?: string; toolCallId?: string }).role === "toolResult" &&
+        (message as { toolCallId?: string }).toolCallId === "weak-run",
+    ) as { isError?: boolean; content?: { text?: string }[] } | undefined;
+    expect(run?.isError).toBe(true);
+    expect(run?.content?.[0]?.text).toContain('planned check "holes" is missing');
+    expect(run?.content?.[0]?.text).toContain('planned check "volume" is weaker');
+    expect(run?.content?.[0]?.text).toContain("update_plan");
+    expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(0);
+  });
+
   it("names both honest exits and forbids weakening checks in the plan nudge", () => {
     const prompt = buildPlanNudgePrompt([{ id: "shell", status: "building" }]);
     expect(prompt).toContain("continue building");
