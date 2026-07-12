@@ -88,6 +88,24 @@ describe("settings routes with environment config", () => {
     expect(got.sources.maxCadRuns).toBe("db-over-env");
   });
 
+  it("round-trips showCadCode with env baseline and db override", async () => {
+    vi.stubEnv("CHAMFER_SHOW_CAD_CODE", "1");
+    const app = makeApp();
+    let got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.showCadCode).toBe("1");
+    expect(got.sources.showCadCode).toBe("env");
+
+    await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ showCadCode: null }),
+    });
+    got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    // Deleting a (nonexistent) override leaves the env baseline in effect.
+    expect(got.showCadCode).toBe("1");
+    expect(got.sources.showCadCode).toBe("env");
+  });
+
   it("PUT null deletes the override and falls back to the env value", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-oai-fromenv");
     const app = makeApp();

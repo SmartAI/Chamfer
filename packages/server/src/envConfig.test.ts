@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { envSettings, loadDotenv } from "./envConfig";
 
 function tempDir(): string {
@@ -111,5 +111,23 @@ describe("envSettings", () => {
     expect(envSettings({ CHAMFER_MAX_CAD_RUNS: "0" })).toEqual({});
     expect(envSettings({ CHAMFER_MAX_CAD_RUNS: "-3" })).toEqual({});
     expect(envSettings({ CHAMFER_MAX_CAD_RUNS: "2.5" })).toEqual({});
+  });
+
+  it("maps CHAMFER_SHOW_CAD_CODE=1 to showCadCode", () => {
+    expect(envSettings({ CHAMFER_SHOW_CAD_CODE: "1" }).showCadCode).toBe("1");
+  });
+
+  it("treats CHAMFER_SHOW_CAD_CODE=0 as unset without warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(envSettings({ CHAMFER_SHOW_CAD_CODE: "0" })).toEqual({});
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("warns and ignores CHAMFER_SHOW_CAD_CODE junk values", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(envSettings({ CHAMFER_SHOW_CAD_CODE: "yes" })).toEqual({});
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });

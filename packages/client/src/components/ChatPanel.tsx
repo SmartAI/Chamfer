@@ -69,6 +69,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
     sendQueuedNow,
     modelName,
     maxCadRuns,
+    showCadCode,
   } = useChatState();
 
   const stats = useMemo(() => turnStats(sessionState.messages), [sessionState.messages]);
@@ -206,6 +207,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
         messages={sessionState.messages}
         streaming={sessionState.streaming}
         generationFailed={Boolean(sessionState.error)}
+        showCadCode={showCadCode}
         emptyState={
           // No disabledHint here: the composer directly below already explains
           // why everything is disabled; repeating the sentence reads as a bug.

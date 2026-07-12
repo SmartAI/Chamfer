@@ -11,6 +11,7 @@ const SETTINGS_KEYS = [
   "googleBaseUrl",
   "modelJson",
   "maxCadRuns",
+  "showCadCode",
 ] as const;
 
 type SettingsKey = (typeof SETTINGS_KEYS)[number];

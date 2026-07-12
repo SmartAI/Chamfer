@@ -1,26 +1,32 @@
-import { Children, isValidElement, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import {
+  Children,
+  createContext,
+  isValidElement,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+} from "react";
 import { Streamdown, type Components, type CustomRendererProps } from "streamdown";
 import { ArrowDown, Check, CheckCircle2, FoldVertical, ListChecks, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
 import { getMessagePersistenceId, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
-import { CadCodeActions } from "./CadCodeActions";
+import { CadCodeBlock } from "./CadCodeBlock";
 
-function PythonCodeBlock({ code, language, isIncomplete }: CustomRendererProps) {
-  return (
-    <div className="my-2 overflow-hidden rounded-md border bg-background">
-      <div className="flex items-center justify-between border-b bg-muted/40 px-2 py-1.5">
-        <span className="font-mono text-[11px] text-muted-foreground">{language || "python"}</span>
-        <CadCodeActions code={code} disabled={isIncomplete} />
-      </div>
-      <pre className="max-h-72 overflow-auto p-3 font-mono text-xs leading-5">
-        <code>{code}</code>
-      </pre>
-    </div>
-  );
+/** Whether CAD code bodies render in chat (CHAMFER_SHOW_CAD_CODE). A module-local
+ * context, not a prop, because the fence renderer sits behind Streamdown's static
+ * renderer registry and cannot receive props from MessageList. */
+const CadCodeVisibilityContext = createContext(false);
+
+function CadCodeFence({ code, isIncomplete }: CustomRendererProps) {
+  const showCadCode = useContext(CadCodeVisibilityContext);
+  return <CadCodeBlock code={code} show={showCadCode} disabled={isIncomplete} className="my-2 bg-background" />;
 }
 
-const CAD_CODE_RENDERERS = [{ language: ["python", "py"], component: PythonCodeBlock }];
+const CAD_CODE_RENDERERS = [{ language: ["python", "py"], component: CadCodeFence }];
 
 // The self-check nudge asks the model to "mark each one satisfied or missing",
 // which it phrases either as a prefix ("Satisfied: four holes are present") or
@@ -203,12 +209,21 @@ export interface MessageListProps {
   /** Extra content (e.g. preset prompt cards) rendered inside the "Start the conversation"
    * empty state; hidden as soon as any user/assistant message exists. */
   emptyState?: ReactNode;
+  /** Whether CAD code bodies (tool-call blocks and python fences) are rendered.
+   * Hidden by default; ChatPanel threads the CHAMFER_SHOW_CAD_CODE setting here. */
+  showCadCode?: boolean;
 }
 
 /** How close to the bottom (px) still counts as "pinned" for autoscroll purposes. */
 const PIN_THRESHOLD_PX = 40;
 
-export function MessageList({ messages, streaming, generationFailed = false, emptyState }: MessageListProps) {
+export function MessageList({
+  messages,
+  streaming,
+  generationFailed = false,
+  emptyState,
+  showCadCode = false,
+}: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   // Whether the view should follow new content. A ref, not state: scroll events
@@ -279,6 +294,7 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
     renderable.at(-1)?.role === "assistant";
 
   return (
+    <CadCodeVisibilityContext.Provider value={showCadCode}>
     <div className="relative flex min-h-0 flex-1 flex-col">
       {showJump && (
         <button
@@ -390,6 +406,7 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
                       call={call}
                       result={result as ToolCallCardResult | undefined}
                       resultMessageId={getMessagePersistenceId(result)}
+                      showCadCode={showCadCode}
                     />
                   );
                 })}
@@ -427,5 +444,6 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
       </div>
       </div>
     </div>
+    </CadCodeVisibilityContext.Provider>
   );
 }

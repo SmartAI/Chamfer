@@ -154,6 +154,52 @@ describe("MessageList scroll anchoring", () => {
   });
 });
 
+describe("MessageList CAD code visibility", () => {
+  const fenced = assistantMessage("Here is the part:\n\n```python\nresult = Box(2, 2, 2)\n```\n");
+
+  it("collapses python fences to a label-and-actions row by default", () => {
+    render(<MessageList messages={[fenced]} streaming={false} />);
+
+    expect(screen.queryByText(/result = Box\(2, 2, 2\)/)).toBeNull();
+    expect(screen.getByText("CAD code")).toBeTruthy();
+    expect(screen.getByText("Copy")).toBeTruthy();
+    expect(screen.getByText("Render 3D")).toBeTruthy();
+  });
+
+  it("shows python fence bodies when showCadCode is set", () => {
+    render(<MessageList messages={[fenced]} streaming={false} showCadCode />);
+
+    expect(screen.getByText(/result = Box\(2, 2, 2\)/)).toBeTruthy();
+    expect(screen.getByText("CAD code")).toBeTruthy();
+  });
+
+  it("threads visibility to tool-call cards", () => {
+    const withTool = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Building." },
+        { type: "toolCall", id: "tc-1", name: "run_build123d", arguments: { code: "result = Box(3, 3, 3)" } },
+      ],
+    };
+    const { rerender } = render(<MessageList messages={[withTool]} streaming={false} />);
+    expect(screen.queryByText(/result = Box\(3, 3, 3\)/)).toBeNull();
+
+    rerender(<MessageList messages={[withTool]} streaming={false} showCadCode />);
+    expect(screen.getByText(/result = Box\(3, 3, 3\)/)).toBeTruthy();
+  });
+
+  it("leaves non-python fences untouched when hidden", () => {
+    render(
+      <MessageList
+        messages={[assistantMessage('Config:\n\n```json\n{"bodies": 1}\n```\n')]}
+        streaming={false}
+      />,
+    );
+
+    expect(screen.getByText(/"bodies": 1/)).toBeTruthy();
+  });
+});
+
 describe("MessageList checklist rendering", () => {
   it("renders satisfied/missing checklist lines as icon rows, both prefix and suffix forms", () => {
     render(

@@ -71,6 +71,9 @@ export interface ChatContextValue {
   modelName: string | null;
   /** Effective run_build123d cap per turn (settings value or the default). */
   maxCadRuns: number;
+  /** Whether chat renders CAD code bodies (CHAMFER_SHOW_CAD_CODE / the showCadCode
+   * setting). Hidden by default. */
+  showCadCode: boolean;
 }
 
 /** Display name from a settings modelJson payload; null when absent or unparseable. */
@@ -90,6 +93,11 @@ function modelNameOf(modelJson: string | undefined): string | null {
 function capOf(maxCadRuns: string | undefined): number {
   const parsed = Number(maxCadRuns);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CAD_RUNS;
+}
+
+/** Whether the string-encoded showCadCode setting turns code bodies on. */
+function showCadCodeOf(showCadCode: string | undefined): boolean {
+  return showCadCode === "1";
 }
 
 /** Exported so tests can render `ChatContext.Provider` directly with a fake value (e.g. a
@@ -128,6 +136,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   const [queuePaused, setQueuePaused] = useState(false);
   const [modelName, setModelName] = useState<string | null>(null);
   const [maxCadRuns, setMaxCadRuns] = useState<number>(DEFAULT_MAX_CAD_RUNS);
+  const [showCadCode, setShowCadCode] = useState(false);
   // True from a send() call until its promise settles (the real session resolves send()
   // only when the whole agent turn is done). Guards the drain effect against firing a
   // second send into a turn whose streaming flag has not propagated yet.
@@ -163,6 +172,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
         setSettingsPresent(Boolean(settings.modelJson));
         setModelName(modelNameOf(settings.modelJson));
         setMaxCadRuns(capOf(settings.maxCadRuns));
+        setShowCadCode(showCadCodeOf(settings.showCadCode));
       })
       .catch(() => {
         // Leave settingsPresent false; switchTo re-fetches settings and surfaces errors.
@@ -219,6 +229,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
         setSettingsPresent(Boolean(modelJson));
         setModelName(modelNameOf(modelJson));
         setMaxCadRuns(capOf(settings.maxCadRuns));
+        setShowCadCode(showCadCodeOf(settings.showCadCode));
 
         const priorMessages = messages
           .slice()
@@ -449,6 +460,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       setSettingsPresent(present);
       setModelName(modelNameOf(settings.modelJson));
       setMaxCadRuns(capOf(settings.maxCadRuns));
+      setShowCadCode(showCadCodeOf(settings.showCadCode));
       // A conversation opened before a model was configured never had its session built
       // (switchTo bails without modelJson); re-switch to build it now. There is no live
       // session to abort in that case.
@@ -498,6 +510,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       sendQueuedNow,
       modelName,
       maxCadRuns,
+      showCadCode,
     }),
     [
       conversations,
@@ -520,6 +533,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       sendQueuedNow,
       modelName,
       maxCadRuns,
+      showCadCode,
     ],
   );
 

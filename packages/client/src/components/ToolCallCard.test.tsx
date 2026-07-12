@@ -134,3 +134,27 @@ describe("ToolCallCard status", () => {
     expect(screen.getByText("Traceback: boom")).toBeTruthy();
   });
 });
+
+describe("ToolCallCard CAD code visibility", () => {
+  it("hides the code body by default but keeps the label and actions", () => {
+    render(<ToolCallCard call={call} />);
+
+    expect(screen.queryByText("result = Box(1, 1, 1)")).toBeNull();
+    expect(screen.getByText("CAD code")).toBeTruthy();
+    expect(screen.getByText("Copy")).toBeTruthy();
+    expect(screen.getByText("Render 3D")).toBeTruthy();
+  });
+
+  it("shows the code body when showCadCode is set", () => {
+    render(<ToolCallCard call={call} showCadCode />);
+
+    expect(screen.getByText("result = Box(1, 1, 1)")).toBeTruthy();
+    expect(screen.getByText("CAD code")).toBeTruthy();
+  });
+
+  it("renders no code row at all for a call without code", () => {
+    render(<ToolCallCard call={{ id: "tc-2", name: "lookup_docs", arguments: { query: "hole" } }} />);
+
+    expect(screen.queryByText("CAD code")).toBeNull();
+  });
+});

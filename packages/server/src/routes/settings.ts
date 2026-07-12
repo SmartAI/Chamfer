@@ -22,6 +22,7 @@ export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_
       googleBaseUrl: settings.googleBaseUrl,
       modelJson: settings.modelJson ?? (fakeMode ? JSON.stringify(FAKE_MODEL) : undefined),
       maxCadRuns: settings.maxCadRuns,
+      showCadCode: settings.showCadCode,
       sources,
     };
     return c.json(masked);

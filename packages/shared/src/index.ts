@@ -59,6 +59,10 @@ export interface SettingsDto {
    * String-encoded positive integer (settings values are strings on the wire);
    * the client falls back to its built-in default when unset or invalid. */
   maxCadRuns?: string;
+  /** Whether chat renders CAD code bodies (tool-call blocks and python fences).
+   * "1" shows them; unset or anything else keeps them collapsed to a
+   * label-and-actions row. Hidden is the default everywhere. */
+  showCadCode?: string;
 }
 
 /** Where an effective settings value came from: the environment (.env /
