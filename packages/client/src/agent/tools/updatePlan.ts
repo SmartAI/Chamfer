@@ -2,6 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import {
   PLAN_COMPONENT_STATUSES,
+  FORM_REVIEW_VIEWS,
   PLAN_INTERFACE_KINDS,
   UPDATE_PLAN_TOOL_NAME,
   acceptedCheckRevisions,
@@ -31,7 +32,7 @@ const component = Type.Object({
     }),
   status: StringEnum(PLAN_COMPONENT_STATUSES as unknown as string[], {
     description:
-      '"done" is accepted only with gate evidence; "blocked" requires blocked_reason when a genuine limitation prevents completion; "abandoned" requires abandon_reason and is the only legal way to shrink the plan.',
+      '"done" is accepted only with gate evidence and, for an image-derived plan transition, a complete all-match form_review tied to that evidence; "blocked" requires blocked_reason when a genuine limitation prevents completion; "abandoned" requires abandon_reason and is the only legal way to shrink the plan.',
   }),
   abandon_reason: Type.Optional(
     Type.String({ description: "Why this component is no longer part of the design. Required when abandoned." }),
@@ -43,6 +44,19 @@ const component = Type.Object({
     Type.String({
       description:
         "Why this component legitimately has no interface holding it. Leave unset for anything that must be supported, fastened, or captive.",
+    }),
+  ),
+  form_review: Type.Optional(
+    Type.Object({
+      evidence_id: Type.String({ description: "Tool-call id of the latest gate-passed run whose inspection sheet was reviewed." }),
+      views: Type.Array(
+        Type.Object({
+          view: StringEnum(FORM_REVIEW_VIEWS as unknown as string[]),
+          verdict: StringEnum(["match", "mismatch"]),
+          note: Type.String({ description: "Concrete comparison against this reference-image view." }),
+        }),
+        { description: "Exactly one verdict for each of the seven inspection views." },
+      ),
     }),
   ),
 });
@@ -91,7 +105,7 @@ export function createUpdatePlanTool(deps: {
     name: UPDATE_PLAN_TOOL_NAME,
     label: "Update plan",
     description:
-      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_id}, or state a non-empty unverifiable_reason. Submit the complete plan every time, never a delta.",
+      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_id}, or state a non-empty unverifiable_reason. Before changing an image-derived component to done, submit form_review with match verdicts and notes for all seven views, tied to the latest gate-passed run by evidence_id. Submit the complete plan every time, never a delta.",
     parameters,
     execute: async (_toolCallId, args) => {
       const messages = deps.getMessages();

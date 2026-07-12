@@ -109,7 +109,7 @@ export const DEFAULT_MAX_CAD_RUNS = 10;
  * system chip and the rate-limit Retry action never resends it as the user's prompt. */
 export const SELF_CHECK_MARKER = "[Chamfer self-check]";
 
-export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed for the current script. A passing gate only confirms the current geometry matches its own EXPECT block - it does not mean the whole request is done. Re-read the original request, list every requested part, feature, and step, and mark each one satisfied or missing against the latest measurements and views. If anything is missing, continue building it now. If everything is satisfied, reply with the final summary.`;
+export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed for the current script. A passing gate only confirms the current geometry matches its own EXPECT block - it does not mean the whole request is done. For an image request, compare the latest inspection sheet against the reference image view by view: isometric, front, back, left, right, top, and bottom. Record a match or mismatch verdict and a concrete note for every view in form_review, tied by evidence_id to that latest gate-passed run. Fix any mismatch before marking the component done. For a text-only request, re-read the original request and check every requested part, feature, and step against the latest measurements and views. If anything is missing, continue building it now. If everything is satisfied, reply with the final summary.`;
 
 /** Prefix identifying the deterministic plan stop-gate nudge (planned turns replace
  * the prose self-check with this; the UI renders it as a system chip). */

@@ -97,6 +97,25 @@ export function PlanCard({ plan }: PlanCardProps) {
                   })}
                 </div>
               )}
+              {component.form_review && (
+                <div className="ml-4.5 mt-1 flex flex-col gap-0.5 border-l-2 border-emerald-400 pl-2" data-testid="plan-form-review">
+                  <span className="font-medium text-foreground">Form review</span>
+                  {component.form_review.views.map((entry) => (
+                    <div
+                      key={entry.view}
+                      data-testid="plan-form-review-verdict"
+                      className={cn(
+                        "flex gap-1.5",
+                        entry.verdict === "match" ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300",
+                      )}
+                    >
+                      <span className="w-14 shrink-0 font-mono">{entry.view}</span>
+                      <span className="shrink-0 font-medium">{entry.verdict}</span>
+                      <span className="text-muted-foreground">- {entry.note}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {(plan.interfaces ?? []).length > 0 && (

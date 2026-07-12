@@ -151,4 +151,27 @@ describe("PlanCard", () => {
     expect(revisions[1]?.textContent).toContain("hole_through (removed)");
     expect(revisions[1]?.textContent).toContain("surface marks");
   });
+
+  it("renders a completed component's per-view form review", () => {
+    const reviewed: Plan = structuredClone(plan);
+    reviewed.components[0]!.form_review = {
+      evidence_id: "run-106",
+      views: [
+        { view: "isometric", verdict: "match", note: "Dominant form agrees." },
+        { view: "front", verdict: "match", note: "Silhouette agrees." },
+        { view: "back", verdict: "match", note: "Rear profile agrees." },
+        { view: "left", verdict: "match", note: "Left profile agrees." },
+        { view: "right", verdict: "match", note: "Right profile agrees." },
+        { view: "top", verdict: "match", note: "Top profile agrees." },
+        { view: "bottom", verdict: "match", note: "Base agrees." },
+      ],
+    };
+    render(<PlanCard plan={reviewed} />);
+    fireEvent.click(screen.getByTestId("plan-card-toggle"));
+
+    const verdicts = screen.getAllByTestId("plan-form-review-verdict");
+    expect(verdicts).toHaveLength(7);
+    expect(verdicts[0]?.textContent).toContain("isometric");
+    expect(verdicts[0]?.textContent).toContain("Dominant form agrees.");
+  });
 });

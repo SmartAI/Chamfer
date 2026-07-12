@@ -25,6 +25,22 @@ export type { PlanCheckEntry, PlanCheckRef, PlanSpecSheetRow } from "./planCheck
 
 export type PlanComponentStatus = "todo" | "building" | "done" | "blocked" | "abandoned";
 
+export const FORM_REVIEW_VIEWS = ["isometric", "front", "back", "left", "right", "top", "bottom"] as const;
+export type FormReviewView = (typeof FORM_REVIEW_VIEWS)[number];
+export type FormReviewVerdict = "match" | "mismatch";
+
+export interface FormReviewEntry {
+  view: FormReviewView;
+  verdict: FormReviewVerdict;
+  note: string;
+}
+
+export interface FormReview {
+  /** Tool-call id of the newest gate-passed run inspected by this review. */
+  evidence_id: string;
+  views: FormReviewEntry[];
+}
+
 export const PLAN_COMPONENT_STATUSES: readonly PlanComponentStatus[] = [
   "todo",
   "building",
@@ -48,6 +64,8 @@ export interface PlanComponent {
   blocked_reason?: string;
   /** Exempts the component from interface coverage; must say why it is legitimately unattached. */
   free_floating_reason?: string;
+  /** Required on an image-plan transition to done. */
+  form_review?: FormReview;
 }
 
 export type PlanInterfaceKind = "clearance" | "captive";
@@ -89,6 +107,7 @@ export const UPDATE_PLAN_TOOL_NAME = "update_plan";
 interface ToolResultLike {
   role?: unknown;
   toolName?: unknown;
+  toolCallId?: unknown;
   isError?: unknown;
   details?: {
     plan?: unknown;
@@ -195,6 +214,8 @@ function canonical(value: unknown): string {
 export interface ComponentEvidence {
   /** Canonical forms of the CHECKS entries run alongside the newest gate-passed run declaring the component. */
   checks: Set<string>;
+  /** Tool-call id of this newest gate-passed run. */
+  evidenceId?: string;
 }
 
 /**
@@ -215,7 +236,8 @@ export function collectComponentEvidence(messages: readonly unknown[]): Map<stri
     if (ids.length === 0) continue;
     const rawChecks = Array.isArray(measurements?.checks) ? (measurements?.checks as unknown[]) : [];
     const checks = new Set(rawChecks.map(canonical));
-    for (const id of ids) evidence.set(id, { checks });
+    const evidenceId = typeof m.toolCallId === "string" ? m.toolCallId : undefined;
+    for (const id of ids) evidence.set(id, { checks, evidenceId });
   }
   return evidence;
 }
@@ -565,6 +587,47 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
         `component "${component.id}" cannot be "done": no gate-passed run has declared COMPONENT = "${component.id}"`,
       );
       continue;
+    }
+    const previousComponent = previous?.components.find((candidate) => candidate.id === component.id);
+    const isDoneTransition = previousComponent?.status !== "done";
+    const isImagePlan = Boolean(next.spec_sheet?.length || previous?.spec_sheet?.length);
+    if (isDoneTransition && isImagePlan) {
+      const review = component.form_review;
+      const entries = Array.isArray(review?.views) ? review.views : [];
+      const entriesByView = new Map(entries.map((entry) => [entry?.view, entry]));
+      for (const view of FORM_REVIEW_VIEWS) {
+        const entry = entriesByView.get(view);
+        if (!entry) {
+          errors.push(`component "${component.id}" cannot be "done": form_review is missing the ${view} view`);
+          continue;
+        }
+        if (entry.verdict !== "match" && entry.verdict !== "mismatch") {
+          errors.push(`component "${component.id}" cannot be "done": form_review ${view} verdict must be "match" or "mismatch"`);
+        }
+        if (typeof entry.note !== "string" || entry.note.trim() === "") {
+          errors.push(`component "${component.id}" cannot be "done": form_review ${view} note must be non-empty`);
+        }
+        if (entry.verdict === "mismatch") {
+          errors.push(`component "${component.id}" cannot be "done": form_review ${view} verdict is mismatch`);
+        }
+      }
+      const seenViews = new Set<FormReviewView>();
+      for (const entry of entries) {
+        if (!FORM_REVIEW_VIEWS.includes(entry?.view as FormReviewView)) {
+          errors.push(`component "${component.id}" cannot be "done": unknown form_review view ${JSON.stringify(entry?.view)}`);
+        } else if (seenViews.has(entry.view)) {
+          errors.push(`component "${component.id}" cannot be "done": duplicate form_review view "${entry.view}"`);
+        } else {
+          seenViews.add(entry.view);
+        }
+      }
+      if (typeof review?.evidence_id !== "string" || review.evidence_id.trim() === "") {
+        errors.push(`component "${component.id}" cannot be "done": form_review evidence_id must name the latest gate-passed evidence`);
+      } else if (review.evidence_id !== record.evidenceId) {
+        errors.push(
+          `component "${component.id}" cannot be "done": form_review evidence_id ${JSON.stringify(review.evidence_id)} does not match latest gate-passed evidence ${JSON.stringify(record.evidenceId)}`,
+        );
+      }
     }
     for (const check of component.checks ?? []) {
       if (check.removed) continue;

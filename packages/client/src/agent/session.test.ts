@@ -836,6 +836,10 @@ describe("createSession agent-loop policies", () => {
       );
     });
     expect(selfChecks).toHaveLength(1);
+    const selfCheckText = (selfChecks[0] as { content: { text?: string }[] }).content[0]?.text ?? "";
+    expect(selfCheckText).toContain("isometric, front, back, left, right, top, and bottom");
+    expect(selfCheckText).toContain("match or mismatch verdict");
+    expect(selfCheckText).toContain("evidence_id");
     expect(latest?.error).toBeUndefined();
 
     // The injected nudge was persisted like any other message.
