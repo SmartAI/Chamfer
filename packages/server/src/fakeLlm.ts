@@ -1,5 +1,6 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { LlmStreamer } from "./llm";
+import { TITLE_SYSTEM_PROMPT } from "./titles";
 
 export const FAKE_MODEL = {
   id: "chamfer-fake",
@@ -270,6 +271,29 @@ function* imagePlanGateStep(transcript: string, lastMessage: string): Generator<
   yield* streamText("Spacer complete: the image plan is built and verified.");
 }
 
+// --- skill-loop scenario (triggered by "skill-loop") ---
+// Exercises the progressive-disclosure skill layer end to end: load a skill,
+// fetch one of its resources, prove a duplicate load dedupes, then finish.
+function* skillLoopStep(transcript: string): Generator<AssistantMessageEvent> {
+  const loads = transcript.split('"name":"load_skill"').length - 1;
+  if (loads === 0) {
+    yield* streamToolCall("skill-loop-load-1", "load_skill", { name: "sweep-and-loft" });
+    return;
+  }
+  if (loads === 1) {
+    yield* streamToolCall("skill-loop-load-2", "load_skill", {
+      name: "sweep-and-loft",
+      resource: "snippets/sweep_diagnose.py",
+    });
+    return;
+  }
+  if (loads === 2) {
+    yield* streamToolCall("skill-loop-load-3", "load_skill", { name: "sweep-and-loft" });
+    return;
+  }
+  yield* streamText("Skill loop complete: skill loaded, probe resource fetched, duplicate deduplicated.");
+}
+
 export function fakeLlm(): LlmStreamer {
   return {
     async *stream(_model, context): AsyncIterable<AssistantMessageEvent> {
@@ -278,7 +302,9 @@ export function fakeLlm(): LlmStreamer {
         systemPrompt?: string;
       };
       // Title-generation calls (see titles.ts) expect plain text, not a tool call.
-      if (typeof systemPrompt === "string" && systemPrompt.includes("title")) {
+      // Matched exactly: a substring probe ("title") also matches the agent's own
+      // system prompt (e.g. "titled results"), hijacking every scenario turn.
+      if (systemPrompt === TITLE_SYSTEM_PROMPT) {
         yield* streamText("Fake Box Design");
         return;
       }
@@ -291,6 +317,10 @@ export function fakeLlm(): LlmStreamer {
       }
       if (transcript.includes("image-plan-gate")) {
         yield* imagePlanGateStep(transcript, JSON.stringify(messages.at(-1)));
+        return;
+      }
+      if (transcript.includes("skill-loop")) {
+        yield* skillLoopStep(transcript);
         return;
       }
       // The self-check nudge the session injects after a gate pass arrives as a

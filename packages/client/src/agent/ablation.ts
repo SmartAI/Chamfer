@@ -1,9 +1,10 @@
-import type { Build123dSkillMode } from "./build123dSkill";
+import { DEFAULT_SKILL_MODE, type Build123dSkillMode } from "./build123dSkill";
 
 export interface AblationScore {
   gatePassed: boolean;
   cadRuns: number;
   searches: number;
+  skillLoads: number;
   inputTokens: number;
   outputTokens: number;
   failureCategories: Record<string, number>;
@@ -13,9 +14,9 @@ export interface AblationScore {
 type UnknownRecord = Record<string, unknown>;
 
 export function resolveAblationSkill(search: string, isDevelopment: boolean): Build123dSkillMode {
-  if (!isDevelopment) return "core";
+  if (!isDevelopment) return DEFAULT_SKILL_MODE;
   const value = new URLSearchParams(search).get("chamferSkill");
-  return value === "none" || value === "full" ? value : "core";
+  return value === "none" || value === "core" || value === "full" ? value : DEFAULT_SKILL_MODE;
 }
 
 function record(value: unknown): UnknownRecord | undefined {
@@ -50,6 +51,7 @@ function gateFailureCategories(text: string): string[] {
 export function scoreAblationMessages(messages: unknown[]): AblationScore {
   let cadRuns = 0;
   let searches = 0;
+  let skillLoads = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let gatePassed = false;
@@ -66,6 +68,7 @@ export function scoreAblationMessages(messages: unknown[]): AblationScore {
     for (const call of toolCalls(message)) {
       if (call.name === "run_build123d") cadRuns += 1;
       if (call.name === "search_docs") searches += 1;
+      if (call.name === "load_skill") skillLoads += 1;
     }
 
     if (message.role !== "toolResult" || message.toolName !== "run_build123d") continue;
@@ -80,6 +83,7 @@ export function scoreAblationMessages(messages: unknown[]): AblationScore {
     gatePassed,
     cadRuns,
     searches,
+    skillLoads,
     inputTokens,
     outputTokens,
     failureCategories,

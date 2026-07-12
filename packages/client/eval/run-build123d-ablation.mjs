@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,7 +9,7 @@ import { scoreAblationMessages } from "../src/agent/ablation.ts";
 const TASKS = {
   drawer_handle: "Design a curved drawer handle: sweep a D-shaped profile along a gentle 110 mm arc to form the grip bar, join each end to a 16 mm diameter, 12 mm tall cylindrical standoff, and put a 4 mm screw hole through each standoff.",
 };
-const CONDITIONS = new Set(["none", "core", "full"]);
+const CONDITIONS = new Set(["none", "core", "catalog", "full"]);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "../../..");
 
@@ -47,7 +47,7 @@ function digest(value) {
 const baseUrl = argument("url", "http://localhost:5173");
 const taskName = argument("task", "drawer_handle");
 const trials = Number(argument("trials", "5"));
-const requestedConditions = argument("conditions", "none,core,full").split(",");
+const requestedConditions = argument("conditions", "none,core,catalog,full").split(",");
 const expectedModel = argument("model", "");
 const seed = Number(argument("seed", "12345"));
 const dbPath = resolve(repoRoot, argument("db", "data/chamfer.db"));
@@ -70,7 +70,15 @@ if (expectedModel && configuredModel.id !== expectedModel) {
 const results = [];
 const random = seededRandom(seed);
 const promptHash = digest(await readFile(resolve(scriptDir, "../src/agent/prompt.ts"), "utf8"));
-const skillHash = digest(await readFile(resolve(scriptDir, "../src/agent/build123dSkill.ts"), "utf8"));
+// The skill treatment is build123dSkill.ts plus every authored SKILL.md and snippet.
+const skillDir = resolve(scriptDir, "../src/agent/skills");
+const skillEntries = (await readdir(skillDir, { recursive: true, withFileTypes: true }))
+  .filter((entry) => entry.isFile())
+  .map((entry) => resolve(entry.parentPath, entry.name))
+  .sort();
+const skillParts = [await readFile(resolve(scriptDir, "../src/agent/build123dSkill.ts"), "utf8")];
+for (const entry of skillEntries) skillParts.push(await readFile(entry, "utf8"));
+const skillHash = digest(skillParts.join("\n"));
 await mkdir(resolve(outputPath, ".."), { recursive: true });
 try {
   for (let trial = 1; trial <= trials; trial += 1) {

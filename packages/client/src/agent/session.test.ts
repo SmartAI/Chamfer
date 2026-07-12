@@ -1313,4 +1313,81 @@ describe("createSession agent-loop policies", () => {
     // The new plan is live immediately: stopping with a todo component draws the nudge.
     expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
   });
+
+  function loadSkillCall(id: string): AssistantMessage {
+    return {
+      ...textMessage("", "toolUse"),
+      content: [{ type: "toolCall", id, name: "load_skill", arguments: { name: "sweep-and-loft" } }],
+    };
+  }
+
+  function resultFor(latest: SessionState | undefined, toolCallId: string) {
+    return (latest?.messages ?? []).find((message) => {
+      const result = message as { role?: string; toolCallId?: string };
+      return result.role === "toolResult" && result.toolCallId === toolCallId;
+    }) as { isError?: boolean; content?: Array<{ type?: string; text?: string }>; details?: unknown } | undefined;
+  }
+
+  it("appends the skill hint to the second matching failure of a turn, not the first", async () => {
+    const sweepFailure = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Verify gate: FAILED\n- bodies: sweep produced 2 solids" }],
+      details: { gate: { status: "failed", checks: [] } },
+    }));
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: sweepFailure,
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("sweep-run-1"),
+      toolCallMessage("sweep-run-2"),
+      textMessage("stopping after two failures."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("sweep a handle profile along an arc");
+
+    const first = resultFor(latest, "sweep-run-1");
+    const second = resultFor(latest, "sweep-run-2");
+    const textOf = (result: typeof first) => (result?.content ?? []).map((block) => block.text ?? "").join("\n");
+    expect(textOf(first)).not.toContain("Skill hint:");
+    expect(textOf(second)).toContain('Skill hint: load_skill("sweep-and-loft") covers this failure pattern.');
+  });
+
+  it("serves load_skill in the default treatment and withholds it from the pre-skill arms", async () => {
+    const runArm = async (skillMode: string, callId: string) => {
+      const { streamFn } = makeScriptedStreamFn([loadSkillCall(callId), textMessage("done.")]);
+      const session = createSession({
+        conversationId: "conv-1",
+        modelJson: JSON.stringify(FAKE_MODEL),
+        systemPrompt,
+        priorMessages: [],
+        skillMode,
+        __streamFn: streamFn as never,
+      } as unknown as Parameters<typeof createSession>[0]);
+      let latest: SessionState | undefined;
+      session.subscribe((state) => (latest = state));
+      await session.send("load the sweep skill");
+      return resultFor(latest, callId);
+    };
+
+    const catalogResult = await runArm("catalog", "load-catalog");
+    expect(catalogResult?.isError).toBeFalsy();
+    expect(catalogResult?.content?.[0]?.text).toContain('<skill name="sweep-and-loft"');
+    expect(catalogResult?.details).toMatchObject({ skill: "sweep-and-loft", loaded: true });
+
+    const coreResult = await runArm("core", "load-core");
+    expect(coreResult?.isError).toBe(true);
+  });
 });

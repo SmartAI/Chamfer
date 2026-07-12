@@ -14,15 +14,20 @@ const toolResult = (toolName: string, text: string) => ({
 });
 
 describe("ablation session scoring", () => {
-  it("accepts skill treatments only in development", () => {
+  it("accepts skill treatments only in development and defaults to the catalog", () => {
     expect(resolveAblationSkill("?chamferSkill=none", true)).toBe("none");
+    expect(resolveAblationSkill("?chamferSkill=core", true)).toBe("core");
     expect(resolveAblationSkill("?chamferSkill=full", true)).toBe("full");
-    expect(resolveAblationSkill("?chamferSkill=invalid", true)).toBe("core");
-    expect(resolveAblationSkill("?chamferSkill=none", false)).toBe("core");
+    expect(resolveAblationSkill("?chamferSkill=catalog", true)).toBe("catalog");
+    expect(resolveAblationSkill("?chamferSkill=invalid", true)).toBe("catalog");
+    expect(resolveAblationSkill("", true)).toBe("catalog");
+    expect(resolveAblationSkill("?chamferSkill=none", false)).toBe("catalog");
   });
 
   it("scores gate outcomes, tool use, tokens, and repeated failures", () => {
     const score = scoreAblationMessages([
+      assistant("load_skill", { name: "sweep-and-loft" }, { input: 40, output: 5 }),
+      toolResult("load_skill", '<skill name="sweep-and-loft" location="skills/sweep-and-loft/SKILL.md">'),
       assistant("run_build123d", { code: "result = Box(1, 1, 1)" }),
       toolResult("run_build123d", "Verify gate: FAILED\n- bodies: expected 1, found 3"),
       assistant("search_docs", { query: "sweep profile path plane" }, { input: 50, output: 10 }),
@@ -37,8 +42,9 @@ describe("ablation session scoring", () => {
       gatePassed: true,
       cadRuns: 3,
       searches: 1,
-      inputTokens: 350,
-      outputTokens: 70,
+      skillLoads: 1,
+      inputTokens: 390,
+      outputTokens: 75,
       failureCategories: { bodies: 2 },
       repeatedFailureCategories: ["bodies"],
     });

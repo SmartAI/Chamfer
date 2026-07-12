@@ -14,6 +14,9 @@ import {
   runBudgetBucket,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
+import { createLoadSkillTool } from "./tools/loadSkill";
+import { skillNudgeBlock } from "./skillNudge";
+import { DEFAULT_SKILL_MODE, type Build123dSkillMode } from "./build123dSkill";
 
 export interface ChatSession {
   conversationId: string;
@@ -69,6 +72,9 @@ export interface CreateSessionOptions {
   systemPrompt: string;
   /** AgentTool[]; empty in M2, filled in M4. */
   tools?: unknown[];
+  /** Build123d skill treatment; load_skill is registered unless the ablation arm
+   * ("none"/"core") predates the skill layer. Defaults to DEFAULT_SKILL_MODE. */
+  skillMode?: Build123dSkillMode;
   /** Replayed from REST: parsed AgentMessage history for this conversation. */
   priorMessages: unknown[];
   /** Max run_build123d executions per turn before the turn is aborted;
@@ -194,8 +200,9 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   let imagePlanRequiredThisTurn = false;
   let imagePlanAcceptedThisTurn = false;
 
-  // update_plan validates against the live transcript (latest plan + gate evidence),
-  // so it is session-owned: the closure resolves to the agent created just below.
+  // update_plan and load_skill validate against the live transcript (latest plan +
+  // gate evidence; already-loaded skill payloads), so they are session-owned: the
+  // closures resolve to the agent created just below.
   let agentForPlanTool: Agent | undefined;
   const planTool = createUpdatePlanTool({
     getMessages: () => agentForPlanTool?.state.messages ?? [],
@@ -205,11 +212,20 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     },
   }) as unknown as AgentTool;
 
+  // The "none" and "core" ablation arms predate the skill layer and must not
+  // expose it; "catalog" and "full" both register the tool ("full" keeps it so a
+  // model that asks anyway gets the dedupe notice instead of an unknown-tool error).
+  const skillMode = opts.skillMode ?? DEFAULT_SKILL_MODE;
+  const skillTools: AgentTool[] =
+    skillMode === "catalog" || skillMode === "full"
+      ? [createLoadSkillTool({ getMessages: () => agentForPlanTool?.state.messages ?? [] }) as unknown as AgentTool]
+      : [];
+
   const agent = new Agent({
     initialState: {
       systemPrompt: opts.systemPrompt,
       model,
-      tools: [...((opts.tools ?? []) as AgentTool[]), planTool],
+      tools: [...((opts.tools ?? []) as AgentTool[]), planTool, ...skillTools],
     },
     streamFn,
     beforeToolCall: async ({ toolCall }) => {
@@ -217,6 +233,13 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
         return { block: true, reason: IMAGE_PLAN_GATE_ERROR };
       }
       return undefined;
+    },
+    afterToolCall: async ({ toolCall, result, isError, context }) => {
+      if (toolCall.name !== "run_build123d" || skillTools.length === 0) return undefined;
+      const nudge = skillNudgeBlock(context.messages, result, isError);
+      if (!nudge) return undefined;
+      const content = Array.isArray(result.content) ? result.content : [];
+      return { content: [...content, nudge] };
     },
     // The persisted transcript is the source of truth; what the model sees is the
     // policy-transformed view (stale view sheets stubbed, compacted history windowed).

@@ -1,4 +1,4 @@
-import { assembleAgentPrompt } from "./build123dSkill";
+import { assembleAgentPrompt, DEFAULT_SKILL_MODE } from "./build123dSkill";
 import { DOC_TOPICS } from "./tools/lookupDocs";
 
 export const runtimePrompt = `You are Chamfer, an AI CAD designer that creates precise, manufacturable models from text, images, or both using build123d.
@@ -181,4 +181,4 @@ If the model cannot be completed within that limit, explain the remaining discre
 
 Do not expose private chain-of-thought.`;
 
-export const systemPrompt = assembleAgentPrompt(runtimePrompt, { skill: "core" });
+export const systemPrompt = assembleAgentPrompt(runtimePrompt, { skill: DEFAULT_SKILL_MODE });

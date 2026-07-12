@@ -278,16 +278,15 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
           const maxCadRuns =
             Number.isInteger(parsedMaxCadRuns) && parsedMaxCadRuns > 0 ? parsedMaxCadRuns : undefined;
 
-          const prompt = assembleAgentPrompt(runtimePrompt, {
-            skill: resolveAblationSkill(window.location.search, import.meta.env.DEV),
-          });
+          const skillMode = resolveAblationSkill(window.location.search, import.meta.env.DEV);
           const newSession = buildSession({
             conversationId: id,
             modelJson,
-            systemPrompt: prompt,
+            systemPrompt: assembleAgentPrompt(runtimePrompt, { skill: skillMode }),
             tools,
             priorMessages,
             maxCadRuns,
+            skillMode,
           });
           sessionRef.current = newSession;
           setSession(newSession);

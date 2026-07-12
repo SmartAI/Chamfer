@@ -40,7 +40,7 @@ The summary MUST preserve, verbatim where stated:
 3. Decisions and corrections made along the way, including anything the user explicitly rejected or changed their mind about.
 4. The most recent verify-gate verdict and measured overall dimensions, and what remains to be done next.
 
-Format as short titled sections with bullet lists. Do not include Python code; the latest script is stored separately and remains available to the agent.`;
+Format as short titled sections with bullet lists. Do not include Python code; the latest script is stored separately and remains available to the agent. Do not restate the content of loaded skills (load_skill results); they are re-attached to the context mechanically.`;
 
 /** True when a toolResult message carries a verify-gate verdict. */
 function hasGateVerdict(message: unknown): boolean {
