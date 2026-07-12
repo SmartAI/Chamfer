@@ -40,4 +40,5 @@ test("image design rejects CAD and incomplete plans before rendering a mapped sp
     .getByRole("button", { name: "run_build123d Complete", exact: true })
     .locator("..");
   await expect(completedRun.getByTestId("tool-gate")).toHaveAttribute("data-status", "passed", { timeout: 600_000 });
+  await expect(page.getByText(/Dominant-form review: the spacer is prismatic/)).toBeVisible();
 });

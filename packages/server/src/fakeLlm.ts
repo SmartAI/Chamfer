@@ -261,6 +261,12 @@ function* imagePlanGateStep(transcript: string, lastMessage: string): Generator<
     yield* streamToolCall("image-plan-run-valid", "run_build123d", { code: IMAGE_PLAN_SCRIPT });
     return;
   }
+  if (plans === 2 && !transcript.includes("Dominant-form review:")) {
+    yield* streamText(
+      "Dominant-form review: the spacer is prismatic, and the largest semantic mismatch is none; all seven silhouettes match the dimensioned cube before detail work.",
+    );
+    return;
+  }
   if (plans === 2) {
     yield* streamToolCall("image-plan-done", "update_plan", {
       ...IMAGE_PLAN,
