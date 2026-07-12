@@ -113,6 +113,9 @@ export const PLAN_NUDGE_MARKER = "[Chamfer plan check]";
  * component bucket individually stays within maxCadRuns. */
 export const PLAN_BUDGET_CEILING_FACTOR = 3;
 
+export const IMAGE_PLAN_GATE_ERROR =
+  "run_build123d is blocked for this image-triggered design request. Call update_plan first with a valid plan. The plan must include the goal, components with acceptance checks, interfaces, and a spec sheet in your own words that enumerates every readable dimension, feature, and spec-table row from the image. Each spec-sheet row must use non-empty check_refs that resolve to component checks, or a non-empty unverifiable_reason.";
+
 export function buildPlanNudgePrompt(incomplete: readonly { id: string; status: string }[]): string {
   const list = incomplete.map((c) => `"${c.id}" (${c.status})`).join(", ");
   return `${PLAN_NUDGE_MARKER} The plan still has unfinished components: ${list}. A component only counts as done after a gate-passed run declares it via COMPONENT and passes its planned checks, and update_plan records it. Continue with the next unfinished component now, or - only if the request genuinely changed - revise the plan with update_plan and state why. Do not stop while the plan has unfinished components and budget remains.`;
@@ -188,11 +191,18 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     },
   });
 
+  let imagePlanRequiredThisTurn = false;
+  let imagePlanAcceptedThisTurn = false;
+
   // update_plan validates against the live transcript (latest plan + gate evidence),
   // so it is session-owned: the closure resolves to the agent created just below.
   let agentForPlanTool: Agent | undefined;
   const planTool = createUpdatePlanTool({
     getMessages: () => agentForPlanTool?.state.messages ?? [],
+    requireSpecSheet: () => imagePlanRequiredThisTurn,
+    onAccepted: () => {
+      imagePlanAcceptedThisTurn = true;
+    },
   }) as unknown as AgentTool;
 
   const agent = new Agent({
@@ -202,6 +212,12 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       tools: [...((opts.tools ?? []) as AgentTool[]), planTool],
     },
     streamFn,
+    beforeToolCall: async ({ toolCall }) => {
+      if (toolCall.name === "run_build123d" && imagePlanRequiredThisTurn && !imagePlanAcceptedThisTurn) {
+        return { block: true, reason: IMAGE_PLAN_GATE_ERROR };
+      }
+      return undefined;
+    },
     // The persisted transcript is the source of truth; what the model sees is the
     // policy-transformed view (stale view sheets stubbed, compacted history windowed).
     transformContext: async (messages) => transformLlmContext(messages),
@@ -427,6 +443,8 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       selfCheckArmed = true;
       cadRunsByBucket.clear();
       planNudgedWithoutRun = false;
+      imagePlanRequiredThisTurn = Boolean(images?.length);
+      imagePlanAcceptedThisTurn = false;
       // Compaction runs between turns, before the prompt: when the LLM-visible context
       // is near the window, older history is summarized into a persisted compaction
       // row. Failures are non-fatal - the turn proceeds on the uncompacted context.

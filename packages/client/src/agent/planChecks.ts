@@ -72,6 +72,38 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
 
 export type PlanCheckEntry = Static<typeof PLAN_CHECK_ENTRY_SCHEMA>;
 
+export const PLAN_CHECK_REF_SCHEMA = Type.Object(
+  {
+    component_id: Type.String({ minLength: 1 }),
+    check_index: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export interface PlanCheckRef {
+  component_id: string;
+  check_index: number;
+}
+
+export const PLAN_SPEC_SHEET_ROW_SCHEMA = Type.Object(
+  {
+    id: Type.String({ minLength: 1 }),
+    text: Type.String({ minLength: 1 }),
+    source: Type.Union([Type.Literal("image"), Type.Literal("text")]),
+    check_refs: Type.Optional(Type.Array(PLAN_CHECK_REF_SCHEMA)),
+    unverifiable_reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export interface PlanSpecSheetRow {
+  id: string;
+  text: string;
+  source: "image" | "text";
+  check_refs?: PlanCheckRef[];
+  unverifiable_reason?: string;
+}
+
 const CHECK_KEYS: Record<string, { required: string[]; optional: string[] }> = {
   hole_through: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
   hole_blind: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
@@ -138,5 +170,41 @@ export function validatePlanCheck(value: unknown): string[] {
     if (check.tol_pct !== undefined && (!isNumber(check.tol_pct) || check.tol_pct <= 0)) errors.push("tol_pct must be positive");
   }
   if (check.target !== undefined && (typeof check.target !== "string" || !check.target)) errors.push("target must be a non-empty string");
+  return errors;
+}
+
+/** Runtime mirror for spec-sheet rows so update_plan can return row-level errors. */
+export function validatePlanSpecSheetRow(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return ["must be an object"];
+  const row = value as Record<string, unknown>;
+  const errors: string[] = [];
+  if (typeof row.id !== "string" || row.id.trim() === "") errors.push("id must be a non-empty string");
+  if (typeof row.text !== "string" || row.text.trim() === "") errors.push("text must be a non-empty string");
+  if (row.source !== "image" && row.source !== "text") errors.push('source must be "image" or "text"');
+  if (row.check_refs !== undefined && !Array.isArray(row.check_refs)) {
+    errors.push("check_refs must be an array");
+  } else {
+    for (const [index, valueRef] of ((row.check_refs as unknown[] | undefined) ?? []).entries()) {
+      if (!valueRef || typeof valueRef !== "object" || Array.isArray(valueRef)) {
+        errors.push(`check_refs[${index}] must be an object`);
+        continue;
+      }
+      const ref = valueRef as Record<string, unknown>;
+      if (typeof ref.component_id !== "string" || ref.component_id.trim() === "") {
+        errors.push(`check_refs[${index}].component_id must be a non-empty string`);
+      }
+      if (!Number.isInteger(ref.check_index) || (ref.check_index as number) < 0) {
+        errors.push(`check_refs[${index}].check_index must be an integer >= 0`);
+      }
+    }
+  }
+  if (row.unverifiable_reason !== undefined && typeof row.unverifiable_reason !== "string") {
+    errors.push("unverifiable_reason must be a string");
+  }
+  const hasChecks = Array.isArray(row.check_refs) && row.check_refs.length > 0;
+  const hasReason = typeof row.unverifiable_reason === "string" && row.unverifiable_reason.trim() !== "";
+  if (!hasChecks && !hasReason) {
+    errors.push("provide non-empty check_refs or a non-empty unverifiable_reason");
+  }
   return errors;
 }

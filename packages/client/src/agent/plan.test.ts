@@ -57,6 +57,84 @@ describe("validatePlanSnapshot", () => {
     expect(validatePlanSnapshot({ next: makePlan(), previous: undefined, evidence: noEvidence })).toEqual([]);
   });
 
+  it("requires a spec sheet for an image-triggered plan", () => {
+    const errors = validatePlanSnapshot({
+      next: makePlan(),
+      previous: undefined,
+      evidence: noEvidence,
+      requireSpecSheet: true,
+    });
+    expect(errors).toContain("spec_sheet is required for an image-triggered plan");
+  });
+
+  it("rejects spec rows without a check link or unverifiable reason", () => {
+    const plan = makePlan({
+      spec_sheet: [{ id: "image-width", text: "The overall width is 100 mm.", source: "image" }],
+    });
+    const errors = validatePlanSnapshot({
+      next: plan,
+      previous: undefined,
+      evidence: noEvidence,
+      requireSpecSheet: true,
+    });
+    expect(errors).toContain(
+      'spec_sheet row "image-width": provide non-empty check_refs or a non-empty unverifiable_reason',
+    );
+  });
+
+  it("rejects dangling spec-sheet check references and accepts existing component checks", () => {
+    const plan = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_index: 99 }],
+        },
+      ],
+    });
+    const dangling = validatePlanSnapshot({
+      next: plan,
+      previous: undefined,
+      evidence: noEvidence,
+      requireSpecSheet: true,
+    });
+    expect(dangling).toContain(
+      'spec_sheet row "image-width": check_refs[0] does not resolve to an existing component check',
+    );
+
+    plan.spec_sheet![0]!.check_refs = [{ component_id: "base", check_index: 0 }];
+    expect(
+      validatePlanSnapshot({
+        next: plan,
+        previous: undefined,
+        evidence: noEvidence,
+        requireSpecSheet: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts a non-empty unverifiable reason without check references", () => {
+    const plan = makePlan({
+      spec_sheet: [
+        {
+          id: "surface-finish",
+          text: "The drawing calls for a matte surface finish.",
+          source: "image",
+          unverifiable_reason: "The geometry kernel cannot measure surface finish.",
+        },
+      ],
+    });
+    expect(
+      validatePlanSnapshot({
+        next: plan,
+        previous: undefined,
+        evidence: noEvidence,
+        requireSpecSheet: true,
+      }),
+    ).toEqual([]);
+  });
+
   it("rejects duplicate, malformed, and reserved component ids", () => {
     const plan = makePlan({
       components: [
@@ -355,6 +433,23 @@ describe("createUpdatePlanTool", () => {
     });
     await expect(tool.execute("t1", next as never, undefined as never, undefined as never)).rejects.toThrow(
       /Plan rejected:[\s\S]*"lid" from the previous plan is missing[\s\S]*no gate-passed run/,
+    );
+  });
+
+  it("rejects an image-triggered snapshot without a spec sheet", async () => {
+    const tool = createUpdatePlanTool({ getMessages: () => [], requireSpecSheet: () => true });
+    await expect(tool.execute("t1", makePlan() as never, undefined as never, undefined as never)).rejects.toThrow(
+      /Plan rejected:[\s\S]*spec_sheet is required for an image-triggered plan/,
+    );
+  });
+
+  it("returns a row-level update_plan error for an unmapped spec row", async () => {
+    const tool = createUpdatePlanTool({ getMessages: () => [], requireSpecSheet: () => true });
+    const plan = makePlan({
+      spec_sheet: [{ id: "finish", text: "The finish is matte.", source: "image" }],
+    });
+    await expect(tool.execute("t1", plan as never, undefined as never, undefined as never)).rejects.toThrow(
+      /spec_sheet row "finish": provide non-empty check_refs or a non-empty unverifiable_reason/,
     );
   });
 });

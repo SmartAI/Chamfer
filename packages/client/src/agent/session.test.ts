@@ -724,6 +724,85 @@ describe("createSession agent-loop policies", () => {
     };
   }
 
+  it("blocks run_build123d for an image turn until update_plan accepts a spec-sheet plan", async () => {
+    const { tool, execute } = gateTool("failed");
+    const plan = {
+      goal: "single image-derived spacer",
+      components: [
+        {
+          id: "spacer",
+          description: "10 mm cube spacer shown in the image",
+          bbox_mm: [10, 10, 10],
+          status: "todo",
+          free_floating_reason: "single component",
+          checks: [{ kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
+        },
+      ],
+      interfaces: [],
+      spec_sheet: [
+        {
+          id: "cube-size",
+          text: "The image shows a 10 mm cube.",
+          source: "image",
+          check_refs: [{ component_id: "spacer", check_index: 0 }],
+        },
+      ],
+    };
+    const updatePlanCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{ type: "toolCall", id: "plan-1", name: "update_plan", arguments: plan }],
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("run-before-plan"),
+      updatePlanCall,
+      toolCallMessage("run-after-plan"),
+      textMessage("The planned CAD run completed."),
+      textMessage("No more work this turn."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Build the dimensioned part in this image", [new File(["image"], "drawing.png", { type: "image/png" })]);
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const rejectedRun = (latest?.messages ?? []).find((message) => {
+      const result = message as { role?: string; toolCallId?: string };
+      return result.role === "toolResult" && result.toolCallId === "run-before-plan";
+    }) as { isError?: boolean; content?: Array<{ text?: string }> } | undefined;
+    expect(rejectedRun?.isError).toBe(true);
+    expect(rejectedRun?.content?.[0]?.text).toContain("update_plan");
+    expect(rejectedRun?.content?.[0]?.text).toContain("spec sheet");
+    expect(rejectedRun?.content?.[0]?.text).toContain("every readable dimension, feature, and spec-table row");
+  });
+
+  it("does not apply the plan gate to a text-only turn", async () => {
+    const { tool, execute } = gateTool("failed");
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("text-run"),
+      textMessage("The CAD run completed."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("Build a text-only box");
+
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("injects the self-check once after a gate pass and lets the agent continue", async () => {
     const { tool } = gateTool("passed");
     const { streamFn, turnContexts } = makeScriptedStreamFn([

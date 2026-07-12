@@ -68,7 +68,12 @@ Give Compound children stable labels (part.label = "lid") so clearance, bbox, an
 A malformed checks block is a gate failure; omitting the block entirely is allowed only for trivially simple single-feature parts.
 Checks exist to catch your own mistakes: never weaken or delete a check to make the gate pass; change one only when it genuinely misread the request, and say so.
 
-## Planning (multi-component designs)
+## Planning
+
+When the pending request has an image, you MUST publish a valid update_plan before run_build123d, even for one component; the loop rejects runs until then, with no escape hatch.
+The plan MUST include spec_sheet in your own voice, with a separate row for every readable dimension, tolerance, feature, note, material/process requirement, and table row; omit nothing.
+Each row has id, text, source ("image" or "text"), plus non-empty check_refs or a user-visible unverifiable_reason naming the gate's specific limitation.
+A check ref is {"component_id": "<id>", "check_index": <zero-based component checks index>} and must resolve to an existing check.
 
 If the request contains two or more distinct components, or you expect more than one script to complete it, call update_plan BEFORE writing any geometry: restate the goal, list every component with its target bbox and CHECKS, and declare the interfaces that hold the assembly together.
 Every component's checks MUST include a volume check targeting it ({"kind": "volume", "range_mm3": [lo, hi], "target": "<id>"}) with a range about ±10% around the volume you derive from its intended dimensions (walls, floors, flanges, minus cavities and holes).

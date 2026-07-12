@@ -1,8 +1,13 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { validatePlanCheck, type PlanCheckEntry } from "./planChecks";
+import {
+  validatePlanCheck,
+  validatePlanSpecSheetRow,
+  type PlanCheckEntry,
+  type PlanSpecSheetRow,
+} from "./planChecks";
 
 export { parseComponentDeclaration } from "./componentDeclaration";
-export type { PlanCheckEntry } from "./planChecks";
+export type { PlanCheckEntry, PlanCheckRef, PlanSpecSheetRow } from "./planChecks";
 
 /**
  * The plan artifact: a persisted, loop-enforced component list for multi-part designs.
@@ -61,6 +66,8 @@ export interface Plan {
   goal: string;
   components: PlanComponent[];
   interfaces: PlanInterface[];
+  /** Required for image-triggered plans; optional but validated when present otherwise. */
+  spec_sheet?: PlanSpecSheetRow[];
 }
 
 /** Component ids must be label-safe slugs; "probe" is reserved for diagnostic runs. */
@@ -199,6 +206,7 @@ export interface ValidatePlanArgs {
   next: Plan;
   previous: Plan | undefined;
   evidence: Map<string, ComponentEvidence>;
+  requireSpecSheet?: boolean;
 }
 
 /**
@@ -213,7 +221,7 @@ export interface ValidatePlanArgs {
  *  - evidence: "done" requires a gate-passed run that declared the component and ran
  *    all of its planned checks.
  */
-export function validatePlanSnapshot({ next, previous, evidence }: ValidatePlanArgs): string[] {
+export function validatePlanSnapshot({ next, previous, evidence, requireSpecSheet = false }: ValidatePlanArgs): string[] {
   const errors: string[] = [];
 
   if (typeof next.goal !== "string" || next.goal.trim() === "") {
@@ -282,6 +290,32 @@ export function validatePlanSnapshot({ next, previous, evidence }: ValidatePlanA
         } else if (hi > VOLUME_RANGE_MAX_RATIO * lo) {
           errors.push(
             `component "${id}": volume range [${lo}, ${hi}] is too loose to catch topology mistakes; keep hi <= ${VOLUME_RANGE_MAX_RATIO}x lo (about ±10% around the derived volume)`,
+          );
+        }
+      }
+    }
+  }
+
+  if (requireSpecSheet && (!Array.isArray(next.spec_sheet) || next.spec_sheet.length === 0)) {
+    errors.push("spec_sheet is required for an image-triggered plan");
+  }
+  if (next.spec_sheet !== undefined && !Array.isArray(next.spec_sheet)) {
+    errors.push("spec_sheet must be an array");
+  } else {
+    const rowIds = new Set<string>();
+    const componentsById = new Map(next.components.map((component) => [component.id, component]));
+    for (const [index, row] of (next.spec_sheet ?? []).entries()) {
+      const label = typeof row?.id === "string" && row.id.trim() !== "" ? JSON.stringify(row.id) : String(index);
+      for (const error of validatePlanSpecSheetRow(row)) errors.push(`spec_sheet row ${label}: ${error}`);
+      if (typeof row?.id === "string" && row.id.trim() !== "") {
+        if (rowIds.has(row.id)) errors.push(`spec_sheet row ${label}: duplicate id`);
+        rowIds.add(row.id);
+      }
+      for (const [refIndex, ref] of (Array.isArray(row?.check_refs) ? row.check_refs : []).entries()) {
+        const component = componentsById.get(ref.component_id);
+        if (!component || !Number.isInteger(ref.check_index) || ref.check_index < 0 || !component.checks?.[ref.check_index]) {
+          errors.push(
+            `spec_sheet row ${label}: check_refs[${refIndex}] does not resolve to an existing component check`,
           );
         }
       }

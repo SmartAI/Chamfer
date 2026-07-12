@@ -174,6 +174,102 @@ function* planFlowStep(transcript: string, lastMessage: string): Generator<Assis
   yield* streamText("Assembly complete: base and lid built, touching, both verified.");
 }
 
+// --- image-plan-gate scenario (triggered by "image-plan-gate") ---
+// Exercises both deterministic rejection paths before completing a one-part image plan:
+// premature CAD run -> plan without spec sheet -> valid plan -> verified run -> done plan.
+const IMAGE_PLAN_CHECKS = [
+  { kind: "bbox", size_mm: [10, 10, 10], target: "spacer" },
+  { kind: "volume", range_mm3: [900, 1100], target: "spacer" },
+];
+
+const IMAGE_PLAN_WITHOUT_SPEC = {
+  goal: "10 mm spacer from the dimensioned drawing",
+  components: [
+    {
+      id: "spacer",
+      description: "10 mm cube spacer shown in the drawing",
+      bbox_mm: [10, 10, 10],
+      status: "todo",
+      free_floating_reason: "single component",
+      checks: IMAGE_PLAN_CHECKS,
+    },
+  ],
+  interfaces: [],
+};
+
+const IMAGE_PLAN = {
+  ...IMAGE_PLAN_WITHOUT_SPEC,
+  spec_sheet: [
+    {
+      id: "overall-size",
+      text: "The drawing shows a 10 mm overall width, depth, and height.",
+      source: "image",
+      check_refs: [{ component_id: "spacer", check_index: 0 }],
+    },
+    {
+      id: "surface-finish",
+      text: "The drawing calls for a matte surface finish.",
+      source: "image",
+      unverifiable_reason: "The geometry kernel cannot measure surface finish.",
+    },
+  ],
+};
+
+const IMAGE_PLAN_SCRIPT = [
+  "from build123d import *",
+  "# --- params ---",
+  "side = 10  # [1, 100] Side length in mm",
+  "# --- end params ---",
+  "# --- expect ---",
+  'EXPECT = {"bodies": 1, "bbox_mm": [10, 10, 10]}',
+  "# --- end expect ---",
+  "# --- checks ---",
+  "CHECKS = [",
+  '    {"kind": "bbox", "size_mm": [10, 10, 10], "target": "spacer"},',
+  '    {"kind": "volume", "range_mm3": [900, 1100], "target": "spacer"},',
+  "]",
+  "# --- end checks ---",
+  "# --- component ---",
+  'COMPONENT = "spacer"',
+  "# --- end component ---",
+  "spacer = Box(side, side, side)",
+  'spacer.label = "spacer"',
+  "result = spacer",
+].join("\n");
+
+function* imagePlanGateStep(transcript: string, lastMessage: string): Generator<AssistantMessageEvent> {
+  const plans = transcript.split('"name":"update_plan"').length - 1;
+  const runs = transcript.split('"name":"run_build123d"').length - 1;
+  if (lastMessage.includes("[Chamfer self-check]")) {
+    yield* streamText("The spacer and both image-derived specifications are accounted for.");
+    return;
+  }
+  if (runs === 0) {
+    yield* streamToolCall("image-plan-run-rejected", "run_build123d", { code: IMAGE_PLAN_SCRIPT });
+    return;
+  }
+  if (plans === 0) {
+    yield* streamToolCall("image-plan-invalid", "update_plan", IMAGE_PLAN_WITHOUT_SPEC);
+    return;
+  }
+  if (plans === 1) {
+    yield* streamToolCall("image-plan-valid", "update_plan", IMAGE_PLAN);
+    return;
+  }
+  if (runs === 1) {
+    yield* streamToolCall("image-plan-run-valid", "run_build123d", { code: IMAGE_PLAN_SCRIPT });
+    return;
+  }
+  if (plans === 2) {
+    yield* streamToolCall("image-plan-done", "update_plan", {
+      ...IMAGE_PLAN,
+      components: IMAGE_PLAN.components.map((component) => ({ ...component, status: "done" })),
+    });
+    return;
+  }
+  yield* streamText("Spacer complete: the image plan is built and verified.");
+}
+
 export function fakeLlm(): LlmStreamer {
   return {
     async *stream(_model, context): AsyncIterable<AssistantMessageEvent> {
@@ -191,6 +287,10 @@ export function fakeLlm(): LlmStreamer {
       const transcript = JSON.stringify(messages);
       if (transcript.includes("plan-flow")) {
         yield* planFlowStep(transcript, JSON.stringify(messages.at(-1)));
+        return;
+      }
+      if (transcript.includes("image-plan-gate")) {
+        yield* imagePlanGateStep(transcript, JSON.stringify(messages.at(-1)));
         return;
       }
       // The self-check nudge the session injects after a gate pass arrives as a
