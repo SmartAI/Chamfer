@@ -157,6 +157,14 @@ export function PlanCard({ plan }: PlanCardProps) {
                           {row.unverifiable_reason}
                         </span>
                       )}
+                      {row.revision_reason && (
+                        <span
+                          data-testid="plan-spec-revision"
+                          className="inline-flex items-center rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+                        >
+                          Revised: {row.revision_reason}
+                        </span>
+                      )}
                     </div>
                   );
                 })}

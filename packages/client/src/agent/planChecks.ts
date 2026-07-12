@@ -150,6 +150,13 @@ export const PLAN_SPEC_SHEET_ROW_SCHEMA = Type.Object(
     source: Type.Union([Type.Literal("image"), Type.Literal("text")]),
     check_refs: Type.Optional(Type.Array(PLAN_CHECK_REF_SCHEMA)),
     unverifiable_reason: Type.Optional(Type.String()),
+    revision_reason: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Why this published row was repointed to different checks or downgraded to unverifiable. Required for those changes and kept in later snapshots.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -160,6 +167,7 @@ export interface PlanSpecSheetRow {
   source: "image" | "text";
   check_refs?: PlanCheckRef[];
   unverifiable_reason?: string;
+  revision_reason?: string;
 }
 
 const CHECK_KEYS: Record<string, { required: string[]; optional: string[] }> = {
@@ -280,6 +288,12 @@ export function validatePlanSpecSheetRow(value: unknown): string[] {
   }
   if (row.unverifiable_reason !== undefined && typeof row.unverifiable_reason !== "string") {
     errors.push("unverifiable_reason must be a string");
+  }
+  if (
+    row.revision_reason !== undefined &&
+    (typeof row.revision_reason !== "string" || row.revision_reason.trim() === "")
+  ) {
+    errors.push("revision_reason must be a non-empty string when provided");
   }
   const hasChecks = Array.isArray(row.check_refs) && row.check_refs.length > 0;
   const hasReason = typeof row.unverifiable_reason === "string" && row.unverifiable_reason.trim() !== "";

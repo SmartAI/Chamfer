@@ -6,6 +6,7 @@ import {
   type PlanCheckEntry,
   type PlanSpecSheetRow,
 } from "./planChecks";
+import { validateSpecSheetRevision } from "./specSheetRevision";
 
 export { parseComponentDeclaration } from "./componentDeclaration";
 export type { PlanCheckEntry, PlanCheckRef, PlanSpecSheetRow } from "./planChecks";
@@ -473,6 +474,9 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
         }
       }
     }
+  }
+  if (previous?.spec_sheet && Array.isArray(next.spec_sheet)) {
+    errors.push(...validateSpecSheetRevision(next.spec_sheet, previous.spec_sheet));
   }
 
   for (const iface of interfaces) {

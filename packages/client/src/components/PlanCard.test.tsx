@@ -29,6 +29,7 @@ const plan: Plan = {
       text: "The drawing specifies a matte surface finish.",
       source: "image",
       unverifiable_reason: "The geometry kernel cannot measure surface finish.",
+      revision_reason: "The original evidence link measured geometry, not finish.",
     },
   ],
 };
@@ -81,6 +82,9 @@ describe("PlanCard", () => {
     expect(unverifiable.textContent).toContain("Unverifiable");
     expect(unverifiable.textContent).toContain("cannot measure surface finish");
     expect(unverifiable.className).toContain("bg-amber-50");
+    expect(screen.getByTestId("plan-spec-revision").textContent).toContain(
+      "Revised: The original evidence link measured geometry, not finish.",
+    );
   });
 
   it("still renders legacy snapshots whose checks and refs predate stable ids", () => {

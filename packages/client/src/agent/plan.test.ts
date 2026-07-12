@@ -136,6 +136,129 @@ describe("validatePlanSnapshot", () => {
     );
   });
 
+  it("keeps every published spec-sheet row by stable id", () => {
+    const previous = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_id: "volume" }],
+        },
+        {
+          id: "surface-finish",
+          text: "The drawing calls for a matte surface finish.",
+          source: "image",
+          unverifiable_reason: "The geometry kernel cannot measure surface finish.",
+        },
+      ],
+    });
+    const next = structuredClone(previous);
+    next.spec_sheet = next.spec_sheet!.filter((row) => row.id !== "surface-finish");
+
+    expect(validatePlanSnapshot({ next, previous, evidence: noEvidence })).toContain(
+      'spec_sheet row "surface-finish" from the previous plan is missing: published rows cannot be deleted',
+    );
+  });
+
+  it("requires a persistent revision reason when a spec row is repointed or downgraded", () => {
+    const previous = makePlan({
+      components: makePlan().components.map((component) =>
+        component.id === "base"
+          ? {
+              ...component,
+              checks: [
+                volumeCheck("base"),
+                { id: "envelope", kind: "bbox" as const, size_mm: [100, 80, 30], target: "base" },
+              ],
+            }
+          : component,
+      ),
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_id: "envelope" }],
+        },
+      ],
+    });
+    const repointed = structuredClone(previous);
+    repointed.spec_sheet![0]!.check_refs = [{ component_id: "base", check_id: "volume" }];
+    expect(validatePlanSnapshot({ next: repointed, previous, evidence: noEvidence }).join("\n")).toMatch(
+      /spec_sheet row "image-width".*repointed.*revision_reason/,
+    );
+
+    repointed.spec_sheet![0]!.revision_reason = "The image dimension labels material volume, not the envelope.";
+    expect(validatePlanSnapshot({ next: repointed, previous, evidence: noEvidence })).toEqual([]);
+
+    const reasonDropped = structuredClone(repointed);
+    delete reasonDropped.spec_sheet![0]!.revision_reason;
+    expect(validatePlanSnapshot({ next: reasonDropped, previous: repointed, evidence: noEvidence }).join("\n")).toMatch(
+      /revision_reason cannot be dropped/,
+    );
+
+    const downgraded = structuredClone(previous);
+    delete downgraded.spec_sheet![0]!.check_refs;
+    downgraded.spec_sheet![0]!.unverifiable_reason = "The drawing is too blurred to verify the dimension.";
+    expect(validatePlanSnapshot({ next: downgraded, previous, evidence: noEvidence }).join("\n")).toMatch(
+      /spec_sheet row "image-width".*unverifiable.*revision_reason/,
+    );
+    downgraded.spec_sheet![0]!.revision_reason = "The source crop is illegible at its native resolution.";
+    expect(validatePlanSnapshot({ next: downgraded, previous, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("allows spec-row text edits and new rows without revision reasons", () => {
+    const previous = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_id: "volume" }],
+        },
+      ],
+    });
+    const next = structuredClone(previous);
+    next.spec_sheet![0]!.text = "The overall body width is 100 mm.";
+    next.spec_sheet!.push({
+      id: "surface-finish",
+      text: "The drawing calls for a matte surface finish.",
+      source: "image",
+      unverifiable_reason: "The geometry kernel cannot measure surface finish.",
+    });
+
+    expect(validatePlanSnapshot({ next, previous, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("gate-gaming regression: rejects deleted and silently downgraded image evidence rows", () => {
+    const weakened = structuredClone(SEQ1_PLAN);
+    weakened.spec_sheet = weakened.spec_sheet!
+      .filter((row) => !new Set(["buttons", "bosses", "vent-pattern"]).has(row.id))
+      .map((row) =>
+        row.id === "shell-wall"
+          ? {
+              ...row,
+              check_refs: undefined,
+              unverifiable_reason: "Confirmed visually rather than by a kernel check.",
+            }
+          : row,
+      );
+
+    const errors = validatePlanSnapshot({ next: weakened, previous: SEQ1_PLAN, evidence: noEvidence }).join("\n");
+    expect(errors).toContain('spec_sheet row "buttons" from the previous plan is missing');
+    expect(errors).toContain('spec_sheet row "bosses" from the previous plan is missing');
+    expect(errors).toContain('spec_sheet row "vent-pattern" from the previous plan is missing');
+    expect(errors).toMatch(/spec_sheet row "shell-wall" was downgraded to unverifiable.*revision_reason/);
+
+    const reasoned = structuredClone(SEQ1_PLAN);
+    const wall = reasoned.spec_sheet!.find((row) => row.id === "shell-wall")!;
+    delete wall.check_refs;
+    wall.unverifiable_reason = "The kernel cannot sample the compound curvature reliably.";
+    wall.revision_reason = "The source dimension describes nominal thickness across a blended transition.";
+    expect(validatePlanSnapshot({ next: reasoned, previous: SEQ1_PLAN, evidence: noEvidence })).toEqual([]);
+  });
+
   it("accepts a non-empty unverifiable reason without check references", () => {
     const plan = makePlan({
       spec_sheet: [
