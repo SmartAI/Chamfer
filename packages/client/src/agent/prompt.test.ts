@@ -70,6 +70,14 @@ describe("systemPrompt", () => {
   });
 
   it("stays below the prompt size budget", () => {
-    expect(systemPrompt.length).toBeLessThan(16_000);
+    // Budget covers the runtime contract + core skill + the skill catalog
+    // (progressive disclosure keeps full skill bodies out of this prompt).
+    expect(systemPrompt.length).toBeLessThan(20_000);
+  });
+
+  it("carries the skill catalog but never a full skill body", () => {
+    expect(systemPrompt).toContain("<available_skills>");
+    expect(systemPrompt).toContain("load_skill");
+    expect(systemPrompt).not.toContain("## Canonical recipes");
   });
 });

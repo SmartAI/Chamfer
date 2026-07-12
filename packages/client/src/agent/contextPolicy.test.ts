@@ -6,6 +6,7 @@ import {
   isCompactionMessage,
   isSheetResult,
   SHEET_STUB_TEXT,
+  skillReinjectionMessage,
   transformLlmContext,
   type CompactionMessage,
 } from "./contextPolicy";
@@ -167,5 +168,69 @@ describe("compaction boundary", () => {
     const result = transformLlmContext(malformed);
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(malformed[0]);
+  });
+});
+
+describe("skill pinning across compaction", () => {
+  function skillLoad(details: object): AgentMessage {
+    return {
+      role: "toolResult",
+      toolCallId: "skill-1",
+      toolName: "load_skill",
+      content: [{ type: "text", text: "payload" }],
+      isError: false,
+      details,
+      timestamp: 0,
+    } as unknown as AgentMessage;
+  }
+
+  const row: CompactionMessage = {
+    role: "compaction",
+    summary: "summary",
+    keptTail: 1,
+    tokensBefore: 90_000,
+    timestamp: 42,
+  };
+
+  it("re-injects compacted-away skill loads right after the summary, deduped, with stable bytes", () => {
+    const messages = [
+      user("build a handle"),
+      skillLoad({ skill: "sweep-and-loft", loaded: true }),
+      skillLoad({ skill: "sweep-and-loft", deduped: true, loaded: true }),
+      skillLoad({ skill: "sweep-and-loft", resource: "snippets/sweep_diagnose.py", loaded: true }),
+      user("keep going"),
+      row as unknown as AgentMessage,
+      user("newest"),
+    ];
+
+    const context = transformLlmContext(messages);
+    const reinjected = context[1] as { role: string; content: { text: string }[] };
+    expect(reinjected.role).toBe("user");
+    const text = reinjected.content[0]?.text ?? "";
+    expect(text).toContain("loaded earlier in this conversation");
+    // The body once (dedupe collapsed the notice) plus the one loaded resource.
+    expect(text.match(/<skill name="sweep-and-loft"/g)).toHaveLength(1);
+    expect(text.match(/<skill-resource skill="sweep-and-loft" path="snippets\/sweep_diagnose\.py"/g)).toHaveLength(1);
+    // The kept tail follows unchanged after the re-injection.
+    expect(context[2]).toBe(messages[4]);
+    expect(context[3]).toBe(messages[6]);
+
+    expect(JSON.stringify(transformLlmContext(messages))).toBe(JSON.stringify(transformLlmContext(messages)));
+  });
+
+  it("re-injects nothing when loads are inside the visible window or absent", () => {
+    const inWindow = [
+      user("old"),
+      user("recent"),
+      skillLoad({ skill: "sweep-and-loft", loaded: true }),
+      { ...row, keptTail: 2 } as unknown as AgentMessage,
+    ];
+    // keptTail keeps the load visible; a duplicate would double the payload.
+    const context = transformLlmContext(inWindow);
+    expect(JSON.stringify(context).match(/sweep-and-loft/g)?.length).toBe(1);
+
+    expect(skillReinjectionMessage([user("no loads")], 1, 0)).toBeUndefined();
+    // Unknown skills (renamed between releases) are skipped, not fabricated.
+    expect(skillReinjectionMessage([skillLoad({ skill: "gone", loaded: true })], 1, 0)).toBeUndefined();
   });
 });

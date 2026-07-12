@@ -3,9 +3,14 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 const positive = Type.Number({ exclusiveMinimum: 0 });
 const nonNegative = Type.Number({ minimum: 0 });
 const target = Type.Optional(Type.String({ minLength: 1 }));
+// Fixed-length homogeneous arrays instead of Type.Tuple throughout this file:
+// TypeBox tuples serialize to draft-07 syntax (items: [...] + additionalItems),
+// which the Anthropic API rejects under its JSON Schema draft 2020-12 validation.
+const fixedNumbers = (item: ReturnType<typeof Type.Number> | ReturnType<typeof Type.Integer>, length: number) =>
+  Type.Array(item, { minItems: length, maxItems: length });
 const count = Type.Union([
   Type.Integer({ minimum: 0 }),
-  Type.Tuple([Type.Integer({ minimum: 0 }), Type.Integer({ minimum: 0 })]),
+  fixedNumbers(Type.Integer({ minimum: 0 }), 2),
 ]);
 
 export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
@@ -14,7 +19,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
       kind: Type.Union([Type.Literal("hole_through"), Type.Literal("hole_blind"), Type.Literal("hole_internal")]),
       diameter: positive,
       count: Type.Integer({ minimum: 0 }),
-      at_mm: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number()])),
+      at_mm: Type.Optional(fixedNumbers(Type.Number(), 3)),
       tol: Type.Optional(positive),
       target,
     },
@@ -33,7 +38,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("bbox"),
-      size_mm: Type.Tuple([positive, positive, positive]),
+      size_mm: fixedNumbers(positive, 3),
       tol: Type.Optional(positive),
       target,
     },
@@ -42,7 +47,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("volume"),
-      range_mm3: Type.Tuple([Type.Number(), Type.Number()]),
+      range_mm3: fixedNumbers(Type.Number(), 2),
       target,
     },
     { additionalProperties: false },
@@ -50,7 +55,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("wall_thickness"),
-      range_mm: Type.Tuple([positive, positive]),
+      range_mm: fixedNumbers(positive, 2),
       target,
     },
     { additionalProperties: false },

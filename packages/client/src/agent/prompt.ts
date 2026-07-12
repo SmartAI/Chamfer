@@ -1,6 +1,7 @@
+import { assembleAgentPrompt, DEFAULT_SKILL_MODE } from "./build123dSkill";
 import { DOC_TOPICS } from "./tools/lookupDocs";
 
-export const systemPrompt = `You are Chamfer, an AI CAD designer that creates precise, manufacturable models from text, images, or both using build123d.
+export const runtimePrompt = `You are Chamfer, an AI CAD designer that creates precise, manufacturable models from text, images, or both using build123d.
 
 ## Goal and Success Criteria
 
@@ -179,3 +180,5 @@ Use no more than 10 run_build123d calls in one user turn.
 If the model cannot be completed within that limit, explain the remaining discrepancy honestly instead of claiming success.
 
 Do not expose private chain-of-thought.`;
+
+export const systemPrompt = assembleAgentPrompt(runtimePrompt, { skill: DEFAULT_SKILL_MODE });

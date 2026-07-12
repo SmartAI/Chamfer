@@ -17,11 +17,15 @@ test("image design rejects CAD and incomplete plans before rendering a mapped sp
   });
   await page.getByTestId("composer-send").click();
 
-  const rejectedRun = page.getByTestId("tool-call-card").filter({ hasText: "run_build123d" }).filter({ hasText: "Failed" });
+  const rejectedRun = page
+    .getByRole("button", { name: "run_build123d Failed", exact: true })
+    .locator("..");
   await expect(rejectedRun).toContainText("update_plan", { timeout: 600_000 });
   await expect(rejectedRun).toContainText("spec sheet");
 
-  const rejectedPlan = page.getByTestId("tool-call-card").filter({ hasText: "update_plan" }).filter({ hasText: "Failed" });
+  const rejectedPlan = page
+    .getByRole("button", { name: "update_plan Failed", exact: true })
+    .locator("..");
   await expect(rejectedPlan).toContainText("spec_sheet is required", { timeout: 600_000 });
 
   const planCard = page.getByTestId("plan-card");
@@ -32,6 +36,8 @@ test("image design rejects CAD and incomplete plans before rendering a mapped sp
   await expect(page.getByTestId("plan-spec-check-link")).toContainText("spacer check 1");
   await expect(page.getByTestId("plan-spec-unverifiable")).toContainText("cannot measure surface finish");
 
-  const completedRun = page.getByTestId("tool-call-card").filter({ hasText: "run_build123d" }).filter({ hasText: "Complete" });
+  const completedRun = page
+    .getByRole("button", { name: "run_build123d Complete", exact: true })
+    .locator("..");
   await expect(completedRun.getByTestId("tool-gate")).toHaveAttribute("data-status", "passed", { timeout: 600_000 });
 });

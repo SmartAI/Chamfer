@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "docs:index": "node doc-index/docIndex.mjs",
+    "eval:build123d": "node --experimental-strip-types eval/run-build123d-ablation.mjs",
     "test": "vitest --run",
     "typecheck": "tsc --noEmit"
   },

@@ -1,14 +1,20 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { findSkill, skillBodyText, skillResourceText } from "./skillRegistry";
+import { isSkillLoadResult, skillLoadKey, type LoadSkillDetails } from "./tools/loadSkill";
 
 /**
  * Chamfer's LLM-visible context policy: what the model sees may be smaller than the
- * persisted transcript, but the transcript itself is never rewritten. Two mechanisms:
+ * persisted transcript, but the transcript itself is never rewritten. Three mechanisms:
  *
  * 1. Sheet stubbing: every run_build123d result carries a ~350KB seven-view PNG. Once
  *    enough of them accumulate, older sheets are replaced by a text stub in the LLM
  *    context only (the DB row and the UI keep the image).
  * 2. Compaction boundary: a persisted `compaction` row summarizes everything before it;
  *    the LLM context becomes [summary-as-user-message, kept tail, everything after].
+ * 3. Skill pinning: load_skill results are durable for the whole conversation. Loads
+ *    that fall behind the compaction boundary are re-injected right after the summary
+ *    (content re-read from the bundled registry, so the bytes are stable), which keeps
+ *    the cut free to move past them instead of blocking compaction.
  *
  * Everything here is pure and deterministic over the message array, so the same
  * history always produces the same LLM context (prompt-cache stability across
@@ -93,6 +99,49 @@ export function summaryAsUserMessage(row: CompactionMessage): AgentMessage {
   } as AgentMessage;
 }
 
+/**
+ * One user message restating every skill payload loaded before `visibleStart`,
+ * or undefined when none. Content comes from the current registry (constant
+ * within a session, so the produced context stays byte-stable for the prompt
+ * cache); payloads whose skill or resource no longer exists are skipped - the
+ * catalog still offers the current version for an explicit reload.
+ */
+export function skillReinjectionMessage(
+  messages: readonly unknown[],
+  visibleStart: number,
+  timestamp: number,
+): AgentMessage | undefined {
+  const seen = new Set<string>();
+  const blocks: string[] = [];
+  for (const message of messages.slice(0, visibleStart)) {
+    if (!isSkillLoadResult(message)) continue;
+    const details = (message as { details: LoadSkillDetails }).details;
+    if (details.deduped) continue;
+    const key = skillLoadKey(details);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const skill = findSkill(details.skill);
+    if (!skill) continue;
+    if (details.resource) {
+      const content = skill.resources.get(details.resource);
+      if (content !== undefined) blocks.push(skillResourceText(skill, details.resource, content));
+    } else {
+      blocks.push(skillBodyText(skill));
+    }
+  }
+  if (blocks.length === 0) return undefined;
+  return {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `The following skills were loaded earlier in this conversation (inside the compacted section) and remain in effect:\n\n${blocks.join("\n\n")}`,
+      },
+    ],
+    timestamp,
+  } as AgentMessage;
+}
+
 function stubSheet(message: AgentMessage): AgentMessage {
   const m = message as unknown as { content: ContentBlock[] };
   return {
@@ -142,7 +191,8 @@ export function transformLlmContext(messages: AgentMessage[]): AgentMessage[] {
         ...messages.slice(boundary.visibleStart, boundary.index),
         ...messages.slice(boundary.index + 1),
       ].filter((message) => !isCompactionMessage(message));
-      context = [summaryAsUserMessage(boundary.row), ...tail];
+      const skillContext = skillReinjectionMessage(messages, boundary.visibleStart, boundary.row.timestamp);
+      context = [summaryAsUserMessage(boundary.row), ...(skillContext ? [skillContext] : []), ...tail];
     } else {
       context = messages.filter((message) => !isCompactionMessage(message));
     }
