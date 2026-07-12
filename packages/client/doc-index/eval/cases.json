@@ -1,0 +1,46 @@
+[
+  {
+    "query": "loft between cross sections",
+    "expected_section": "introductory-examples#24-loft"
+  },
+  {
+    "query": "sweep multisection",
+    "expected_section": "examples-1#handle"
+  },
+  {
+    "query": "revolve usage",
+    "expected_section": "introductory-examples#23-revolve"
+  },
+  {
+    "query": "spline through control points",
+    "expected_section": "introductory-examples#12-defining-an-edge-with-a-spline"
+  },
+  {
+    "query": "helix pitch radius height",
+    "expected_section": "objects#1d-objects"
+  },
+  {
+    "query": "shell hollow wall offset",
+    "expected_section": "tutorial-lego#step-5-offset-to-create-walls"
+  },
+  {
+    "query": "pattern holes grid locations",
+    "expected_section": "examples-1#fast-grid-holes"
+  },
+  {
+    "query": "groove sweep subtract",
+    "expected_section": "introductory-examples#14-position-on-a-line-with-and-introduce-sweep"
+  },
+  {
+    "query": "ValueError: path must be provided",
+    "expected_section": "introductory-examples#14-position-on-a-line-with-and-introduce-sweep"
+  },
+  {
+    "query": "RuntimeError: Failed to create valid loft",
+    "expected_section": "introductory-examples#24-loft"
+  },
+  {
+    "query": "ValueError: 3D fillet operation takes only Edges",
+    "expected_section": "tutorial-design#step-8-apply-chamfers-and-fillets"
+  }
+]

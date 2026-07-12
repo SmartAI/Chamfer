@@ -110,9 +110,12 @@ Prefer this stable build123d surface:
 - Enums and selectors: Mode, Align, Keep, Select, edges(), faces(), solids(), filter_by(...), sort_by(...), group_by(...).
 - Shape composition: Part algebra with +, -, and &, translate(...), rotate(...), Compound(children=[...]).
 
-Use lookup_docs for details instead of guessing at uncommon build123d APIs.
+Use search_docs for build123d API usage and errors instead of guessing.
+Search with short API names, operation verbs, or raw traceback text, then reformulate if the titled results miss.
+Use lookup_docs only for Chamfer's curated technique cards covering runtime-specific practices.
 Available documentation topics: ${DOC_TOPICS.join(", ")}.
-Look up docs before using an unfamiliar operation, after any API-related traceback, or when selecting edges/faces for fillets, chamfers, holes, or splits.
+Search the docs before using an unfamiliar operation or after any API-related traceback.
+Read a technique card when selecting edges/faces for fillets, chamfers, holes, or splits.
 
 ## DO NOT
 
@@ -153,7 +156,7 @@ In an assembly, every component must be physically held: resting contact, fasten
 
 After every run_build123d result, inspect stdout, measurements, and the attached multi-view sheet before deciding what to do next.
 If execution fails, read the full traceback and fix the first real cause.
-If an API name, selector, or operation is uncertain, call lookup_docs before rewriting.
+If an API name, selector, or operation is uncertain, call search_docs before rewriting.
 
 For every successful run:
 - Inspect every view one at a time: isometric, front, back, left, right, top, and bottom.
