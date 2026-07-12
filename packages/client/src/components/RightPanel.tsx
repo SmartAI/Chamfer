@@ -9,7 +9,7 @@ import { ConnectedParamsPanel } from "./ParamsPanel";
 import { ScriptPanel } from "./ScriptPanel";
 
 export function RightPanel() {
-  const { mesh, params, isRendering } = useAppState();
+  const { bootStatus, mesh, params, isRendering } = useAppState();
   const geometry = useMemo(() => (mesh ? meshToGeometry(mesh) : null), [mesh]);
 
   // BufferGeometry allocates GPU-side buffers that are not garbage collected;
@@ -23,6 +23,18 @@ export function RightPanel() {
     <div className="flex h-full flex-col">
       <div className="relative min-h-0 flex-1">
         <Viewer geometry={geometry} />
+        {(bootStatus.phase === "downloading" || bootStatus.phase === "installing") && (
+          <div
+            data-testid="viewer-booting"
+            role="status"
+            className="absolute inset-0 z-20 flex items-center justify-center bg-[#f4f5f7]/80"
+          >
+            <div className="flex items-center gap-2 rounded-md border bg-background/95 px-3 py-2 text-sm font-medium shadow-sm backdrop-blur-sm">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              Preparing environment, please wait...
+            </div>
+          </div>
+        )}
         {isRendering && (
           <div
             data-testid="viewer-rendering"
