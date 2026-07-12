@@ -10,16 +10,7 @@ import {
   validatePlanSnapshot,
   type Plan,
 } from "../plan";
-
-const checkEntry = Type.Object(
-  {
-    kind: Type.String({
-      description:
-        "CHECKS kind exactly as run_build123d accepts it (hole_through, hole_blind, clearance, bbox, volume, count_faces, count_edges, symmetric); all other keys are passed through to the gate",
-    }),
-  },
-  { additionalProperties: true },
-);
+import { PLAN_CHECK_ENTRY_SCHEMA } from "../planChecks";
 
 const component = Type.Object({
   id: Type.String({
@@ -27,19 +18,15 @@ const component = Type.Object({
       'Stable lowercase slug (e.g. "lid"). Must equal the Compound child label and the script COMPONENT declaration; "probe" is reserved.',
   }),
   description: Type.String({ description: "What this component is, in one sentence." }),
-  bbox_mm: Type.Optional(
-    Type.Array(Type.Number(), {
+  bbox_mm: Type.Array(Type.Number(), {
       minItems: 3,
       maxItems: 3,
       description: "Target envelope in mm, sorted-compare semantics like EXPECT.bbox_mm.",
     }),
-  ),
-  checks: Type.Optional(
-    Type.Array(checkEntry, {
+  checks: Type.Array(PLAN_CHECK_ENTRY_SCHEMA, {
       description:
         "CHECKS entries this component must pass. A gate-passed run declaring the component must include every one of them before the component can be marked done.",
     }),
-  ),
   status: StringEnum(PLAN_COMPONENT_STATUSES as unknown as string[], {
     description:
       '"done" is accepted only with gate evidence; "abandoned" requires abandon_reason and is the only legal way to shrink the plan.',

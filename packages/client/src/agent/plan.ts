@@ -1,4 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { validatePlanCheck, type PlanCheckEntry } from "./planChecks";
+
+export { parseComponentDeclaration } from "./componentDeclaration";
+export type { PlanCheckEntry } from "./planChecks";
 
 /**
  * The plan artifact: a persisted, loop-enforced component list for multi-part designs.
@@ -20,12 +24,6 @@ export const PLAN_COMPONENT_STATUSES: readonly PlanComponentStatus[] = [
   "done",
   "abandoned",
 ];
-
-/** One CHECKS entry as the harness understands it; `kind` is validated, the rest is passed through. */
-export interface PlanCheckEntry {
-  kind: string;
-  [key: string]: unknown;
-}
 
 export interface PlanComponent {
   /** Stable slug; must equal the Compound child label and the script COMPONENT declaration. */
@@ -64,19 +62,6 @@ export interface Plan {
   components: PlanComponent[];
   interfaces: PlanInterface[];
 }
-
-/** CHECKS kinds the harness currently evaluates; plan checks outside this set are rejected. */
-export const KNOWN_CHECK_KINDS: ReadonlySet<string> = new Set([
-  "hole_through",
-  "hole_blind",
-  "hole_internal",
-  "clearance",
-  "bbox",
-  "volume",
-  "count_faces",
-  "count_edges",
-  "symmetric",
-]);
 
 /** Component ids must be label-safe slugs; "probe" is reserved for diagnostic runs. */
 const COMPONENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -259,16 +244,19 @@ export function validatePlanSnapshot({ next, previous, evidence }: ValidatePlanA
     if (component.status === "abandoned" && !component.abandon_reason?.trim()) {
       errors.push(`component "${id}": abandoning requires a non-empty abandon_reason`);
     }
-    if (component.bbox_mm !== undefined) {
+    if (component.status !== "abandoned" && component.bbox_mm === undefined) {
+      errors.push(`component "${id}": bbox_mm is required for buildable components`);
+    } else if (component.bbox_mm !== undefined) {
       const bbox = component.bbox_mm;
       if (!Array.isArray(bbox) || bbox.length !== 3 || bbox.some((v) => typeof v !== "number" || v <= 0)) {
         errors.push(`component "${id}": bbox_mm must be three positive numbers`);
       }
     }
-    for (const check of component.checks ?? []) {
-      if (!check || typeof check.kind !== "string" || !KNOWN_CHECK_KINDS.has(check.kind)) {
-        errors.push(`component "${id}": unknown check kind ${JSON.stringify(check?.kind)}`);
-      }
+    if (component.status !== "abandoned" && !Array.isArray(component.checks)) {
+      errors.push(`component "${id}": checks are required for buildable components`);
+    }
+    for (const [index, check] of (component.checks ?? []).entries()) {
+      for (const error of validatePlanCheck(check)) errors.push(`component "${id}": check ${index}: ${error}`);
     }
     // Every buildable component must carry a targeted, bounded volume check.
     // Volume is the cheapest topology detector: a sealed cavity, missing pocket,
@@ -279,9 +267,9 @@ export function validatePlanSnapshot({ next, previous, evidence }: ValidatePlanA
     if (component.status !== "abandoned") {
       const volume = (component.checks ?? []).find(
         (check): check is PlanCheckEntry & { range_mm3?: unknown; target?: unknown } =>
-          Boolean(check) && check.kind === "volume",
+          Boolean(check) && check.kind === "volume" && check.target === id,
       );
-      if (!volume || volume.target !== id) {
+      if (!volume) {
         errors.push(
           `component "${id}": checks must include a volume check targeting it, e.g. {"kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
         );
@@ -405,19 +393,6 @@ export function validatePlanSnapshot({ next, previous, evidence }: ValidatePlanA
  * Accepts `COMPONENT = "lid"` and `COMPONENT = ["base", "lid"]` with either quote
  * style; returns undefined when no declaration is found.
  */
-export function parseComponentDeclaration(code: string): string[] | undefined {
-  const match = /^[ \t]*COMPONENT[ \t]*=[ \t]*(.+)$/m.exec(code);
-  if (!match) return undefined;
-  const raw = (match[1] ?? "").split("#")[0]?.trim() ?? "";
-  const single = /^["']([^"']+)["']$/.exec(raw);
-  if (single) return [single[1] as string];
-  if (raw.startsWith("[")) {
-    const ids = [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1] as string);
-    if (ids.length > 0) return ids;
-  }
-  return undefined;
-}
-
 /** Budget bucket for a run: a component id, "assembly" for multi-component runs, "probe", or "general". */
 export function runBudgetBucket(declaration: string[] | undefined): string {
   if (!declaration || declaration.length === 0) return "general";

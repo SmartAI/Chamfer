@@ -344,6 +344,12 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
           content: [{ type: "text", text }],
           timestamp: Date.now(),
         } as AgentMessage);
+      } else if ((incomplete.length > 0 || missingAssembly) && planNudgedWithoutRun) {
+        lastError = {
+          kind: "generic",
+          message:
+            "Stopped with unfinished plan work after the agent ignored the plan check. Continue the conversation to resume the build.",
+        };
       } else if (incomplete.length === 0 && !missingAssembly && selfCheckArmed && gatePassedThisTurn) {
         selfCheckArmed = false;
         agent.followUp({

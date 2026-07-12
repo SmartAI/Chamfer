@@ -82,6 +82,15 @@ def test_valid_component_adds_no_gate_check():
     assert check_by_name(gate, "component_block") is None
 
 
+def test_duplicate_component_declarations_fail_instead_of_forging_evidence():
+    source = EXPECT_BOX + 'COMPONENT = "base"\nCOMPONENT = "lid"\n' + BOX_BODY
+    result = run(source)
+    entry = check_by_name(result["gate"], "component_block")
+    assert entry is not None and entry["passed"] is False
+    assert "exactly one" in entry["detail"]
+    assert "component" not in result["measurements"]
+
+
 # ---------- evidence echo in measurements ----------
 
 
@@ -95,6 +104,20 @@ def test_run_script_echoes_component_and_raw_checks():
     m = run(source)["measurements"]
     assert m["component"] == "lid"
     assert m["checks"] == [{"kind": "bbox", "size_mm": [10, 20, 30]}]
+
+
+def test_duplicate_checks_assignments_fail_instead_of_echoing_the_wrong_checks():
+    source = (
+        EXPECT_BOX
+        + '# --- checks ---\nCHECKS = [{"kind": "bbox", "size_mm": [10, 20, 30]}]\n# --- end checks ---\n'
+        + 'CHECKS = [{"kind": "volume", "range_mm3": [1, 2]}]\n'
+        + BOX_BODY
+    )
+    result = run(source)
+    entry = check_by_name(result["gate"], "checks_block")
+    assert entry is not None and entry["passed"] is False
+    assert "exactly one" in entry["detail"]
+    assert "checks" not in result["measurements"]
 
 
 def test_run_script_omits_echo_when_undeclared():

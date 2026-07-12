@@ -132,6 +132,11 @@ export interface Measurements {
   topology?: TopologyCounts;
   holes?: HoleMeasurement[];
   clearances?: ClearanceMeasurement[];
+  /** Plan evidence echoed verbatim by the harness after a valid declaration. */
+  component?: string | string[];
+  checks?: unknown[];
+  /** Child labels with no touching or interpenetrating partner. */
+  floating?: string[];
 }
 
 export interface MeshPayload {

@@ -404,19 +404,11 @@ def parse_checks(source: str):
         tree = ast.parse(source)
     except SyntaxError as e:
         raise ValueError(f"checks block: script does not parse: {e}")
-    node = next(
-        (
-            n
-            for n in tree.body
-            if start < n.lineno - 1 < end
-            and isinstance(n, ast.Assign)
-            and len(n.targets) == 1
-            and isinstance(n.targets[0], ast.Name)
-            and n.targets[0].id == "CHECKS"
-        ),
-        None,
-    )
-    if node is None:
+    nodes = _assignment_nodes(tree, "CHECKS")
+    if len(nodes) != 1:
+        raise ValueError("checks block must contain exactly one `CHECKS = [...]` assignment.")
+    node = nodes[0]
+    if not start < node.lineno - 1 < end:
         raise ValueError("checks block must contain a single `CHECKS = [...]` assignment.")
     try:
         raw = ast.literal_eval(node.value)
@@ -429,6 +421,17 @@ def parse_checks(source: str):
     return [_validate_check(i, entry) for i, entry in enumerate(raw)]
 
 
+def _assignment_nodes(tree, name):
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+
+
 def _single_assignment(source, name, context):
     """The literal value of a unique top-level `NAME = <literal>` assignment,
     or None when the script has no such assignment."""
@@ -436,19 +439,12 @@ def _single_assignment(source, name, context):
         tree = ast.parse(source)
     except SyntaxError as e:
         raise ValueError(f"{context}: script does not parse: {e}")
-    node = next(
-        (
-            n
-            for n in tree.body
-            if isinstance(n, ast.Assign)
-            and len(n.targets) == 1
-            and isinstance(n.targets[0], ast.Name)
-            and n.targets[0].id == name
-        ),
-        None,
-    )
-    if node is None:
+    nodes = _assignment_nodes(tree, name)
+    if not nodes:
         return None
+    if len(nodes) != 1:
+        raise ValueError(f"{context}: {name} must have exactly one top-level assignment.")
+    node = nodes[0]
     try:
         return ast.literal_eval(node.value)
     except ValueError:

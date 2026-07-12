@@ -971,7 +971,7 @@ describe("createSession agent-loop policies", () => {
     }).length;
   }
 
-  it("injects the plan nudge when stopping with unfinished components, but never twice without an intervening run", async () => {
+  it("reports an incomplete plan when the one allowed nudge is ignored", async () => {
     const { streamFn, turnContexts } = makeScriptedStreamFn([
       textMessage("planned enough, stopping."),
       textMessage("still stopping without running anything."),
@@ -993,6 +993,7 @@ describe("createSession agent-loop policies", () => {
     expect(turnContexts).toHaveLength(2);
     expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
     expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(0);
+    expect(latest?.error?.message).toMatch(/stopped with unfinished plan work/i);
   });
 
   it("re-arms the plan nudge after an intervening run_build123d call", async () => {
@@ -1195,6 +1196,7 @@ describe("createSession agent-loop policies", () => {
         {
           id: "spacer",
           description: "a spacer",
+          bbox_mm: [10, 10, 10],
           status: "todo",
           free_floating_reason: "single part",
           checks: [{ kind: "volume", range_mm3: [900, 1100], target: "spacer" }],

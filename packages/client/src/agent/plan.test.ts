@@ -3,14 +3,16 @@ import {
   collectComponentEvidence,
   hasAssemblyEvidence,
   latestPlan,
+  parseComponentDeclaration,
   planIncompleteComponents,
   runComponentIds,
   validatePlanSnapshot,
   type Plan,
+  type PlanCheckEntry,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
 
-function volumeCheck(id: string, lo = 5000, hi = 6000) {
+function volumeCheck(id: string, lo = 5000, hi = 6000): PlanCheckEntry {
   return { kind: "volume", range_mm3: [lo, hi], target: id };
 }
 
@@ -18,8 +20,8 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
   return {
     goal: "two-part housing",
     components: [
-      { id: "base", description: "housing base", status: "todo", checks: [volumeCheck("base")] },
-      { id: "lid", description: "flat lid", status: "todo", checks: [volumeCheck("lid")] },
+      { id: "base", description: "housing base", bbox_mm: [100, 80, 30], status: "todo", checks: [volumeCheck("base")] },
+      { id: "lid", description: "flat lid", bbox_mm: [100, 80, 5], status: "todo", checks: [volumeCheck("lid")] },
     ],
     interfaces: [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
     ...overrides,
@@ -80,9 +82,32 @@ describe("validatePlanSnapshot", () => {
 
   it("rejects unknown check kinds", () => {
     const plan = makePlan();
-    plan.components[0]!.checks = [...(plan.components[0]!.checks ?? []), { kind: "hole_sideways", count: 2 }];
+    plan.components[0]!.checks = [
+      ...(plan.components[0]!.checks ?? []),
+      { kind: "hole_sideways", count: 2 } as unknown as PlanCheckEntry,
+    ];
     const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
     expect(errors.join("\n")).toMatch(/unknown check kind "hole_sideways"/);
+  });
+
+  it("rejects missing design evidence and malformed harness checks", () => {
+    const plan = makePlan();
+    delete plan.components[0]!.bbox_mm;
+    plan.components[1]!.checks = [
+      volumeCheck("lid"),
+      { kind: "hole_through", diameter: -4, count: 1, target: "lid", surprise: true } as unknown as PlanCheckEntry,
+    ];
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence }).join("\n");
+    expect(errors).toMatch(/component "base": bbox_mm is required/);
+    expect(errors).toMatch(/component "lid": check 1/);
+    expect(errors).toMatch(/diameter must be a positive number/);
+    expect(errors).toMatch(/unknown keys: \["surprise"\]/);
+  });
+
+  it("accepts the volume check targeting the component regardless of check order", () => {
+    const plan = makePlan();
+    plan.components[0]!.checks = [volumeCheck("lid"), volumeCheck("base")];
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
   });
 
   it("requires a targeted, bounded volume check on every buildable component", () => {
@@ -116,8 +141,8 @@ describe("validatePlanSnapshot", () => {
   it("accepts an uncovered component with a free_floating_reason", () => {
     const plan = makePlan({
       components: [
-        { id: "base", description: "base", status: "todo", free_floating_reason: "single part on the bench", checks: [volumeCheck("base")] },
-        { id: "lid", description: "lid", status: "todo", free_floating_reason: "user wants it beside the base", checks: [volumeCheck("lid")] },
+        { id: "base", description: "base", bbox_mm: [10, 10, 10], status: "todo", free_floating_reason: "single part on the bench", checks: [volumeCheck("base")] },
+        { id: "lid", description: "lid", bbox_mm: [10, 10, 2], status: "todo", free_floating_reason: "user wants it beside the base", checks: [volumeCheck("lid")] },
       ],
       interfaces: [],
     });
@@ -164,7 +189,7 @@ describe("validatePlanSnapshot", () => {
   });
 
   it("rejects done without gate evidence and accepts it with evidence covering the planned checks", () => {
-    const check = { kind: "hole_through", diameter: 5.5, count: 4 };
+    const check: PlanCheckEntry = { kind: "hole_through", diameter: 5.5, count: 4 };
     const plan = makePlan();
     plan.components[0]!.status = "done";
     plan.components[0]!.checks = [check, volumeCheck("base")];
@@ -277,6 +302,14 @@ describe("evidence and plan derivation from the transcript", () => {
     expect(runComponentIds({ component: ["a", "b", 3 as unknown as string] })).toEqual(["a", "b"]);
     expect(runComponentIds({})).toEqual([]);
     expect(runComponentIds(undefined)).toEqual([]);
+  });
+
+  it("parses only one unambiguous top-level literal component declaration", () => {
+    expect(parseComponentDeclaration('COMPONENT = "lid"\nresult = Box(1, 1, 1)')).toEqual(["lid"]);
+    expect(parseComponentDeclaration('text = """\nCOMPONENT = "probe"\n"""\nresult = Box(1, 1, 1)')).toBeUndefined();
+    expect(parseComponentDeclaration('COMPONENT = ["base", name]\nresult = Box(1, 1, 1)')).toBeUndefined();
+    expect(parseComponentDeclaration('COMPONENT = "base"\nCOMPONENT = "probe"')).toBeUndefined();
+    expect(parseComponentDeclaration('COMPONENT = b"probe"')).toBeUndefined();
   });
 });
 

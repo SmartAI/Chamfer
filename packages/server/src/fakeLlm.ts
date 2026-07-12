@@ -74,8 +74,8 @@ const LID_CHECKS = [
 const PLAN_V1 = {
   goal: "base plate with a lid resting on it",
   components: [
-    { id: "base", description: "30x30x6 base plate", status: "todo", checks: BASE_CHECKS },
-    { id: "lid", description: "30x30x4 lid", status: "todo", checks: LID_CHECKS },
+    { id: "base", description: "30x30x6 base plate", bbox_mm: [30, 30, 6], status: "todo", checks: BASE_CHECKS },
+    { id: "lid", description: "30x30x4 lid", bbox_mm: [30, 30, 4], status: "todo", checks: LID_CHECKS },
   ],
   interfaces: [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
 };
