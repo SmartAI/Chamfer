@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import MiniSearch from "minisearch";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOC_INDEX_OPTIONS } from "../docSearchConfig";
@@ -78,8 +79,26 @@ describe("search_docs tool", () => {
     expect(result.details).toEqual({ query: "zzzzquuxnotacapterm", results: [] });
   });
 
+  it("retries the index load after a failed fetch instead of caching the rejection", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValue(indexResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = createSearchDocsTool();
+
+    await expect(tool.execute("search-fail", { query: "loft" })).rejects.toThrow("network down");
+
+    const result = await tool.execute("search-retry", { query: "loft between cross sections" });
+    expect(result.details.results.length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("returns the loft teaching section in the top 3 from the committed index", async () => {
-    const asset = readFileSync(join(process.cwd(), "public/docs/build123d-index.json"), "utf8");
+    const asset = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../../../public/docs/build123d-index.json"),
+      "utf8",
+    );
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(asset, { status: 200 })));
     const tool = createSearchDocsTool();
 

@@ -33,12 +33,19 @@ function resultText(query: string, results: SearchResult[]): string {
 export function createSearchDocsTool(): AgentTool<typeof parameters, SearchDetails> {
   let indexPromise: Promise<MiniSearch> | undefined;
   const loadIndex = () => {
-    indexPromise ??= fetch(INDEX_URL).then(async (response) => {
-      if (!response.ok) throw new Error(`Failed to load build123d documentation index: ${response.status}`);
-      const asset = await response.json() as { index?: unknown };
-      if (!asset.index) throw new Error("Build123d documentation index is malformed");
-      return MiniSearch.loadJS(asset.index as Parameters<typeof MiniSearch.loadJS>[0], DOC_INDEX_OPTIONS);
-    });
+    // A rejected load must not stick: drop the cached promise so the next call
+    // retries instead of failing every future search on one transient fetch error.
+    indexPromise ??= fetch(INDEX_URL)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Failed to load build123d documentation index: ${response.status}`);
+        const asset = await response.json() as { index?: unknown };
+        if (!asset.index) throw new Error("Build123d documentation index is malformed");
+        return MiniSearch.loadJS(asset.index as Parameters<typeof MiniSearch.loadJS>[0], DOC_INDEX_OPTIONS);
+      })
+      .catch((error: unknown) => {
+        indexPromise = undefined;
+        throw error;
+      });
     return indexPromise;
   };
 

@@ -114,6 +114,27 @@ describe("validatePlanSnapshot", () => {
     ).toEqual([]);
   });
 
+  it("rejects a snapshot that drops the previous plan's spec sheet", () => {
+    const previous = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_index: 0 }],
+        },
+      ],
+    });
+    const errors = validatePlanSnapshot({
+      next: makePlan(),
+      previous,
+      evidence: noEvidence,
+    });
+    expect(errors).toContain(
+      "spec_sheet cannot be dropped: the previous plan carries one; resubmit it (edited if needed)",
+    );
+  });
+
   it("accepts a non-empty unverifiable reason without check references", () => {
     const plan = makePlan({
       spec_sheet: [

@@ -299,6 +299,15 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
   if (requireSpecSheet && (!Array.isArray(next.spec_sheet) || next.spec_sheet.length === 0)) {
     errors.push("spec_sheet is required for an image-triggered plan");
   }
+  // The spec sheet is the durable record of what the agent read off the image; once
+  // the plan of record carries one, a later snapshot may not silently drop it.
+  if (
+    previous?.spec_sheet !== undefined &&
+    previous.spec_sheet.length > 0 &&
+    (!Array.isArray(next.spec_sheet) || next.spec_sheet.length === 0)
+  ) {
+    errors.push("spec_sheet cannot be dropped: the previous plan carries one; resubmit it (edited if needed)");
+  }
   if (next.spec_sheet !== undefined && !Array.isArray(next.spec_sheet)) {
     errors.push("spec_sheet must be an array");
   } else {

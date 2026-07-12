@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import MiniSearch from "minisearch";
 import { describe, expect, it } from "vitest";
 import { chunkRstDocument, INDEX_OPTIONS } from "./docIndex.mjs";
@@ -74,7 +75,7 @@ Use extrude here.
 });
 
 describe("generated build123d documentation index", () => {
-  const asset = JSON.parse(readFileSync(join(process.cwd(), "public/docs/build123d-index.json"), "utf8"));
+  const asset = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/docs/build123d-index.json"), "utf8"));
   const index = MiniSearch.loadJS(asset.index, INDEX_OPTIONS);
 
   it("contains the pinned full corpus with attribution and required chunk fields", () => {
