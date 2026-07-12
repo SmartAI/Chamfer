@@ -23,6 +23,13 @@ MAX_CHECKS = 32
 DEFAULT_CHECK_TOL = 0.5
 DEFAULT_SYMMETRY_TOL_PCT = 1.0
 
+COMPONENT_START = "# --- component ---"
+COMPONENT_END = "# --- end component ---"
+# Component ids double as plan component ids and Compound child labels; "probe"
+# marks a diagnostic run that never advances the plan.
+_COMPONENT_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+PROBE_COMPONENT = "probe"
+
 # Only the trailing `# [min, max] description` comment is regex-parsed; the
 # assignment structure itself comes from ast.parse (comments are invisible
 # to the AST, so a regex is the only option for them).
@@ -259,15 +266,17 @@ def parse_expect(source: str) -> dict:
 
 # Each kind maps to {required keys, optional keys}; "kind" itself is implicit.
 _CHECK_KEYS = {
-    "hole_through": ({"diameter", "count"}, {"tol"}),
-    "hole_blind": ({"diameter", "count"}, {"tol"}),
-    "clearance": ({"a", "b", "min_mm"}, set()),
+    "hole_through": ({"diameter", "count"}, {"tol", "target"}),
+    "hole_blind": ({"diameter", "count"}, {"tol", "target"}),
+    "hole_internal": ({"diameter", "count"}, {"tol", "target"}),
+    "clearance": ({"a", "b", "min_mm"}, {"max_mm"}),
     "bbox": ({"size_mm"}, {"target", "tol"}),
     "volume": ({"range_mm3"}, {"target"}),
     "count_faces": ({"count"}, {"target"}),
     "count_edges": ({"count"}, {"target"}),
     "symmetric": ({"plane"}, {"tol_pct"}),
 }
+_HOLE_CHECK_KINDS = {"hole_through": "through", "hole_blind": "blind", "hole_internal": "internal"}
 _SYMMETRY_PLANES = ("XY", "XZ", "YZ")
 
 
@@ -309,7 +318,7 @@ def _validate_check(index, raw):
         raise _check_error(index, f"{kind} has unknown keys: {sorted(unknown)}")
 
     spec = {"kind": kind}
-    if kind in ("hole_through", "hole_blind"):
+    if kind in _HOLE_CHECK_KINDS:
         d = raw["diameter"]
         if not _is_number(d) or d <= 0:
             raise _check_error(index, "diameter must be a positive number.")
@@ -319,6 +328,7 @@ def _validate_check(index, raw):
         spec.update(
             diameter=float(d), tol=float(tol),
             count=_validate_count(index, raw["count"], allow_range=False),
+            target=_target(index, raw),
         )
     elif kind == "clearance":
         for key in ("a", "b"):
@@ -328,6 +338,11 @@ def _validate_check(index, raw):
         if not _is_number(gap) or gap < 0:
             raise _check_error(index, "min_mm must be a number >= 0.")
         spec.update(a=raw["a"], b=raw["b"], min_mm=float(gap))
+        if "max_mm" in raw:
+            max_mm = raw["max_mm"]
+            if not _is_number(max_mm) or max_mm < gap:
+                raise _check_error(index, "max_mm must be a number >= min_mm.")
+            spec.update(max_mm=float(max_mm))
     elif kind == "bbox":
         size = raw["size_mm"]
         if (
@@ -389,19 +404,11 @@ def parse_checks(source: str):
         tree = ast.parse(source)
     except SyntaxError as e:
         raise ValueError(f"checks block: script does not parse: {e}")
-    node = next(
-        (
-            n
-            for n in tree.body
-            if start < n.lineno - 1 < end
-            and isinstance(n, ast.Assign)
-            and len(n.targets) == 1
-            and isinstance(n.targets[0], ast.Name)
-            and n.targets[0].id == "CHECKS"
-        ),
-        None,
-    )
-    if node is None:
+    nodes = _assignment_nodes(tree, "CHECKS")
+    if len(nodes) != 1:
+        raise ValueError("checks block must contain exactly one `CHECKS = [...]` assignment.")
+    node = nodes[0]
+    if not start < node.lineno - 1 < end:
         raise ValueError("checks block must contain a single `CHECKS = [...]` assignment.")
     try:
         raw = ast.literal_eval(node.value)
@@ -412,6 +419,75 @@ def parse_checks(source: str):
     if len(raw) > MAX_CHECKS:
         raise ValueError(f"CHECKS has {len(raw)} entries; at most {MAX_CHECKS} allowed.")
     return [_validate_check(i, entry) for i, entry in enumerate(raw)]
+
+
+def _assignment_nodes(tree, name):
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+
+
+def _single_assignment(source, name, context):
+    """The literal value of a unique top-level `NAME = <literal>` assignment,
+    or None when the script has no such assignment."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        raise ValueError(f"{context}: script does not parse: {e}")
+    nodes = _assignment_nodes(tree, name)
+    if not nodes:
+        return None
+    if len(nodes) != 1:
+        raise ValueError(f"{context}: {name} must have exactly one top-level assignment.")
+    node = nodes[0]
+    try:
+        return ast.literal_eval(node.value)
+    except ValueError:
+        raise ValueError(f"{context}: {name} must be a literal value.")
+
+
+def parse_component(source: str):
+    """Parse the optional COMPONENT declaration (plan evidence link).
+
+    Returns None when the script declares nothing, the declared string, or the
+    declared list of id strings. Raises ValueError with a user-facing message
+    on a malformed declaration; the gate surfaces that as a failed check.
+    """
+    raw = _single_assignment(source, "COMPONENT", "component declaration")
+    if raw is None:
+        return None
+    ids = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, (list, tuple)) else None
+    if not ids or not all(isinstance(i, str) for i in ids):
+        raise ValueError("COMPONENT must be a non-empty string or list of strings.")
+    for component_id in ids:
+        if not _COMPONENT_ID_RE.match(component_id):
+            raise ValueError(
+                f"COMPONENT id {component_id!r} must be a lowercase slug "
+                "(letters, digits, _ or -, starting with a letter)."
+            )
+    if PROBE_COMPONENT in ids and len(ids) > 1:
+        raise ValueError('COMPONENT "probe" marks a diagnostic run and cannot be combined with component ids.')
+    return raw if isinstance(raw, str) else ids
+
+
+def checks_literal(source: str):
+    """The raw CHECKS entries exactly as the script wrote them, or None.
+
+    Echoed in measurements so the plan's evidence rule can compare an accepted
+    plan's per-component checks against what a gate-passed run actually ran.
+    Raises ValueError on an unparseable script or non-list CHECKS.
+    """
+    raw = _single_assignment(source, "CHECKS", "checks block")
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("CHECKS must be a list of check dicts.")
+    return list(raw)
 
 
 # ---------- geometric diagnostics ----------
@@ -587,11 +663,16 @@ def _gate_check(name, passed, detail):
 
 
 def _resolve_target(shape, target):
-    """The shape a check applies to: the whole result, or one child by label.
+    """The shape a check applies to: the whole result, one child by label, or
+    the result itself when its own label matches (so a single-component run
+    with `result.label = "base"` satisfies the same targeted checks as the
+    assembly's "base" child does later).
 
     Returns (shape, error_detail); exactly one is None.
     """
     if target is None:
+        return shape, None
+    if (getattr(shape, "label", "") or "") == target:
         return shape, None
     labeled = _children_with_labels(shape)
     for label, child in labeled:
@@ -601,8 +682,8 @@ def _resolve_target(shape, target):
     return None, f"no child labeled {target!r}; available labels: {labels}"
 
 
-def _eval_hole_check(spec, holes):
-    wanted_kind = "through" if spec["kind"] == "hole_through" else "blind"
+def _eval_hole_check(spec, holes, label):
+    wanted_kind = _HOLE_CHECK_KINDS[spec["kind"]]
     d, tol = spec["diameter"], spec["tol"]
     matching = [h for h in holes if abs(h["diameterMm"] - d) <= tol]
     found = sum(1 for h in matching if h["kind"] == wanted_kind)
@@ -612,8 +693,9 @@ def _eval_hole_check(spec, holes):
         if kind != wanted_kind
     }
     other_text = ", ".join(f"{n} {kind}" for kind, n in others.items() if n)
+    scope = f" in {label}" if label else ""
     detail = (
-        f"{wanted_kind} holes d={d:g}±{tol:g} mm: expected {spec['count']}, found {found}"
+        f"{wanted_kind} holes{scope} d={d:g}±{tol:g} mm: expected {spec['count']}, found {found}"
         + (f" (also {other_text} at this diameter)" if other_text else "")
     )
     return found == spec["count"], detail
@@ -632,9 +714,17 @@ def _eval_clearance_check(spec, shape):
             f"{verdict['overlapMm3']:.6g} mm^3 (required gap >= {spec['min_mm']:g} mm)"
         )
     distance = verdict["distanceMm"]
-    return distance >= spec["min_mm"], (
+    max_mm = spec.get("max_mm")
+    if max_mm is None:
+        return distance >= spec["min_mm"], (
+            f"clearance {spec['a']}/{spec['b']}: measured {distance:.6g} mm, "
+            f"required >= {spec['min_mm']:g} mm"
+        )
+    # A bounded gap: max_mm 0 asserts contact ("touching"), a [min, max] range
+    # asserts a controlled fit. Interpenetration failed above either way.
+    return spec["min_mm"] <= distance <= max_mm, (
         f"clearance {spec['a']}/{spec['b']}: measured {distance:.6g} mm, "
-        f"required >= {spec['min_mm']:g} mm"
+        f"required {spec['min_mm']:g}..{max_mm:g} mm"
     )
 
 
@@ -648,8 +738,17 @@ def _eval_check(spec, shape, holes):
     """(passed, detail) for one normalized check spec. May raise; the caller
     converts exceptions into a failed check."""
     kind = spec["kind"]
-    if kind in ("hole_through", "hole_blind"):
-        return _eval_hole_check(spec, holes())
+    if kind in _HOLE_CHECK_KINDS:
+        target_label = spec.get("target")
+        if target_label is None:
+            return _eval_hole_check(spec, holes(), None)
+        # A targeted hole check runs the census on that child in isolation, so a
+        # bore capped or occupied by a neighbouring part still classifies by the
+        # component's own geometry (through), not the assembly's (blind/internal).
+        target, err = _resolve_target(shape, target_label)
+        if err:
+            return False, f"{kind} on {target_label}: {err}"
+        return _eval_hole_check(spec, _hole_census(target), target_label)
     if kind == "clearance":
         return _eval_clearance_check(spec, shape)
 
@@ -737,6 +836,10 @@ def _run_gate_checks(source, shape):
         _gate_check("valid", shape.is_valid, "B-rep validity (is_valid)"),
         _gate_check("nondegenerate", volume > 0, f"total volume {volume:.6g} mm^3 must be > 0"),
     ]
+    try:
+        parse_component(source)
+    except ValueError as e:
+        checks.append(_gate_check("component_block", False, str(e)))
     try:
         expect = parse_expect(source)
     except ValueError as e:
@@ -835,7 +938,19 @@ def _measure(shape):
         pass
     if len(labeled) >= 2:
         try:
-            m["clearances"] = _clearance_matrix(labeled)
+            matrix = _clearance_matrix(labeled)
+            m["clearances"] = matrix
+            # A child in contact with nothing (every pairwise state "apart") is
+            # floating: unsupported, unlocated, unassemblable. Listed only when
+            # non-empty so single-part and fully-connected results are unchanged.
+            in_contact = set()
+            for entry in matrix:
+                if entry["state"] != "apart":
+                    in_contact.add(entry["a"])
+                    in_contact.add(entry["b"])
+            floating = [label for label, _ in labeled if label not in in_contact]
+            if floating:
+                m["floating"] = floating
         except Exception:
             pass
     return m
@@ -870,9 +985,25 @@ def run_script(source: str) -> dict:
         vertices, triangles = shape.tessellate(tolerance=0.1)
         positions = [c for v in vertices for c in (v.X, v.Y, v.Z)]
         indices = [i for tri in triangles for i in tri]
+        measurements = _measure(shape)
+        # Plan evidence echo: which component(s) this run declared, and the raw
+        # CHECKS entries it ran. Malformed declarations surface through the gate
+        # (component_block / checks_block checks), not here.
+        try:
+            component = parse_component(source)
+            if component is not None:
+                measurements["component"] = component
+        except ValueError:
+            pass
+        try:
+            raw_checks = checks_literal(source)
+            if raw_checks is not None:
+                measurements["checks"] = raw_checks
+        except ValueError:
+            pass
         return {
             "stdout": stdout_text,
-            "measurements": _measure(shape),
+            "measurements": measurements,
             "positions": positions,
             "indices": indices,
             "gate": evaluate_gate(source, shape),

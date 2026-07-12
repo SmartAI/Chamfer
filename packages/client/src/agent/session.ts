@@ -5,6 +5,15 @@ import * as rest from "../api/rest";
 import { transformLlmContext } from "./contextPolicy";
 import { runCompaction } from "./compaction";
 import { withStreamRetry, type StreamRetryOptions } from "./retryStream";
+import {
+  PROBE_COMPONENT,
+  hasAssemblyEvidence,
+  latestPlan,
+  parseComponentDeclaration,
+  planIncompleteComponents,
+  runBudgetBucket,
+} from "./plan";
+import { createUpdatePlanTool } from "./tools/updatePlan";
 
 export interface ChatSession {
   conversationId: string;
@@ -94,6 +103,19 @@ export const DEFAULT_MAX_CAD_RUNS = 10;
 export const SELF_CHECK_MARKER = "[Chamfer self-check]";
 
 export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed for the current script. A passing gate only confirms the current geometry matches its own EXPECT block - it does not mean the whole request is done. Re-read the original request, list every requested part, feature, and step, and mark each one satisfied or missing against the latest measurements and views. If anything is missing, continue building it now. If everything is satisfied, reply with the final summary.`;
+
+/** Prefix identifying the deterministic plan stop-gate nudge (planned turns replace
+ * the prose self-check with this; the UI renders it as a system chip). */
+export const PLAN_NUDGE_MARKER = "[Chamfer plan check]";
+
+/** With an active plan, the per-turn ceiling is this multiple of maxCadRuns; each
+ * component bucket individually stays within maxCadRuns. */
+export const PLAN_BUDGET_CEILING_FACTOR = 3;
+
+export function buildPlanNudgePrompt(incomplete: readonly { id: string; status: string }[]): string {
+  const list = incomplete.map((c) => `"${c.id}" (${c.status})`).join(", ");
+  return `${PLAN_NUDGE_MARKER} The plan still has unfinished components: ${list}. A component only counts as done after a gate-passed run declares it via COMPONENT and passes its planned checks, and update_plan records it. Continue with the next unfinished component now, or - only if the request genuinely changed - revise the plan with update_plan and state why. Do not stop while the plan has unfinished components and budget remains.`;
+}
 const persistenceIds = new WeakMap<object, string>();
 
 export function registerMessagePersistenceId(message: unknown, id: string): void {
@@ -165,17 +187,25 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     },
   });
 
+  // update_plan validates against the live transcript (latest plan + gate evidence),
+  // so it is session-owned: the closure resolves to the agent created just below.
+  let agentForPlanTool: Agent | undefined;
+  const planTool = createUpdatePlanTool({
+    getMessages: () => agentForPlanTool?.state.messages ?? [],
+  }) as unknown as AgentTool;
+
   const agent = new Agent({
     initialState: {
       systemPrompt: opts.systemPrompt,
       model,
-      tools: (opts.tools ?? []) as AgentTool[],
+      tools: [...((opts.tools ?? []) as AgentTool[]), planTool],
     },
     streamFn,
     // The persisted transcript is the source of truth; what the model sees is the
     // policy-transformed view (stale view sheets stubbed, compacted history windowed).
     transformContext: async (messages) => transformLlmContext(messages),
   });
+  agentForPlanTool = agent;
   agent.state.messages = priorMessages;
 
   let nextSeq = priorMessages.length;
@@ -265,6 +295,13 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   // gate pass, nudging it to verify the WHOLE request is satisfied, not just the gate.
   let gatePassedThisTurn = false;
   let selfCheckArmed = false;
+  // Plan enforcement. With an active plan the budget is per component bucket (the
+  // COMPONENT declaration parsed from the script; probe runs drain only the global
+  // ceiling), and stopping with unfinished components triggers one deterministic
+  // follow-up. `planNudgedWithoutRun` guarantees a nudge is never injected twice
+  // without an intervening run_build123d call.
+  const cadRunsByBucket = new Map<string, number>();
+  let planNudgedWithoutRun = false;
 
   agent.subscribe((event: AgentEvent) => {
     if (
@@ -279,21 +316,48 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       event.type === "turn_end" &&
       event.message.role === "assistant" &&
       !event.message.errorMessage &&
-      selfCheckArmed &&
-      gatePassedThisTurn &&
       !cadRunLimitReached &&
       Array.isArray(event.message.content) &&
       !event.message.content.some((block) => (block as { type?: string })?.type === "toolCall") &&
       !agent.hasQueuedMessages()
     ) {
-      // The agent would stop here. Inject exactly one follow-up (pi drains the
+      // The agent would stop here. Inject at most one follow-up (pi drains the
       // follow-up queue only when the agent would otherwise end the run).
-      selfCheckArmed = false;
-      agent.followUp({
-        role: "user",
-        content: [{ type: "text", text: SELF_CHECK_PROMPT }],
-        timestamp: Date.now(),
-      } as AgentMessage);
+      const activePlan = latestPlan(agent.state.messages);
+      const incomplete = activePlan ? planIncompleteComponents(activePlan) : [];
+      const missingAssembly =
+        activePlan !== undefined &&
+        incomplete.length === 0 &&
+        !hasAssemblyEvidence(activePlan, agent.state.messages);
+      if ((incomplete.length > 0 || missingAssembly) && !planNudgedWithoutRun) {
+        // Deterministic stop-gate: the plan of record says work remains - either
+        // unfinished components, or interfaces nobody has measured because no
+        // gate-passed run declared all components together. Never fires twice
+        // without an intervening run_build123d call.
+        planNudgedWithoutRun = true;
+        const text =
+          incomplete.length > 0
+            ? buildPlanNudgePrompt(incomplete)
+            : `${PLAN_NUDGE_MARKER} Every component is done, but the interfaces are unverified: no gate-passed run has declared ALL components together. Build the assembly script (COMPONENT lists every component, Compound children labeled, interface clearance checks included) and run it before finishing.`;
+        agent.followUp({
+          role: "user",
+          content: [{ type: "text", text }],
+          timestamp: Date.now(),
+        } as AgentMessage);
+      } else if ((incomplete.length > 0 || missingAssembly) && planNudgedWithoutRun) {
+        lastError = {
+          kind: "generic",
+          message:
+            "Stopped with unfinished plan work after the agent ignored the plan check. Continue the conversation to resume the build.",
+        };
+      } else if (incomplete.length === 0 && !missingAssembly && selfCheckArmed && gatePassedThisTurn) {
+        selfCheckArmed = false;
+        agent.followUp({
+          role: "user",
+          content: [{ type: "text", text: SELF_CHECK_PROMPT }],
+          timestamp: Date.now(),
+        } as AgentMessage);
+      }
     }
     if (event.type === "message_end") {
       const seq = nextSeq;
@@ -318,7 +382,33 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     }
     if (event.type === "tool_execution_start" && event.toolName === "run_build123d") {
       cadRunsThisTurn += 1;
-      if (cadRunsThisTurn > maxCadRuns) {
+      planNudgedWithoutRun = false;
+      const activePlan = latestPlan(agent.state.messages);
+      if (activePlan) {
+        // Per-component budget under a global ceiling. Probe runs are diagnostics:
+        // they drain only the ceiling, never a component bucket.
+        const declaration = parseComponentDeclaration(
+          typeof (event.args as { code?: unknown })?.code === "string" ? (event.args as { code: string }).code : "",
+        );
+        const ceiling = PLAN_BUDGET_CEILING_FACTOR * maxCadRuns;
+        const isProbe = declaration?.length === 1 && declaration[0] === PROBE_COMPONENT;
+        let exceeded: string | undefined;
+        if (cadRunsThisTurn > ceiling) {
+          exceeded = `Stopped after ${ceiling} CAD runs in one turn (plan ceiling of ${PLAN_BUDGET_CEILING_FACTOR}x ${maxCadRuns}).`;
+        } else if (!isProbe) {
+          const bucket = runBudgetBucket(declaration);
+          const used = (cadRunsByBucket.get(bucket) ?? 0) + 1;
+          cadRunsByBucket.set(bucket, used);
+          if (used > maxCadRuns) {
+            exceeded = `Stopped after ${maxCadRuns} CAD runs for plan component "${bucket}" in one turn.`;
+          }
+        }
+        if (exceeded) {
+          cadRunLimitReached = true;
+          lastError = { kind: "generic", message: exceeded };
+          agent.abort();
+        }
+      } else if (cadRunsThisTurn > maxCadRuns) {
         cadRunLimitReached = true;
         lastError = { kind: "generic", message: `Stopped after ${maxCadRuns} CAD runs in one turn.` };
         agent.abort();
@@ -334,6 +424,8 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       cadRunLimitReached = false;
       gatePassedThisTurn = false;
       selfCheckArmed = true;
+      cadRunsByBucket.clear();
+      planNudgedWithoutRun = false;
       // Compaction runs between turns, before the prompt: when the LLM-visible context
       // is near the window, older history is summarized into a persisted compaction
       // row. Failures are non-fatal - the turn proceeds on the uncompacted context.

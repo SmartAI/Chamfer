@@ -36,7 +36,7 @@ def test_valid_block_normalizes():
     specs = harness.parse_checks(
         with_checks('[{"kind": "hole_through", "diameter": 6.5, "count": 4}]')
     )
-    assert specs == [{"kind": "hole_through", "diameter": 6.5, "tol": 0.5, "count": 4}]
+    assert specs == [{"kind": "hole_through", "diameter": 6.5, "tol": 0.5, "count": 4, "target": None}]
 
 
 def test_block_without_assignment_raises():

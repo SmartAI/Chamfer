@@ -19,6 +19,7 @@ import {
   type SessionState,
 } from "@/agent/session";
 import { latestGateSummary } from "@/agent/gateSummary";
+import { PROBE_COMPONENT, runComponentIds } from "@/agent/plan";
 import { systemPrompt } from "@/agent/prompt";
 import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
 import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
@@ -240,6 +241,11 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
               createRunBuild123dTool({
                 cad,
                 onSuccess: async ({ code, mesh, measurements }) => {
+                  // Probe runs (COMPONENT = "probe") are diagnostics the agent uses to
+                  // interrogate the gate; they must never displace the deliverable in
+                  // the viewer, the script panel, or the artifact store.
+                  const declaration = runComponentIds(measurements);
+                  if (declaration?.length === 1 && declaration[0] === PROBE_COMPONENT) return;
                   publishCadResult({ mesh, measurements });
                   restoreScript?.(code);
                   try {

@@ -6,8 +6,10 @@ import { Composer } from "./Composer";
 import { ErrorBanner } from "./ErrorBanner";
 import { PresetPrompts } from "./PresetPrompts";
 import { VerificationChip } from "./VerificationChip";
+import { PlanCard } from "./PlanCard";
 import { latestGateSummary } from "@/agent/gateSummary";
-import { SELF_CHECK_MARKER } from "@/agent/session";
+import { latestPlan } from "@/agent/plan";
+import { PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
 import { useChatState } from "@/state/chatState";
 
 const SETTINGS_HINT = "Configure a model and API key in Settings to start chatting.";
@@ -41,9 +43,9 @@ function lastUserMessageText(messages: unknown[]): string | undefined {
       ) as { text?: string } | undefined;
       text = textBlock?.text;
     }
-    // Injected self-check nudges are user-role messages but not the user's prompt;
-    // retrying one would just re-ask the agent to checklist itself.
-    if (text?.startsWith(SELF_CHECK_MARKER)) continue;
+    // Injected self-check and plan nudges are user-role messages but not the user's
+    // prompt; retrying one would just re-ask the agent to checklist itself.
+    if (text?.startsWith(SELF_CHECK_MARKER) || text?.startsWith(PLAN_NUDGE_MARKER)) continue;
     return text;
   }
   return undefined;
@@ -180,6 +182,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
   const disabledHint = !settingsPresent ? SETTINGS_HINT : undefined;
 
   const conversationTitle = conversations.find((c) => c.id === activeConversationId)?.title;
+  const plan = latestPlan(sessionState.messages);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -190,6 +193,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
           summary={latestGateSummary(sessionState.messages)}
         />
       </div>
+      {plan && <PlanCard plan={plan} />}
       {providerErrorBanner}
       {sessionState.error && (
         <ErrorBanner

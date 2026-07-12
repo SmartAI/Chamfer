@@ -8,6 +8,7 @@ import {
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { compactionBoundary, transformLlmContext, type CompactionMessage } from "./contextPolicy";
+import { isPlanToolResult } from "./plan";
 
 /**
  * Domain-aware context compaction for long design sessions, built on pi's compaction
@@ -65,9 +66,10 @@ export function needsCompaction(messages: AgentMessage[], model: Model<Api>): { 
 /**
  * First transcript index of the kept tail: walking back from the end until roughly
  * `keepRecentTokens` are retained, snapped back to the start of a user turn so
- * assistant/toolResult pairs are never split, and never past the newest verify-gate
- * result (the latest gate + measurements always stay verbatim). Returns a value
- * <= `floor` when there is nothing worth summarizing.
+ * assistant/toolResult pairs are never split, never past the newest verify-gate
+ * result (the latest gate + measurements always stay verbatim), and never past the
+ * newest accepted plan snapshot (the plan of record must stay in context verbatim).
+ * Returns a value <= `floor` when there is nothing worth summarizing.
  */
 export function findCompactionCut(
   messages: readonly unknown[],
@@ -82,14 +84,14 @@ export function findCompactionCut(
     if (accumulated >= keepRecentTokens) break;
   }
 
-  let latestGate = -1;
-  for (let index = messages.length - 1; index >= floor; index -= 1) {
-    if (hasGateVerdict(messages[index])) {
-      latestGate = index;
-      break;
+  for (const keep of [hasGateVerdict, isPlanToolResult]) {
+    for (let index = messages.length - 1; index >= floor; index -= 1) {
+      if (keep(messages[index])) {
+        if (index < candidate) candidate = index;
+        break;
+      }
     }
   }
-  if (latestGate >= 0 && latestGate < candidate) candidate = latestGate;
 
   for (let index = Math.min(candidate, messages.length - 1); index >= floor; index -= 1) {
     if (isUserMessage(messages[index])) return index;

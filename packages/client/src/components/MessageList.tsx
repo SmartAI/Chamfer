@@ -3,7 +3,7 @@ import { Streamdown, type Components, type CustomRendererProps } from "streamdow
 import { ArrowDown, Check, CheckCircle2, FoldVertical, ListChecks, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
-import { getMessagePersistenceId, SELF_CHECK_MARKER } from "@/agent/session";
+import { getMessagePersistenceId, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
 import { CadCodeActions } from "./CadCodeActions";
 
 function PythonCodeBlock({ code, language, isIncomplete }: CustomRendererProps) {
@@ -332,6 +332,19 @@ export function MessageList({ messages, streaming, generationFailed = false, emp
               >
                 <ListChecks className="h-3 w-3" aria-hidden="true" />
                 Self-check: confirming every part of the request is built
+              </span>
+            </div>
+          );
+        }
+        if (isUser && text.startsWith(PLAN_NUDGE_MARKER)) {
+          return (
+            <div key={index} className="flex justify-center">
+              <span
+                data-testid="plan-nudge-chip"
+                className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground"
+              >
+                <ListChecks className="h-3 w-3" aria-hidden="true" />
+                Plan check: unfinished components remain — continuing the build
               </span>
             </div>
           );

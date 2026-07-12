@@ -2,7 +2,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import * as rest from "../api/rest";
-import { classifySessionError, createSession, SELF_CHECK_MARKER, type SessionError, type SessionState } from "./session";
+import {
+  classifySessionError,
+  createSession,
+  PLAN_NUDGE_MARKER,
+  SELF_CHECK_MARKER,
+  type SessionError,
+  type SessionState,
+} from "./session";
 import { systemPrompt } from "./prompt";
 
 vi.mock("../api/rest", () => ({
@@ -921,5 +928,310 @@ describe("createSession agent-loop policies", () => {
       ((m as { content?: { type?: string }[] }).content ?? []).filter((b) => b.type === "image"),
     );
     expect(imagesInTranscript).toHaveLength(9);
+  });
+
+  // --- plan enforcement ---
+
+  function acceptedPlanResult(
+    components: { id: string; status: string }[],
+    interfaces: object[] = [],
+  ): unknown {
+    return {
+      role: "toolResult",
+      toolCallId: "plan-1",
+      toolName: "update_plan",
+      content: [{ type: "text", text: "Plan accepted" }],
+      details: {
+        plan: {
+          goal: "test goal",
+          components: components.map((c) => ({ ...c, description: c.id })),
+          interfaces,
+        },
+      },
+      isError: false,
+      timestamp: 1,
+    };
+  }
+
+  function toolCallWithCode(id: string, code: string): AssistantMessage {
+    return {
+      ...textMessage("", "toolUse"),
+      content: [{ type: "toolCall", id, name: "run_build123d", arguments: { code } }],
+    };
+  }
+
+  function countMarker(state: SessionState | undefined, marker: string): number {
+    return (state?.messages ?? []).filter((m) => {
+      const message = m as { role?: string; content?: { text?: string }[] };
+      return (
+        message.role === "user" &&
+        Array.isArray(message.content) &&
+        Boolean(message.content[0]?.text?.startsWith(marker))
+      );
+    }).length;
+  }
+
+  it("reports an incomplete plan when the one allowed nudge is ignored", async () => {
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("planned enough, stopping."),
+      textMessage("still stopping without running anything."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    // stop -> nudge -> stop; the second stop must NOT nudge again (no run in between).
+    expect(turnContexts).toHaveLength(2);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(0);
+    expect(latest?.error?.message).toMatch(/stopped with unfinished plan work/i);
+  });
+
+  it("re-arms the plan nudge after an intervening run_build123d call", async () => {
+    const { tool } = gateTool("passed");
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("stopping early."),
+      toolCallMessage("call-1"),
+      textMessage("ran once, stopping again."),
+      textMessage("final stop."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    // stop -> nudge -> run+stop -> nudge -> stop (no third nudge).
+    expect(turnContexts).toHaveLength(4);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(2);
+  });
+
+  it("falls back to the prose self-check when the plan is complete", async () => {
+    const { tool } = gateTool("passed");
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("call-1"),
+      textMessage("gate passed, stopping."),
+      textMessage("final summary."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [acceptedPlanResult([{ id: "base", status: "done" }])],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(0);
+    expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(1);
+  });
+
+  it("demands an assembly run when every component is done but the interfaces have no evidence", async () => {
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("both components done, wrapping up."),
+      textMessage("still not running the assembly."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [
+        acceptedPlanResult(
+          [
+            { id: "base", status: "done" },
+            { id: "lid", status: "done" },
+          ],
+          [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
+        ),
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("finish it");
+
+    expect(turnContexts).toHaveLength(2);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    const nudge = (latest?.messages ?? []).find((m) =>
+      JSON.stringify(m).includes("interfaces are unverified"),
+    );
+    expect(nudge).toBeDefined();
+  });
+
+  it("skips the assembly nudge once a gate-passed run declared all components", async () => {
+    const { tool } = gateTool("passed");
+    const assemblyEvidence = {
+      role: "toolResult",
+      toolCallId: "asm-1",
+      toolName: "run_build123d",
+      content: [{ type: "text", text: "ran" }],
+      details: {
+        gate: { status: "passed", checks: [] },
+        measurements: {
+          component: ["base", "lid"],
+          // Assembly evidence requires the interface's clearance check to have
+          // actually run; declaring the components alone is not enough.
+          checks: [{ kind: "clearance", a: "base", b: "lid", min_mm: 0, max_mm: 0 }],
+        },
+      },
+      isError: false,
+      timestamp: 2,
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("call-1"),
+      textMessage("assembly verified, done."),
+      textMessage("final summary."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [
+        acceptedPlanResult(
+          [
+            { id: "base", status: "done" },
+            { id: "lid", status: "done" },
+          ],
+          [{ a: "base", b: "lid", kind: "clearance", min_mm: 0, max_mm: 0 }],
+        ),
+        assemblyEvidence,
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("finish it");
+
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(0);
+    expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(1);
+  });
+
+  it("with an active plan, budgets runs per component bucket and aborts the bucket's overflow run", async () => {
+    const { tool, execute } = gateTool("passed");
+    const baseRun = (i: number) => toolCallWithCode(`call-${i}`, `COMPONENT = "base"\nresult = Box(1, 1, ${i})`);
+    const { streamFn } = makeScriptedStreamFn([
+      baseRun(1),
+      baseRun(2),
+      baseRun(3),
+      textMessage("should have been aborted"),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
+      maxCadRuns: 2,
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(latest?.error?.message).toContain('Stopped after 2 CAD runs for plan component "base"');
+  });
+
+  it("probe runs drain only the global ceiling, never a component bucket", async () => {
+    const { tool, execute } = gateTool("passed");
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallWithCode("call-1", 'COMPONENT = "probe"\nresult = Box(1, 1, 1)'),
+      toolCallWithCode("call-2", 'COMPONENT = "base"\nresult = Box(1, 1, 2)'),
+      toolCallWithCode("call-3", 'COMPONENT = "base"\nresult = Box(1, 1, 3)'),
+      textMessage("done"),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
+      maxCadRuns: 1,
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    // Probe + one base run execute; the second base run trips the bucket (1).
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(latest?.error?.message).toContain('plan component "base"');
+  });
+
+  it("registers update_plan so the agent can create a plan, and the accepted snapshot persists in the tool result", async () => {
+    const plan = {
+      goal: "single spacer",
+      components: [
+        {
+          id: "spacer",
+          description: "a spacer",
+          bbox_mm: [10, 10, 10],
+          status: "todo",
+          free_floating_reason: "single part",
+          checks: [{ kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
+        },
+      ],
+      interfaces: [],
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      {
+        ...textMessage("", "toolUse"),
+        content: [{ type: "toolCall", id: "plan-call", name: "update_plan", arguments: plan }],
+      },
+      textMessage("planned, stopping."),
+      textMessage("continuing after nudge."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("make a spacer");
+
+    const planResults = (latest?.messages ?? []).filter((m) => {
+      const message = m as { role?: string; toolName?: string; isError?: boolean; details?: { plan?: unknown } };
+      return message.role === "toolResult" && message.toolName === "update_plan" && !message.isError;
+    });
+    expect(planResults).toHaveLength(1);
+    expect((planResults[0] as { details: { plan: { goal: string } } }).details.plan.goal).toBe("single spacer");
+    // The new plan is live immediately: stopping with a todo component draws the nudge.
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
   });
 });
