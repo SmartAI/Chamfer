@@ -131,7 +131,7 @@ export function skillCatalog(): string {
   return [
     formatSkillsForSystemPrompt([...skills]),
     "",
-    'In this runtime skill files are fetched with the load_skill tool, not a file reader: load_skill(name) returns the full SKILL.md, and load_skill(name, resource) returns a file the skill references by relative path (for example resource "snippets/example.py"). Load a skill before the first use of an operation it covers, and after a failure matching its description. A loaded skill stays in context for the whole conversation; do not load it twice.',
+    'Use load_skill(name) for SKILL.md and load_skill(name, resource) for referenced files. Load a matching skill before first use or after failure; loaded skills persist, so do not reload them.',
   ].join("\n");
 }
 
