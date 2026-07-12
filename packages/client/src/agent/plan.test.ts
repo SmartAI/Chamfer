@@ -13,6 +13,7 @@ import {
   type PlanCheckEntry,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
+import { SEQ105_GATE_EVIDENCE, SEQ106_DONE_WITHOUT_FORM_REVIEW, SEQ106_PREVIOUS_PLAN } from "./fixtures/gateGamingFormReview";
 import {
   SEQ1_PLAN,
   SEQ5_PLAN,
@@ -40,13 +41,13 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
   };
 }
 
-function gatePassedRun(component: string | string[], checks: unknown[] = []): unknown {
+function gatePassedRun(component: string | string[], checks: unknown[] = [], measurements: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     role: "toolResult",
     toolName: "run_build123d",
     isError: false,
     content: [],
-    details: { gate: { status: "passed", checks: [] }, measurements: { component, checks } },
+    details: { gate: { status: "passed", checks: [] }, measurements: { component, checks, ...measurements } },
     timestamp: 1,
   };
 }
@@ -482,6 +483,56 @@ describe("validatePlanSnapshot", () => {
     const wrongEvidence = collectComponentEvidence([gatePassedRun("base", [{ kind: "bbox", size_mm: [1, 2, 3] }])]);
     const missing = validatePlanSnapshot({ next: plan, previous: undefined, evidence: wrongEvidence });
     expect(missing.join("\n")).toMatch(/was not part of the gate-passed run/);
+  });
+
+  it("requires a complete all-match form review tied to the latest evidence for image-plan done transitions", () => {
+    const previous = makePlan({
+      components: [{ id: "base", description: "housing base", bbox_mm: [100, 80, 30], status: "building", checks: [volumeCheck("base")], free_floating_reason: "single component" }],
+      interfaces: [],
+      spec_sheet: [{ id: "outline", text: "Rounded housing outline.", source: "image", check_refs: [{ component_id: "base", check_id: "volume" }] }],
+    });
+    const next = structuredClone(previous);
+    next.components[0]!.status = "done";
+    const evidence = collectComponentEvidence([{ ...gatePassedRun("base", [{ target: "base", range_mm3: [5000, 6000], kind: "volume" }]), toolCallId: "run-latest" }]);
+
+    expect(validatePlanSnapshot({ next, previous, evidence }).join("\n")).toMatch(/form_review.*isometric/i);
+
+    next.components[0]!.form_review = {
+      evidence_id: "run-latest",
+      views: [
+        { view: "isometric", verdict: "match", note: "Overall form matches." },
+        { view: "front", verdict: "match", note: "Front outline matches." },
+        { view: "back", verdict: "match", note: "Back outline matches." },
+        { view: "left", verdict: "match", note: "Left profile matches." },
+        { view: "right", verdict: "mismatch", note: "Neck bends too far." },
+        { view: "top", verdict: "match", note: "Top outline matches." },
+        { view: "bottom", verdict: "match", note: "Bottom outline matches." },
+      ],
+    };
+    expect(validatePlanSnapshot({ next, previous, evidence }).join("\n")).toMatch(/right.*mismatch/i);
+
+    next.components[0]!.form_review.views[4] = { view: "right", verdict: "match", note: "Right profile matches." };
+    next.components[0]!.form_review.evidence_id = "run-stale";
+    expect(validatePlanSnapshot({ next, previous, evidence }).join("\n")).toMatch(/run-stale.*latest gate-passed evidence.*run-latest/i);
+
+    next.components[0]!.form_review.evidence_id = "run-latest";
+    expect(validatePlanSnapshot({ next, previous, evidence })).toEqual([]);
+  });
+
+  it("leaves text-only done transitions unaffected by form review", () => {
+    const previous = makePlan();
+    previous.components[0]!.status = "building";
+    const next = structuredClone(previous);
+    next.components[0]!.status = "done";
+    const evidence = collectComponentEvidence([{ ...gatePassedRun("base", [{ target: "base", range_mm3: [5000, 6000], kind: "volume" }]), toolCallId: "run-1" }]);
+    expect(validatePlanSnapshot({ next, previous, evidence })).toEqual([]);
+  });
+
+  it("gate-gaming regression: rejects the scrubbed seq 106 done transition without a form review", () => {
+    const evidence = collectComponentEvidence([SEQ105_GATE_EVIDENCE]);
+    expect(
+      validatePlanSnapshot({ next: SEQ106_DONE_WITHOUT_FORM_REVIEW, previous: SEQ106_PREVIOUS_PLAN, evidence }).join("\n"),
+    ).toMatch(/form_review is missing the isometric view/);
   });
 });
 
