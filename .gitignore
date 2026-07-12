@@ -18,5 +18,9 @@ __pycache__/
 docs/internal/
 
 # Local agent/session artifacts (launch configs, worktrees)
+.agent/
+.agents/
 .claude/
 /.playwright-mcp
+/.playwright-cli/
+/skills-lock.json
