@@ -9,6 +9,29 @@
         60.0
       ],
       "children": [],
+      "holes": [
+        {
+          "axisDir": [
+            -0.0,
+            -0.0,
+            1.0
+          ],
+          "centerMm": [
+            48.0,
+            0.0,
+            2.5
+          ],
+          "depthMm": 5.0,
+          "diameterMm": 6.0,
+          "kind": "through"
+        }
+      ],
+      "topology": {
+        "edges": 27,
+        "faces": 11,
+        "shells": 1,
+        "vertices": 18
+      },
       "volumeMm3": 17057.12388980385
     },
     "params": [
@@ -73,6 +96,25 @@
           "volumeMm3": 1005.3096491487335
         }
       ],
+      "clearances": [
+        {
+          "a": "base",
+          "b": "pin",
+          "distanceMm": 31.0,
+          "state": "apart"
+        }
+      ],
+      "floating": [
+        "base",
+        "pin"
+      ],
+      "holes": [],
+      "topology": {
+        "edges": 15,
+        "faces": 9,
+        "shells": 2,
+        "vertices": 10
+      },
       "volumeMm3": 6405.309649148733
     },
     "params": [],
@@ -89,6 +131,13 @@
         12.0
       ],
       "children": [],
+      "holes": [],
+      "topology": {
+        "edges": 12,
+        "faces": 6,
+        "shells": 1,
+        "vertices": 8
+      },
       "volumeMm3": 11999.999999999998
     },
     "params": [

@@ -11,6 +11,7 @@ import {
   type Plan,
 } from "../plan";
 import { PLAN_CHECK_ENTRY_SCHEMA } from "../planChecks";
+import { PLAN_SPEC_SHEET_ROW_SCHEMA } from "../planChecks";
 
 const component = Type.Object({
   id: Type.String({
@@ -60,6 +61,12 @@ const parameters = Type.Object({
     description:
       "Physical relations that hold the assembly together. Every non-free-floating component must appear in at least one, and the graph must be connected.",
   }),
+  spec_sheet: Type.Optional(
+    Type.Array(PLAN_SPEC_SHEET_ROW_SCHEMA, {
+      description:
+        "The agent's own reading of every dimension, feature, and spec-table row visible in the request image. Each row links to component checks by component_id and zero-based check_index, or states why it is unverifiable.",
+    }),
+  ),
 });
 
 /**
@@ -71,12 +78,16 @@ const parameters = Type.Object({
 export function createUpdatePlanTool(deps: {
   /** Live view of the session transcript (agent.state.messages). */
   getMessages: () => readonly unknown[];
+  /** Whether the pending user turn contains an image and therefore requires a spec sheet. */
+  requireSpecSheet?: () => boolean;
+  /** Notifies the session only after a snapshot has passed validation. */
+  onAccepted?: (plan: Plan) => void;
 }): AgentTool<typeof parameters, { plan: Plan }> {
   return {
     name: UPDATE_PLAN_TOOL_NAME,
     label: "Update plan",
     description:
-      "Create or revise the design plan for a multi-component request: the component list, per-component checks, and the interfaces that hold the assembly together. Submit the complete plan every time (never a delta). Call it before writing any geometry when the request has two or more distinct components or needs more than one script, and again whenever the decomposition changes or a component is finished.",
+      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_index}, or state a non-empty unverifiable_reason. Submit the complete plan every time, never a delta.",
     parameters,
     execute: async (_toolCallId, args) => {
       const messages = deps.getMessages();
@@ -85,10 +96,12 @@ export function createUpdatePlanTool(deps: {
         next,
         previous: latestPlan(messages),
         evidence: collectComponentEvidence(messages),
+        requireSpecSheet: deps.requireSpecSheet?.() ?? false,
       });
       if (errors.length > 0) {
         throw new Error(`Plan rejected:\n${errors.map((e) => `- ${e}`).join("\n")}`);
       }
+      deps.onAccepted?.(next);
       return {
         content: [
           {

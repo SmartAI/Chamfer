@@ -23,6 +23,7 @@ import { PROBE_COMPONENT, runComponentIds } from "@/agent/plan";
 import { systemPrompt } from "@/agent/prompt";
 import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
 import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
+import { createSearchDocsTool } from "@/agent/tools/searchDocs";
 import { useOptionalAppState } from "@/state/appState";
 
 const EMPTY_SESSION_STATE: SessionState = { messages: [], streaming: false };
@@ -245,8 +246,8 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
 
         if (modelJson) {
           // During the CAD boot window (cad === null) the session is built without
-          // run_build123d; lookup_docs is always available.
-          const tools: AgentTool[] = [createLookupDocsTool()];
+          // run_build123d; both documentation tools are always available.
+          const tools: AgentTool[] = [createLookupDocsTool(), createSearchDocsTool()];
           if (cad && publishCadResult) {
             tools.unshift(
               createRunBuild123dTool({

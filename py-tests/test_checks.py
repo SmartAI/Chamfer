@@ -39,6 +39,24 @@ def test_valid_block_normalizes():
     assert specs == [{"kind": "hole_through", "diameter": 6.5, "tol": 0.5, "count": 4, "target": None}]
 
 
+def test_hole_anchor_normalizes_with_default_tolerance():
+    specs = harness.parse_checks(
+        with_checks(
+            '[{"kind": "hole_through", "diameter": 6.5, "count": 1, "at_mm": [30, 15, 0]}]'
+        )
+    )
+    assert specs == [
+        {
+            "kind": "hole_through",
+            "diameter": 6.5,
+            "tol": 0.5,
+            "count": 1,
+            "target": None,
+            "at_mm": [30.0, 15.0, 0.0],
+        }
+    ]
+
+
 def test_block_without_assignment_raises():
     src = "# --- checks ---\nx = 1\n# --- end checks ---\n" + BOX_BODY
     with pytest.raises(ValueError, match="CHECKS"):
@@ -80,7 +98,11 @@ def test_unknown_key_raises():
         '{"kind": "volume", "range_mm3": [2, 1]}',
         '{"kind": "count_faces", "count": [2, 1]}',
         '{"kind": "count_faces", "count": 1.5}',
+        '{"kind": "wall_thickness", "range_mm": [0, 3]}',
+        '{"kind": "wall_thickness", "range_mm": [4, 3]}',
+        '{"kind": "hole_through", "diameter": 5, "count": 1, "at_mm": [1, 2]}',
         '{"kind": "symmetric", "plane": "AB"}',
+        '{"kind": "symmetric", "plane": "XY", "target": ""}',
         '{"kind": "symmetric", "plane": "XY", "tol_pct": 0}',
         '"not a dict"',
     ],
@@ -99,6 +121,15 @@ def test_too_many_checks_raises():
 def test_count_range_is_accepted():
     specs = harness.parse_checks(with_checks('[{"kind": "count_faces", "count": [6, 10]}]'))
     assert specs[0]["count"] == [6, 10]
+
+
+def test_wall_thickness_check_normalizes():
+    specs = harness.parse_checks(
+        with_checks('[{"kind": "wall_thickness", "range_mm": [3, 4.25], "target": "case"}]')
+    )
+    assert specs == [
+        {"kind": "wall_thickness", "range_mm": [3.0, 4.25], "target": "case"}
+    ]
 
 
 # ---------- gate integration ----------
@@ -144,6 +175,69 @@ def test_checks_run_even_when_expect_block_is_missing():
     assert agent_checks(gate)[0]["passed"]
 
 
+SHELL_3_5 = """
+from build123d import *
+outer = Box(30, 30, 30, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+inner = Box(23, 23, 23, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+result = outer - inner
+"""
+
+SHELL_EXPECT = '# --- expect ---\nEXPECT = {"bodies": 1, "bbox_mm": [30, 30, 30]}\n# --- end expect ---\n'
+
+
+def test_wall_thickness_check_passes_for_on_spec_shell():
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "wall_thickness", "range_mm": [3.4, 3.6]}]',
+            body=SHELL_3_5,
+            expect=SHELL_EXPECT,
+        )
+    )
+    assert gate["status"] == "passed", agent_checks(gate)[0]["detail"]
+
+
+def test_wall_thickness_check_fails_for_shell_half_mm_off_spec():
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "wall_thickness", "range_mm": [3.4, 3.6]}]',
+            body=SHELL_3_5.replace("Box(23, 23, 23", "Box(24, 24, 24"),
+            expect=SHELL_EXPECT,
+        )
+    )
+    check = agent_checks(gate)[0]
+    assert not check["passed"]
+    assert "measured [3, 3] mm" in check["detail"]
+
+
+def test_wall_thickness_target_scopes_measurement_to_labeled_child():
+    body = """
+from build123d import *
+good = Pos(-25, 0, 0) * (
+    Box(30, 30, 30, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+    - Box(23, 23, 23, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+)
+good.label = "good"
+thin = Pos(25, 0, 0) * (
+    Box(30, 30, 30, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+    - Box(24, 24, 24, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+)
+thin.label = "thin"
+result = Compound(children=[good, thin])
+"""
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "wall_thickness", "range_mm": [3.4, 3.6], "target": "good"},'
+            ' {"kind": "wall_thickness", "range_mm": [3.4, 3.6]}]',
+            body=body,
+            expect='# --- expect ---\nEXPECT = {"bodies": 2, "bbox_mm": [80, 30, 30]}\n# --- end expect ---\n',
+        )
+    )
+    targeted, whole = agent_checks(gate)
+    assert targeted["passed"], targeted["detail"]
+    assert not whole["passed"]
+    assert "measured [3, 3.5] mm" in whole["detail"]
+
+
 PLATE = """
 from build123d import *
 with BuildPart() as p:
@@ -169,6 +263,13 @@ PLATE_EXPECT = '# --- expect ---\nEXPECT = {"bodies": 1, "bbox_mm": [80, 50, 8]}
 def test_hole_through_check_passes_on_four_through_holes():
     gate = gate_of(with_checks(HOLE_CHECK, body=PLATE, expect=PLATE_EXPECT))
     assert gate["status"] == "passed"
+    assert agent_checks(gate) == [
+        {
+            "name": "check:hole_through[0]",
+            "passed": True,
+            "detail": "through holes d=6.5±0.5 mm: expected 4, found 4",
+        }
+    ]
 
 
 def test_hole_through_check_fails_when_one_hole_is_blind():
@@ -178,6 +279,21 @@ def test_hole_through_check_fails_when_one_hole_is_blind():
     assert not check["passed"]
     assert "expected 4, found 3" in check["detail"]
     assert "1 blind" in check["detail"]
+
+
+def test_hole_anchor_matches_only_bore_at_declared_position():
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "hole_through", "diameter": 6.5, "count": 1, "at_mm": [30.2, 15, 0], "tol": 0.25},'
+            ' {"kind": "hole_through", "diameter": 6.5, "count": 1, "at_mm": [0, 0, 0]}]',
+            body=PLATE,
+            expect=PLATE_EXPECT,
+        )
+    )
+    anchored, elsewhere = agent_checks(gate)
+    assert anchored["passed"], anchored["detail"]
+    assert not elsewhere["passed"]
+    assert "found 0" in elsewhere["detail"]
 
 
 def test_hole_blind_check_counts_blind_holes():
@@ -306,6 +422,28 @@ result = Box(10, 10, 10) + Pos(7, 0, 0) * Box(4, 4, 4)
     check = agent_checks(gate)[0]
     assert not check["passed"]
     assert "asymmetric volume" in check["detail"]
+
+
+def test_symmetric_target_evaluates_only_named_child():
+    body = """
+from build123d import *
+centered = Box(10, 10, 10, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+centered.label = "centered"
+offset = Pos(20, 0, 0) * Box(10, 10, 10, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+offset.label = "offset"
+result = Compound(children=[centered, offset])
+"""
+    gate = gate_of(
+        with_checks(
+            '[{"kind": "symmetric", "plane": "YZ", "target": "centered"},'
+            ' {"kind": "symmetric", "plane": "YZ"}]',
+            body=body,
+            expect='# --- expect ---\nEXPECT = {"bodies": 2, "bbox_mm": [30, 10, 10]}\n# --- end expect ---\n',
+        )
+    )
+    targeted, whole = agent_checks(gate)
+    assert targeted["passed"], targeted["detail"]
+    assert not whole["passed"], whole["detail"]
 
 
 def test_check_evaluator_crash_fails_that_check_only(monkeypatch):
