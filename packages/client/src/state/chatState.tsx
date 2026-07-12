@@ -20,7 +20,9 @@ import {
 } from "@/agent/session";
 import { latestGateSummary } from "@/agent/gateSummary";
 import { PROBE_COMPONENT, runComponentIds } from "@/agent/plan";
-import { systemPrompt } from "@/agent/prompt";
+import { resolveAblationSkill } from "@/agent/ablation";
+import { assembleAgentPrompt } from "@/agent/build123dSkill";
+import { runtimePrompt } from "@/agent/prompt";
 import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
 import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
 import { createSearchDocsTool } from "@/agent/tools/searchDocs";
@@ -276,10 +278,13 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
           const maxCadRuns =
             Number.isInteger(parsedMaxCadRuns) && parsedMaxCadRuns > 0 ? parsedMaxCadRuns : undefined;
 
+          const prompt = assembleAgentPrompt(runtimePrompt, {
+            skill: resolveAblationSkill(window.location.search, import.meta.env.DEV),
+          });
           const newSession = buildSession({
             conversationId: id,
             modelJson,
-            systemPrompt,
+            systemPrompt: prompt,
             tools,
             priorMessages,
             maxCadRuns,
