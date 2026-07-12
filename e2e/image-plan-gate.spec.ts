@@ -33,7 +33,7 @@ test("image design rejects CAD and incomplete plans before rendering a mapped sp
   await expect(page.getByTestId("plan-progress")).toHaveText("1/1 components", { timeout: 600_000 });
   await page.getByTestId("plan-card-toggle").click();
   await expect(page.getByTestId("plan-spec-row")).toHaveCount(2);
-  await expect(page.getByTestId("plan-spec-check-link")).toContainText("spacer check 1");
+  await expect(page.getByTestId("plan-spec-check-link")).toContainText("spacer envelope");
   await expect(page.getByTestId("plan-spec-unverifiable")).toContainText("cannot measure surface finish");
 
   const completedRun = page

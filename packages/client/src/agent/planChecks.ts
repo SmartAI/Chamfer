@@ -3,6 +3,13 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 const positive = Type.Number({ exclusiveMinimum: 0 });
 const nonNegative = Type.Number({ minimum: 0 });
 const target = Type.Optional(Type.String({ minLength: 1 }));
+// Stable identity within the component: spec-sheet refs and snapshot diffing
+// match checks by this id, so it must survive plan revisions unchanged.
+const checkId = Type.String({
+  minLength: 1,
+  description:
+    'Stable short slug identifying this check within its component (e.g. "wall", "volume"); unique per component and kept identical across plan revisions.',
+});
 // Fixed-length homogeneous arrays instead of Type.Tuple throughout this file:
 // TypeBox tuples serialize to draft-07 syntax (items: [...] + additionalItems),
 // which the Anthropic API rejects under its JSON Schema draft 2020-12 validation.
@@ -16,6 +23,7 @@ const count = Type.Union([
 export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
+      id: checkId,
       kind: Type.Union([Type.Literal("hole_through"), Type.Literal("hole_blind"), Type.Literal("hole_internal")]),
       diameter: positive,
       count: Type.Integer({ minimum: 0 }),
@@ -27,6 +35,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   ),
   Type.Object(
     {
+      id: checkId,
       kind: Type.Literal("clearance"),
       a: Type.String({ minLength: 1 }),
       b: Type.String({ minLength: 1 }),
@@ -37,6 +46,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   ),
   Type.Object(
     {
+      id: checkId,
       kind: Type.Literal("bbox"),
       size_mm: fixedNumbers(positive, 3),
       tol: Type.Optional(positive),
@@ -46,6 +56,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   ),
   Type.Object(
     {
+      id: checkId,
       kind: Type.Literal("volume"),
       range_mm3: fixedNumbers(Type.Number(), 2),
       target,
@@ -54,6 +65,7 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   ),
   Type.Object(
     {
+      id: checkId,
       kind: Type.Literal("wall_thickness"),
       range_mm: fixedNumbers(positive, 2),
       target,
@@ -61,11 +73,12 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
-    { kind: Type.Union([Type.Literal("count_faces"), Type.Literal("count_edges")]), count, target },
+    { id: checkId, kind: Type.Union([Type.Literal("count_faces"), Type.Literal("count_edges")]), count, target },
     { additionalProperties: false },
   ),
   Type.Object(
     {
+      id: checkId,
       kind: Type.Literal("symmetric"),
       plane: Type.Union([Type.Literal("XY"), Type.Literal("XZ"), Type.Literal("YZ")]),
       tol_pct: Type.Optional(positive),
@@ -80,14 +93,20 @@ export type PlanCheckEntry = Static<typeof PLAN_CHECK_ENTRY_SCHEMA>;
 export const PLAN_CHECK_REF_SCHEMA = Type.Object(
   {
     component_id: Type.String({ minLength: 1 }),
-    check_index: Type.Integer({ minimum: 0 }),
+    check_id: Type.String({ minLength: 1 }),
   },
   { additionalProperties: false },
 );
 
+/**
+ * Reference to a component check by its stable id. Snapshots persisted before
+ * check ids existed carry `{component_id, check_index}` instead; they are
+ * migrated by position when the next snapshot is validated, and the plan
+ * artifact renders them by index as a fallback.
+ */
 export interface PlanCheckRef {
   component_id: string;
-  check_index: number;
+  check_id: string;
 }
 
 export const PLAN_SPEC_SHEET_ROW_SCHEMA = Type.Object(
@@ -137,17 +156,32 @@ function validCount(value: unknown, allowRange: boolean): boolean {
   );
 }
 
-/** Runtime mirror of the harness CHECKS contract, with user-facing plan errors. */
+/** Stable check identity: same slug rules as component ids. */
+export const CHECK_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * Keys that exist only on plan checks (identity and audit metadata); run CHECKS
+ * entries never carry them, so they are stripped before any plan-to-run comparison.
+ */
+export const PLAN_CHECK_METADATA_KEYS: readonly string[] = ["id"];
+
+/**
+ * Runtime mirror of the harness CHECKS contract plus the plan-only metadata
+ * keys, with user-facing plan errors.
+ */
 export function validatePlanCheck(value: unknown): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return ["must be an object"];
   const check = value as Record<string, unknown>;
   const kind = check.kind;
   if (typeof kind !== "string" || !(kind in CHECK_KEYS)) return [`unknown check kind ${JSON.stringify(kind)}`];
   const contract = CHECK_KEYS[kind] as { required: string[]; optional: string[] };
-  const keys = Object.keys(check).filter((key) => key !== "kind");
+  const keys = Object.keys(check).filter((key) => key !== "kind" && !PLAN_CHECK_METADATA_KEYS.includes(key));
   const missing = contract.required.filter((key) => !(key in check));
   const unknown = keys.filter((key) => !contract.required.includes(key) && !contract.optional.includes(key));
   const errors: string[] = [];
+  if (typeof check.id !== "string" || !CHECK_ID_PATTERN.test(check.id)) {
+    errors.push(`id must be a short slug matching ${CHECK_ID_PATTERN}, stable across plan revisions`);
+  }
   if (missing.length > 0) errors.push(`missing keys: ${JSON.stringify(missing)}`);
   if (unknown.length > 0) errors.push(`unknown keys: ${JSON.stringify(unknown)}`);
   if (missing.length > 0) return errors;
@@ -198,8 +232,8 @@ export function validatePlanSpecSheetRow(value: unknown): string[] {
       if (typeof ref.component_id !== "string" || ref.component_id.trim() === "") {
         errors.push(`check_refs[${index}].component_id must be a non-empty string`);
       }
-      if (!Number.isInteger(ref.check_index) || (ref.check_index as number) < 0) {
-        errors.push(`check_refs[${index}].check_index must be an integer >= 0`);
+      if (typeof ref.check_id !== "string" || ref.check_id.trim() === "") {
+        errors.push(`check_refs[${index}].check_id must be a non-empty string naming a component check id`);
       }
     }
   }

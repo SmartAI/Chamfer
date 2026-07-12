@@ -16,7 +16,7 @@ const plan: Plan = {
       id: "housing-volume",
       text: "The housing base has a bounded material volume.",
       source: "image",
-      check_refs: [{ component_id: "base", check_index: 0 }],
+      check_refs: [{ component_id: "base", check_id: "volume" }],
     },
     {
       id: "surface-finish",
@@ -48,14 +48,14 @@ describe("PlanCard", () => {
     expect(iface.textContent).toContain("≤0mm");
   });
 
-  it("expanded: links spec rows to component checks and distinguishes unverifiable rows", () => {
+  it("expanded: links spec rows to component checks by id and distinguishes unverifiable rows", () => {
     const planWithChecks: Plan = {
       ...plan,
       components: plan.components.map((component) =>
         component.id === "base"
           ? {
               ...component,
-              checks: [{ kind: "volume", range_mm3: [5000, 6000], target: "base" }],
+              checks: [{ id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "base" }],
             }
           : component,
       ),
@@ -64,13 +64,39 @@ describe("PlanCard", () => {
     fireEvent.click(screen.getByTestId("plan-card-toggle"));
 
     const link = screen.getByTestId("plan-spec-check-link");
-    expect(link.textContent).toContain("base check 1");
-    expect(link.getAttribute("href")).toBe("#plan-check-base-0");
-    expect(document.getElementById("plan-check-base-0")?.textContent).toContain("volume");
+    expect(link.textContent).toContain("base volume");
+    expect(link.getAttribute("href")).toBe("#plan-check-base-volume");
+    expect(document.getElementById("plan-check-base-volume")?.textContent).toContain("volume");
 
     const unverifiable = screen.getByTestId("plan-spec-unverifiable");
     expect(unverifiable.textContent).toContain("Unverifiable");
     expect(unverifiable.textContent).toContain("cannot measure surface finish");
     expect(unverifiable.className).toContain("bg-amber-50");
+  });
+
+  it("still renders legacy snapshots whose checks and refs predate stable ids", () => {
+    const legacyPlan = {
+      ...plan,
+      components: plan.components.map((component) =>
+        component.id === "base"
+          ? { ...component, checks: [{ kind: "volume", range_mm3: [5000, 6000], target: "base" }] }
+          : component,
+      ),
+      spec_sheet: [
+        {
+          id: "housing-volume",
+          text: "The housing base has a bounded material volume.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_index: 0 }],
+        },
+      ],
+    } as unknown as Plan;
+    render(<PlanCard plan={legacyPlan} />);
+    fireEvent.click(screen.getByTestId("plan-card-toggle"));
+
+    const link = screen.getByTestId("plan-spec-check-link");
+    expect(link.textContent).toContain("base check 1");
+    expect(link.getAttribute("href")).toBe("#plan-check-base-0");
+    expect(document.getElementById("plan-check-base-0")?.textContent).toContain("volume");
   });
 });

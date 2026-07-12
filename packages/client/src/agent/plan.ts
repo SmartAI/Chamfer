@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
+  PLAN_CHECK_METADATA_KEYS,
   validatePlanCheck,
   validatePlanSpecSheetRow,
   type PlanCheckEntry,
@@ -162,6 +163,17 @@ export function runComponentIds(measurements: { component?: unknown } | undefine
   return [];
 }
 
+/**
+ * The harness-shaped projection of a plan check: the entry as a run's CHECKS
+ * block would carry it, with the plan-only metadata keys (id, audit fields)
+ * stripped. Every plan-to-run comparison must go through this projection.
+ */
+export function harnessCheckForm(check: PlanCheckEntry): Record<string, unknown> {
+  const form: Record<string, unknown> = { ...(check as Record<string, unknown>) };
+  for (const key of PLAN_CHECK_METADATA_KEYS) delete form[key];
+  return form;
+}
+
 /** Canonical JSON (sorted keys) so check-entry membership survives key ordering. */
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -263,8 +275,14 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
     if (component.status !== "abandoned" && !Array.isArray(component.checks)) {
       errors.push(`component "${id}": checks are required for buildable components`);
     }
+    const checkIds = new Set<string>();
     for (const [index, check] of (component.checks ?? []).entries()) {
       for (const error of validatePlanCheck(check)) errors.push(`component "${id}": check ${index}: ${error}`);
+      const checkId = (check as { id?: unknown })?.id;
+      if (typeof checkId === "string" && checkId !== "") {
+        if (checkIds.has(checkId)) errors.push(`component "${id}": duplicate check id "${checkId}"`);
+        checkIds.add(checkId);
+      }
     }
     // Every buildable component must carry a targeted, bounded volume check.
     // Volume is the cheapest topology detector: a sealed cavity, missing pocket,
@@ -279,7 +297,7 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       );
       if (!volume) {
         errors.push(
-          `component "${id}": checks must include a volume check targeting it, e.g. {"kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
+          `component "${id}": checks must include a volume check targeting it, e.g. {"id": "volume", "kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
         );
       } else {
         const range = Array.isArray(volume.range_mm3) ? (volume.range_mm3 as unknown[]) : undefined;
@@ -322,9 +340,12 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       }
       for (const [refIndex, ref] of (Array.isArray(row?.check_refs) ? row.check_refs : []).entries()) {
         const component = componentsById.get(ref.component_id);
-        if (!component || !Number.isInteger(ref.check_index) || ref.check_index < 0 || !component.checks?.[ref.check_index]) {
+        const resolved = component?.checks?.some((check) => (check as { id?: unknown }).id === ref.check_id);
+        if (!resolved) {
           errors.push(
-            `spec_sheet row ${label}: check_refs[${refIndex}] does not resolve to an existing component check`,
+            `spec_sheet row ${label}: check_refs[${refIndex}] does not resolve to an existing component check (${JSON.stringify(
+              { component_id: ref.component_id, check_id: ref.check_id },
+            )})`,
           );
         }
       }
@@ -418,9 +439,11 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       continue;
     }
     for (const check of component.checks ?? []) {
-      if (!record.checks.has(canonical(check))) {
+      // Compare on the harness projection: run CHECKS entries never carry the
+      // plan-only metadata keys (id, audit fields).
+      if (!record.checks.has(canonical(harnessCheckForm(check)))) {
         errors.push(
-          `component "${component.id}" cannot be "done": its planned check ${JSON.stringify(check)} was not part of the gate-passed run that declared it`,
+          `component "${component.id}" cannot be "done": its planned check ${JSON.stringify(harnessCheckForm(check))} was not part of the gate-passed run that declared it`,
         );
       }
     }

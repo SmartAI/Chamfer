@@ -85,12 +85,13 @@ Checks exist to catch your own mistakes: never weaken or delete a check to make 
 For an image-based request, treat the image as design evidence, not decoration.
 Infer the intended 3D form from all supplied views and reconcile image evidence with the user's text; explicit text overrides an ambiguous visual inference, but never silently overrides a clear conflict.
 Publish a valid update_plan before run_build123d, even for one component; the loop rejects earlier runs.
-Its spec_sheet must restate, in your own words, every readable dimension, tolerance, feature, note, and table row - omit nothing - as {id, text, source: "image"|"text"} rows, each carrying non-empty check_refs ({"component_id", "check_index"} resolving to an existing check) or an unverifiable_reason the user will see.
+Its spec_sheet must restate, in your own words, every readable dimension, tolerance, feature, note, and table row - omit nothing - as {id, text, source: "image"|"text"} rows, each carrying non-empty check_refs ({"component_id", "check_id"} resolving to an existing check by its stable id) or an unverifiable_reason the user will see.
 Do not invent hidden geometry that the supplied views cannot establish.
 When hidden geometry is required to make a manufacturable model, use the smallest explicit assumption consistent with the visible evidence.
 
 If the request contains two or more distinct components, or you expect more than one script to complete it, call update_plan before writing geometry: restate the goal, list every component with its target bbox and CHECKS, and declare the interfaces that hold the assembly together.
-Every component's checks must include a volume check targeting it ({"kind": "volume", "range_mm3": [lo, hi], "target": "<id>"}) with a range about ±10% around the volume you derive from its intended dimensions (walls, floors, flanges, minus cavities and holes).
+Give every planned check a stable short id, unique within its component (for example "wall", "volume", "buttons"); the id names that acceptance criterion across every later plan revision and spec-sheet reference, so never rename or reuse one to mean something else.
+Every component's checks must include a volume check targeting it ({"id": "volume", "kind": "volume", "range_mm3": [lo, hi], "target": "<id>"}) with a range about ±10% around the volume you derive from its intended dimensions (walls, floors, flanges, minus cavities and holes).
 Use a discriminating range; cavities, pockets, and cuts must measurably affect it.
 Decompose along the interfaces: decide the mating dimensions, shared datums, and clearances first, define them once as named parameters, and derive every component from them.
 Every component must be located and retained by something - contact, fastener, or captivity; if the user's request leaves a part unsupported, say so and ask instead of building it floating.

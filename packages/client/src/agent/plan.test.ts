@@ -11,9 +11,10 @@ import {
   type PlanCheckEntry,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
+import { SEQ1_PLAN } from "./fixtures/gateGamingSession";
 
 function volumeCheck(id: string, lo = 5000, hi = 6000): PlanCheckEntry {
-  return { kind: "volume", range_mm3: [lo, hi], target: id };
+  return { id: "volume", kind: "volume", range_mm3: [lo, hi], target: id };
 }
 
 function makePlan(overrides: Partial<Plan> = {}): Plan {
@@ -89,7 +90,7 @@ describe("validatePlanSnapshot", () => {
           id: "image-width",
           text: "The overall width is 100 mm.",
           source: "image",
-          check_refs: [{ component_id: "base", check_index: 99 }],
+          check_refs: [{ component_id: "base", check_id: "ghost" }],
         },
       ],
     });
@@ -100,10 +101,10 @@ describe("validatePlanSnapshot", () => {
       requireSpecSheet: true,
     });
     expect(dangling).toContain(
-      'spec_sheet row "image-width": check_refs[0] does not resolve to an existing component check',
+      'spec_sheet row "image-width": check_refs[0] does not resolve to an existing component check ({"component_id":"base","check_id":"ghost"})',
     );
 
-    plan.spec_sheet![0]!.check_refs = [{ component_id: "base", check_index: 0 }];
+    plan.spec_sheet![0]!.check_refs = [{ component_id: "base", check_id: "volume" }];
     expect(
       validatePlanSnapshot({
         next: plan,
@@ -121,7 +122,7 @@ describe("validatePlanSnapshot", () => {
           id: "image-width",
           text: "The overall width is 100 mm.",
           source: "image",
-          check_refs: [{ component_id: "base", check_index: 0 }],
+          check_refs: [{ component_id: "base", check_id: "volume" }],
         },
       ],
     });
@@ -194,7 +195,7 @@ describe("validatePlanSnapshot", () => {
     delete plan.components[0]!.bbox_mm;
     plan.components[1]!.checks = [
       volumeCheck("lid"),
-      { kind: "hole_through", diameter: -4, count: 1, target: "lid", surprise: true } as unknown as PlanCheckEntry,
+      { id: "holes", kind: "hole_through", diameter: -4, count: 1, target: "lid", surprise: true } as unknown as PlanCheckEntry,
     ];
     const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence }).join("\n");
     expect(errors).toMatch(/component "base": bbox_mm is required/);
@@ -205,7 +206,7 @@ describe("validatePlanSnapshot", () => {
 
   it("accepts the volume check targeting the component regardless of check order", () => {
     const plan = makePlan();
-    plan.components[0]!.checks = [volumeCheck("lid"), volumeCheck("base")];
+    plan.components[0]!.checks = [{ ...volumeCheck("lid"), id: "lid-volume" }, volumeCheck("base")];
     expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
   });
 
@@ -213,9 +214,9 @@ describe("validatePlanSnapshot", () => {
     const plan = makePlan();
     const checks: PlanCheckEntry[] = [
       volumeCheck("base"),
-      { kind: "wall_thickness", range_mm: [3.4, 3.6], target: "base" },
-      { kind: "hole_through", diameter: 6.5, count: 1, at_mm: [30, 15, 0], tol: 0.25, target: "base" },
-      { kind: "symmetric", plane: "YZ", target: "base" },
+      { id: "wall", kind: "wall_thickness", range_mm: [3.4, 3.6], target: "base" },
+      { id: "mount-hole", kind: "hole_through", diameter: 6.5, count: 1, at_mm: [30, 15, 0], tol: 0.25, target: "base" },
+      { id: "symmetry", kind: "symmetric", plane: "YZ", target: "base" },
     ];
     plan.components[0]!.checks = checks;
     expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
@@ -225,8 +226,8 @@ describe("validatePlanSnapshot", () => {
     const plan = makePlan();
     plan.components[0]!.checks = [
       volumeCheck("base"),
-      { kind: "wall_thickness", range_mm: [4, 3], target: "base" },
-      { kind: "hole_blind", diameter: 5, count: 1, at_mm: [1, 2], target: "base" },
+      { id: "wall", kind: "wall_thickness", range_mm: [4, 3], target: "base" },
+      { id: "pocket", kind: "hole_blind", diameter: 5, count: 1, at_mm: [1, 2], target: "base" },
     ] as unknown as PlanCheckEntry[];
     const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence }).join("\n");
     expect(errors).toMatch(/range_mm must be \[min, max\] with 0 < min <= max/);
@@ -236,14 +237,14 @@ describe("validatePlanSnapshot", () => {
   it("requires a targeted, bounded volume check on every buildable component", () => {
     const plan = makePlan();
     plan.components[0]!.checks = [];
-    plan.components[1]!.checks = [{ kind: "volume", range_mm3: [1000, 10000], target: "lid" }];
+    plan.components[1]!.checks = [{ id: "volume", kind: "volume", range_mm3: [1000, 10000], target: "lid" }];
     const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
     expect(errors.join("\n")).toMatch(/component "base": checks must include a volume check/);
     expect(errors.join("\n")).toMatch(/component "lid": volume range \[1000, 10000\] is too loose/);
 
     // An untargeted volume check does not count: it would measure the whole
     // assembly in a multi-component run.
-    plan.components[0]!.checks = [{ kind: "volume", range_mm3: [5000, 6000] }];
+    plan.components[0]!.checks = [{ id: "volume", kind: "volume", range_mm3: [5000, 6000] }];
     const untargeted = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
     expect(untargeted.join("\n")).toMatch(/component "base": checks must include a volume check/);
 
@@ -312,7 +313,7 @@ describe("validatePlanSnapshot", () => {
   });
 
   it("rejects done without gate evidence and accepts it with evidence covering the planned checks", () => {
-    const check: PlanCheckEntry = { kind: "hole_through", diameter: 5.5, count: 4 };
+    const check: PlanCheckEntry = { id: "holes", kind: "hole_through", diameter: 5.5, count: 4 };
     const plan = makePlan();
     plan.components[0]!.status = "done";
     plan.components[0]!.checks = [check, volumeCheck("base")];
@@ -330,6 +331,133 @@ describe("validatePlanSnapshot", () => {
     const wrongEvidence = collectComponentEvidence([gatePassedRun("base", [{ kind: "bbox", size_mm: [1, 2, 3] }])]);
     const missing = validatePlanSnapshot({ next: plan, previous: undefined, evidence: wrongEvidence });
     expect(missing.join("\n")).toMatch(/was not part of the gate-passed run/);
+  });
+});
+
+describe("stable check identity", () => {
+  const noEvidence = new Map();
+
+  it("rejects a check without an id, naming the component and check", () => {
+    const plan = makePlan();
+    plan.components[0]!.checks = [
+      { kind: "volume", range_mm3: [5000, 6000], target: "base" } as unknown as PlanCheckEntry,
+    ];
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors.join("\n")).toMatch(/component "base": check 0: .*id must be a short slug/);
+  });
+
+  it("rejects duplicate check ids within a component but allows reuse across components", () => {
+    const plan = makePlan();
+    plan.components[0]!.checks = [
+      volumeCheck("base"),
+      { id: "volume", kind: "bbox", size_mm: [100, 80, 30], target: "base" },
+    ];
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors).toContain('component "base": duplicate check id "volume"');
+
+    // Both components carrying a check id "volume" is legitimate.
+    expect(validatePlanSnapshot({ next: makePlan(), previous: undefined, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("rejects a spec-sheet ref naming a check id that does not exist in the component", () => {
+    const plan = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_id: "ghost" }],
+        },
+      ],
+    });
+    const errors = validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence });
+    expect(errors).toContain(
+      'spec_sheet row "image-width": check_refs[0] does not resolve to an existing component check ({"component_id":"base","check_id":"ghost"})',
+    );
+  });
+
+  it("resolves spec-sheet refs by id regardless of check order", () => {
+    const plan = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_id: "envelope" }],
+        },
+      ],
+    });
+    plan.components[0]!.checks = [
+      { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], target: "base" },
+      volumeCheck("base"),
+    ];
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
+
+    // Reordering the checks must not re-point or break the row's link.
+    plan.components[0]!.checks = [
+      volumeCheck("base"),
+      { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], target: "base" },
+    ];
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("accepts an id-based snapshot over a legacy previous without check ids", () => {
+    const legacy = makePlan();
+    legacy.components[0]!.checks = [
+      { kind: "volume", range_mm3: [5000, 6000], target: "base" } as unknown as PlanCheckEntry,
+    ];
+    legacy.spec_sheet = [
+      {
+        id: "image-width",
+        text: "The overall width is 100 mm.",
+        source: "image",
+        check_refs: [{ component_id: "base", check_index: 0 } as unknown as { component_id: string; check_id: string }],
+      },
+    ];
+    const next = makePlan({
+      spec_sheet: [
+        {
+          id: "image-width",
+          text: "The overall width is 100 mm.",
+          source: "image",
+          check_refs: [{ component_id: "base", check_id: "volume" }],
+        },
+      ],
+    });
+    expect(validatePlanSnapshot({ next, previous: legacy, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("compares done evidence on the harness check shape, ignoring the plan-only id", () => {
+    const plan = makePlan();
+    plan.components[0]!.status = "done";
+    plan.components[0]!.checks = [
+      { id: "holes", kind: "hole_through", diameter: 5.5, count: 4, target: "base" },
+      volumeCheck("base"),
+    ];
+    // Run CHECKS entries never carry ids; the id must not break evidence matching.
+    const evidence = collectComponentEvidence([
+      gatePassedRun("base", [
+        { kind: "hole_through", diameter: 5.5, count: 4, target: "base" },
+        { kind: "volume", range_mm3: [5000, 6000], target: "base" },
+      ]),
+    ]);
+    expect(validatePlanSnapshot({ next: plan, previous: undefined, evidence })).toEqual([]);
+  });
+
+  // Session regression: seq 1 planned 7 checks with spec rows pointing at them by
+  // index; the seq 5 revision deleted the wall_thickness and boss checks. Under
+  // index refs the surviving rows silently re-pointed at unrelated checks; under
+  // id refs the same edit must surface every orphaned row.
+  it("gate-gaming regression: deleting checks dangles their spec rows instead of re-pointing", () => {
+    const next = structuredClone(SEQ1_PLAN);
+    next.components[0]!.checks = next.components[0]!.checks!.filter(
+      (check) => check.id !== "wall" && check.id !== "bosses",
+    );
+    const errors = validatePlanSnapshot({ next, previous: SEQ1_PLAN, evidence: noEvidence });
+    const dangling = errors.filter((e) => e.includes("does not resolve to an existing component check"));
+    expect(dangling.some((e) => e.includes('spec_sheet row "shell-wall"'))).toBe(true);
+    expect(dangling.some((e) => e.includes('spec_sheet row "bosses"'))).toBe(true);
+    expect(dangling).toHaveLength(2);
   });
 });
 

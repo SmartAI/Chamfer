@@ -68,15 +68,19 @@ export function PlanCard({ plan }: PlanCardProps) {
               </div>
               {(component.checks ?? []).length > 0 && (
                 <div className="ml-4.5 mt-0.5 flex flex-wrap gap-1">
-                  {(component.checks ?? []).map((check, checkIndex) => (
-                    <span
-                      key={checkIndex}
-                      id={`plan-check-${component.id}-${checkIndex}`}
-                      className="rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                    >
-                      {check.kind}
-                    </span>
-                  ))}
+                  {(component.checks ?? []).map((check, checkIndex) => {
+                    // Snapshots persisted before stable check ids anchor by position.
+                    const checkId = (check as { id?: string }).id ?? checkIndex;
+                    return (
+                      <span
+                        key={checkId}
+                        id={`plan-check-${component.id}-${checkId}`}
+                        className="rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                      >
+                        {check.kind}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -112,17 +116,23 @@ export function PlanCard({ plan }: PlanCardProps) {
                       )}
                     >
                       <span className="min-w-0 flex-1">{row.text}</span>
-                      {(row.check_refs ?? []).map((ref, refIndex) => (
-                        <a
-                          key={`${ref.component_id}-${ref.check_index}-${refIndex}`}
-                          data-testid="plan-spec-check-link"
-                          href={`#plan-check-${ref.component_id}-${ref.check_index}`}
-                          className="inline-flex items-center gap-1 font-mono text-emerald-700 underline decoration-dotted underline-offset-2 hover:text-emerald-900 dark:text-emerald-300"
-                        >
-                          <Link2 className="h-3 w-3" aria-hidden="true" />
-                          {ref.component_id} check {ref.check_index + 1}
-                        </a>
-                      ))}
+                      {(row.check_refs ?? []).map((ref, refIndex) => {
+                        // Legacy refs (pre check-id snapshots) carry check_index instead.
+                        const legacy = ref as { component_id: string; check_id?: string; check_index?: number };
+                        const anchor = legacy.check_id ?? legacy.check_index ?? 0;
+                        const label = legacy.check_id ?? `check ${(legacy.check_index ?? 0) + 1}`;
+                        return (
+                          <a
+                            key={`${ref.component_id}-${anchor}-${refIndex}`}
+                            data-testid="plan-spec-check-link"
+                            href={`#plan-check-${ref.component_id}-${anchor}`}
+                            className="inline-flex items-center gap-1 font-mono text-emerald-700 underline decoration-dotted underline-offset-2 hover:text-emerald-900 dark:text-emerald-300"
+                          >
+                            <Link2 className="h-3 w-3" aria-hidden="true" />
+                            {ref.component_id} {label}
+                          </a>
+                        );
+                      })}
                       {unverifiable && (
                         <span
                           data-testid="plan-spec-unverifiable"

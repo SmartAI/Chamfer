@@ -26,7 +26,7 @@ const component = Type.Object({
     }),
   checks: Type.Array(PLAN_CHECK_ENTRY_SCHEMA, {
       description:
-        "CHECKS entries this component must pass. A gate-passed run declaring the component must include every one of them before the component can be marked done.",
+        "CHECKS entries this component must pass, each with a stable id unique within the component. A gate-passed run declaring the component must include every one of them before the component can be marked done.",
     }),
   status: StringEnum(PLAN_COMPONENT_STATUSES as unknown as string[], {
     description:
@@ -64,7 +64,7 @@ const parameters = Type.Object({
   spec_sheet: Type.Optional(
     Type.Array(PLAN_SPEC_SHEET_ROW_SCHEMA, {
       description:
-        "The agent's own reading of every dimension, feature, and spec-table row visible in the request image. Each row links to component checks by component_id and zero-based check_index, or states why it is unverifiable.",
+        "The agent's own reading of every dimension, feature, and spec-table row visible in the request image. Each row links to component checks by {component_id, check_id}, or states why it is unverifiable.",
     }),
   ),
 });
@@ -87,7 +87,7 @@ export function createUpdatePlanTool(deps: {
     name: UPDATE_PLAN_TOOL_NAME,
     label: "Update plan",
     description:
-      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_index}, or state a non-empty unverifiable_reason. Submit the complete plan every time, never a delta.",
+      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_id}, or state a non-empty unverifiable_reason. Submit the complete plan every time, never a delta.",
     parameters,
     execute: async (_toolCallId, args) => {
       const messages = deps.getMessages();
