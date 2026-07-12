@@ -21,8 +21,15 @@ interface SkillNudgeRule {
   pattern: RegExp;
 }
 
+// Order matters: the first matching rule wins, so the most specific
+// signatures come first. surgical-edits has no rule - "the edit regressed
+// something" is not detectable from a single failure text.
 export const SKILL_NUDGE_RULES: readonly SkillNudgeRule[] = [
   { skill: "sweep-and-loft", pattern: /\b(sweep|loft)\b/i },
+  { skill: "holes-and-threads", pattern: /hole_through|hole_blind|hole_internal|CounterBore|CounterSink|\bHole\b/ },
+  { skill: "selectors-and-patterns", pattern: /filter_by|sort_by|group_by|Select\.|GridLocations|PolarLocations|HexLocations|symmetric/ },
+  { skill: "booleans-and-features", pattern: /bodies: expected|interpenetrat|\bfuse\b|\bintersect\b|coincident/i },
+  { skill: "placement-and-frames", pattern: /\bfloating\b|clearance/i },
 ];
 
 function contentText(message: unknown): string {

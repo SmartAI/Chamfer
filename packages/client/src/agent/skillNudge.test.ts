@@ -55,8 +55,8 @@ describe("skill nudge", () => {
     const loaded = [user("handle"), skillLoaded("sweep-and-loft"), runError(SWEEP_ERROR)];
     expect(skillNudgeLine(loaded, SWEEP_ERROR)).toBeUndefined();
 
-    const unmapped = [user("plate"), runFailure("- bodies: expected 1, found 2")];
-    expect(skillNudgeLine(unmapped, "Verify gate: FAILED\n- bodies: expected 1, found 2")).toBeUndefined();
+    const unmapped = [user("plate"), runFailure("- wall_thickness on base: minimum 0.4 below 1.2 mm")];
+    expect(skillNudgeLine(unmapped, "Verify gate: FAILED\n- wall_thickness on base: minimum 0.4 below 1.2 mm")).toBeUndefined();
   });
 
   it("builds the afterToolCall block only for failing results", () => {

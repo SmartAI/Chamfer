@@ -47,7 +47,8 @@ describe("load_skill tool", () => {
     const tool = createLoadSkillTool({ getMessages: () => [] });
 
     const unknownSkill = await execute(tool, { name: "nonexistent" });
-    expect((unknownSkill.content[0] as { text: string }).text).toContain("Available skills: sweep-and-loft");
+    expect((unknownSkill.content[0] as { text: string }).text).toContain("sweep-and-loft");
+    expect((unknownSkill.content[0] as { text: string }).text).toContain("surgical-edits");
     expect(isSkillLoadResult({ ...loadResult(unknownSkill.details), details: unknownSkill.details })).toBe(false);
 
     const unknownResource = await execute(tool, { name: "sweep-and-loft", resource: "snippets/missing.py" });
