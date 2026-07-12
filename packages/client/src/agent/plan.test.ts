@@ -11,7 +11,7 @@ import {
   type PlanCheckEntry,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
-import { SEQ1_PLAN } from "./fixtures/gateGamingSession";
+import { SEQ1_PLAN, SEQ5_PLAN, SEQ44_PLAN, SEQ52_PLAN, SEQ74_PLAN, SEQ80_PLAN } from "./fixtures/gateGamingSession";
 
 function volumeCheck(id: string, lo = 5000, hi = 6000): PlanCheckEntry {
   return { id: "volume", kind: "volume", range_mm3: [lo, hi], target: id };
@@ -461,6 +461,211 @@ describe("stable check identity", () => {
   });
 });
 
+describe("check monotonicity", () => {
+  const noEvidence = new Map();
+
+  /** A one-component plan whose single component carries the given checks. */
+  function checkedPlan(checks: PlanCheckEntry[]): Plan {
+    return makePlan({
+      components: [
+        {
+          id: "base",
+          description: "housing base",
+          bbox_mm: [100, 80, 30],
+          status: "building",
+          free_floating_reason: "single part",
+          checks,
+        },
+      ],
+      interfaces: [],
+    });
+  }
+
+  function validateRevision(previousChecks: PlanCheckEntry[], nextChecks: PlanCheckEntry[]): string[] {
+    return validatePlanSnapshot({
+      next: checkedPlan(nextChecks),
+      previous: checkedPlan(previousChecks),
+      evidence: noEvidence,
+    });
+  }
+
+  const baseVolume: PlanCheckEntry = { id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "base" };
+
+  it("rejects widening a range without a revision_reason and accepts it with one", () => {
+    const widened: PlanCheckEntry = { id: "volume", kind: "volume", range_mm3: [5000, 7000], target: "base" };
+    const errors = validateRevision([baseVolume], [widened]);
+    expect(errors.join("\n")).toMatch(/component "base": check "volume": range_mm3 \[5000, 7000\] is not within the previous \[5000, 6000\]/);
+    expect(errors.join("\n")).toMatch(/revision_reason/);
+
+    const reasoned = { ...widened, revision_reason: "The drawing's rib volume was excluded from the first estimate." };
+    expect(validateRevision([baseVolume], [reasoned])).toEqual([]);
+  });
+
+  it("rejects loosening a tolerance without a reason, including the documented default", () => {
+    const tight: PlanCheckEntry = { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 0.5, target: "base" };
+    const loose: PlanCheckEntry = { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 2, target: "base" };
+    const errors = validateRevision([baseVolume, tight], [baseVolume, loose]);
+    expect(errors.join("\n")).toMatch(/component "base": check "envelope": tol raised from 0.5 to 2/);
+
+    // Removing an explicit tol falls back to the documented default (0.5): not a weakening here.
+    const defaulted: PlanCheckEntry = { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], target: "base" };
+    expect(validateRevision([baseVolume, tight], [baseVolume, defaulted])).toEqual([]);
+    // But dropping tol from a tighter-than-default check is a weakening.
+    const tighter: PlanCheckEntry = { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 0.2, target: "base" };
+    expect(validateRevision([baseVolume, tighter], [baseVolume, defaulted]).join("\n")).toMatch(/tol raised from 0.2 to 0.5/);
+  });
+
+  it("rejects deleting a check outright and accepts a removed tombstone with a reason", () => {
+    const holes: PlanCheckEntry = { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "base" };
+    const errors = validateRevision([baseVolume, holes], [baseVolume]);
+    expect(errors.join("\n")).toMatch(/component "base": check "holes" was deleted without a trace/);
+    expect(errors.join("\n")).toMatch(/"removed": true/);
+
+    const tombstone = { ...holes, removed: true as const, revision_reason: "The four corner holes are not visible in any view." };
+    expect(validateRevision([baseVolume, holes], [baseVolume, tombstone])).toEqual([]);
+
+    // A tombstone without a reason is structurally invalid.
+    const silent = { ...holes, removed: true as const };
+    expect(validateRevision([baseVolume, holes], [baseVolume, silent]).join("\n")).toMatch(/removed.*revision_reason|revision_reason.*removed/);
+  });
+
+  it("rejects kind, target, and hole-count changes without a reason", () => {
+    const holes: PlanCheckEntry = { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "base" };
+    const kindChanged = validateRevision(
+      [baseVolume, holes],
+      [baseVolume, { id: "holes", kind: "hole_blind", diameter: 6, count: 4, target: "base" }],
+    );
+    expect(kindChanged.join("\n")).toMatch(/check "holes": kind changed from "hole_through" to "hole_blind"/);
+
+    const countReduced = validateRevision(
+      [baseVolume, holes],
+      [baseVolume, { id: "holes", kind: "hole_through", diameter: 6, count: 2, target: "base" }],
+    );
+    expect(countReduced.join("\n")).toMatch(/check "holes": count changed from 4 to 2/);
+
+    const retargeted = validateRevision(
+      [{ ...baseVolume, target: "base" }],
+      [{ id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "lid" }],
+    );
+    expect(retargeted.join("\n")).toMatch(/check "volume": target changed/);
+  });
+
+  it("accepts pure tightening and new checks without reasons", () => {
+    const next: PlanCheckEntry[] = [
+      { id: "volume", kind: "volume", range_mm3: [5200, 5800], target: "base" },
+      { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 0.2, target: "base" },
+      { id: "wall", kind: "wall_thickness", range_mm: [2.8, 3.2], target: "base" },
+    ];
+    expect(
+      validateRevision([baseVolume, { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 0.5, target: "base" }], next),
+    ).toEqual([]);
+  });
+
+  it("treats bbox size_mm as sorted, like the harness compare", () => {
+    const prev: PlanCheckEntry = { id: "envelope", kind: "bbox", size_mm: [180, 95, 260], tol: 2, target: "base" };
+    const reordered: PlanCheckEntry = { id: "envelope", kind: "bbox", size_mm: [95, 180, 260], tol: 2, target: "base" };
+    expect(validateRevision([baseVolume, prev], [baseVolume, reordered])).toEqual([]);
+  });
+
+  it("exempts checks on components abandoned in the next snapshot", () => {
+    const previous = checkedPlan([baseVolume]);
+    const next = checkedPlan([]);
+    next.components[0]!.status = "abandoned";
+    next.components[0]!.abandon_reason = "the user removed the part";
+    next.components[0]!.checks = [];
+    expect(validatePlanSnapshot({ next, previous, evidence: noEvidence })).toEqual([]);
+  });
+
+  it("keeps a recorded revision_reason and a tombstone in later snapshots", () => {
+    const widened: PlanCheckEntry = {
+      id: "volume",
+      kind: "volume",
+      range_mm3: [5000, 7000],
+      target: "base",
+      revision_reason: "Recount of the rib volume.",
+    };
+    // Dropping the reason next snapshot hides the audit trail: rejected.
+    const dropped = validateRevision([widened], [{ id: "volume", kind: "volume", range_mm3: [5000, 7000], target: "base" }]);
+    expect(dropped.join("\n")).toMatch(/check "volume": revision_reason cannot be dropped once recorded/);
+
+    // A tombstone cannot silently vanish either.
+    const tombstone = {
+      id: "holes",
+      kind: "hole_through",
+      diameter: 6,
+      count: 4,
+      target: "base",
+      removed: true,
+      revision_reason: "Not visible in any view.",
+    } as PlanCheckEntry;
+    const vanished = validateRevision([baseVolume, tombstone], [baseVolume]);
+    expect(vanished.join("\n")).toMatch(/check "holes" was deleted without a trace/);
+    // Carrying it forward is fine, and reinstating it as a live check is free.
+    expect(validateRevision([baseVolume, tombstone], [baseVolume, tombstone])).toEqual([]);
+    const reinstated: PlanCheckEntry = { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "base" };
+    expect(validateRevision([baseVolume, tombstone], [baseVolume, reinstated])).toEqual([]);
+  });
+
+  it("pairs legacy previous checks by content so unchanged checks need no reason", () => {
+    const legacyPrevious = checkedPlan([
+      { kind: "volume", range_mm3: [5000, 6000], target: "base" } as unknown as PlanCheckEntry,
+      { kind: "bbox", size_mm: [100, 80, 30], tol: 0.5, target: "base" } as unknown as PlanCheckEntry,
+    ]);
+    // Same criteria, ids introduced, order swapped: free.
+    const next = checkedPlan([
+      { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 0.5, target: "base" },
+      baseVolume,
+    ]);
+    expect(validatePlanSnapshot({ next, previous: legacyPrevious, evidence: noEvidence })).toEqual([]);
+
+    // Weakening while introducing ids still trips the ratchet (positional pairing).
+    const weakened = checkedPlan([
+      { id: "volume", kind: "volume", range_mm3: [4000, 6000], target: "base" },
+      { id: "envelope", kind: "bbox", size_mm: [100, 80, 30], tol: 0.5, target: "base" },
+    ]);
+    expect(
+      validatePlanSnapshot({ next: weakened, previous: legacyPrevious, evidence: noEvidence }).join("\n"),
+    ).toMatch(/check "volume": range_mm3 \[4000, 6000\] is not within the previous \[5000, 6000\]/);
+  });
+
+  // Session regressions: the three real weakening steps, replayed as snapshot pairs.
+  it("gate-gaming regression: each recorded weakening step is rejected without reasons", () => {
+    const seq1to5 = validatePlanSnapshot({ next: SEQ5_PLAN, previous: SEQ1_PLAN, evidence: noEvidence }).join("\n");
+    expect(seq1to5).toMatch(/check "wall" was deleted without a trace/);
+    expect(seq1to5).toMatch(/check "bosses" was deleted without a trace/);
+    expect(seq1to5).toMatch(/check "volume": range_mm3 \[230000, 310000\] is not within the previous \[130000, 190000\]/);
+
+    const seq44to52 = validatePlanSnapshot({ next: SEQ52_PLAN, previous: SEQ44_PLAN, evidence: noEvidence }).join("\n");
+    expect(seq44to52).toMatch(/check "envelope": tol raised from 1.5 to 2/);
+    expect(seq44to52).toMatch(/check "nozzle": tol raised from 0.8 to 1/);
+    expect(seq44to52).toMatch(/check "symmetry": plane changed/);
+    expect(seq44to52).toMatch(/check "symmetry": tol_pct raised from 3 to 5/);
+    expect(seq44to52).toMatch(/check "volume": range_mm3 \[230000, 300000\] is not within the previous \[245000, 300000\]/);
+    expect(seq44to52).toMatch(/check "button-hole" was deleted without a trace/);
+    expect(seq44to52).toMatch(/check "buttons" was deleted without a trace/);
+
+    const seq74to80 = validatePlanSnapshot({ next: SEQ80_PLAN, previous: SEQ74_PLAN, evidence: noEvidence }).join("\n");
+    expect(seq74to80).toMatch(/check "symmetry" was deleted without a trace/);
+    expect(seq74to80).toMatch(/check "volume": range_mm3 \[220000, 300000\] is not within the previous \[230000, 300000\]/);
+  });
+
+  it("gate-gaming regression: the same steps pass once every weakening carries a reason", () => {
+    const reasoned = structuredClone(SEQ80_PLAN);
+    const checks = reasoned.components[0]!.checks!;
+    checks.find((c) => c.id === "volume")!.revision_reason = "Physical shell volume re-derived from the actual wall layout.";
+    checks.push({
+      id: "symmetry",
+      kind: "symmetric",
+      plane: "XZ",
+      tol_pct: 5,
+      target: "shell",
+      removed: true,
+      revision_reason: "The asymmetric nozzle makes the mirror check unusable.",
+    } as PlanCheckEntry);
+    expect(validatePlanSnapshot({ next: reasoned, previous: SEQ74_PLAN, evidence: noEvidence })).toEqual([]);
+  });
+});
+
 describe("hasAssemblyEvidence", () => {
   const clearanceCheck = { kind: "clearance", a: "base", b: "lid", min_mm: 0, max_mm: 0 };
 
@@ -590,6 +795,37 @@ describe("createUpdatePlanTool", () => {
     await expect(tool.execute("t1", makePlan() as never, undefined as never, undefined as never)).rejects.toThrow(
       /Plan rejected:[\s\S]*spec_sheet is required for an image-triggered plan/,
     );
+  });
+
+  it("confirms newly accepted check revisions in the tool result text", async () => {
+    const previous = makePlan();
+    const tool = createUpdatePlanTool({ getMessages: () => [planResult(previous)] });
+    const next = makePlan();
+    next.components[0]!.checks = [
+      {
+        id: "volume",
+        kind: "volume",
+        range_mm3: [4500, 6000],
+        target: "base",
+        revision_reason: "The pocket volume was missing from the estimate.",
+      },
+    ];
+    const result = await tool.execute("t1", next as never, undefined as never, undefined as never);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("Check revisions recorded and shown to the user:");
+    expect(text).toContain('base/volume: The pocket volume was missing from the estimate.');
+
+    // Resubmitting the same snapshot records nothing new.
+    const again = await tool
+      .execute("t2", next as never, undefined as never, undefined as never)
+      .catch(() => undefined);
+    // (previous is still the old plan in this stub, so the confirmation repeats;
+    // the no-repeat behavior is asserted through getMessages returning the accepted snapshot)
+    const toolWithHistory = createUpdatePlanTool({ getMessages: () => [planResult(previous), planResult(next)] });
+    const repeat = await toolWithHistory.execute("t3", next as never, undefined as never, undefined as never);
+    const repeatText = (repeat.content[0] as { text: string }).text;
+    expect(repeatText).not.toContain("Check revisions recorded and shown to the user:");
+    expect(again).toBeDefined();
   });
 
   it("returns a row-level update_plan error for an unmapped spec row", async () => {

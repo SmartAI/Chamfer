@@ -83,6 +83,62 @@ export const SEQ1_PLAN: Plan = {
 };
 
 /**
+ * Mid-session snapshots of the same shell component (statuses normalized to
+ * "building" so each pair isolates the check-weakening step it pins; the real
+ * session also flipped statuses, which the done-evidence rules cover separately).
+ * By seq 44 the plan had already mutated: the three blind button holes became one
+ * through "button-hole" plus two blind "buttons", and wall/bosses were long gone.
+ */
+function midSessionPlan(checks: Plan["components"][number]["checks"]): Plan {
+  return {
+    goal: SEQ1_PLAN.goal,
+    components: [
+      {
+        id: "shell",
+        description: SEQ1_PLAN.components[0]!.description,
+        bbox_mm: [180, 95, 260],
+        checks,
+        status: "building",
+        free_floating_reason: SEQ1_PLAN.components[0]!.free_floating_reason,
+      },
+    ],
+    interfaces: [],
+  };
+}
+
+export const SEQ44_PLAN: Plan = midSessionPlan([
+  { id: "envelope", kind: "bbox", size_mm: [180, 95, 260], tol: 1.5, target: "shell" },
+  { id: "nozzle", kind: "hole_through", diameter: 18, count: 1, tol: 0.8, target: "shell" },
+  { id: "button-hole", kind: "hole_through", diameter: 6, count: 1, tol: 0.6, target: "shell" },
+  { id: "buttons", kind: "hole_blind", diameter: 6, count: 2, tol: 0.6, target: "shell" },
+  { id: "symmetry", kind: "symmetric", plane: "YZ", tol_pct: 3, target: "shell" },
+  { id: "volume", kind: "volume", range_mm3: [245000, 300000], target: "shell" },
+]);
+
+/** Seq 52: every tolerance loosened, the symmetry plane swapped, the volume
+ * range widened, and both button checks deleted - all without a stated reason. */
+export const SEQ52_PLAN: Plan = midSessionPlan([
+  { id: "envelope", kind: "bbox", size_mm: [180, 95, 260], tol: 2, target: "shell" },
+  { id: "nozzle", kind: "hole_through", diameter: 18, count: 1, tol: 1, target: "shell" },
+  { id: "symmetry", kind: "symmetric", plane: "XZ", tol_pct: 5, target: "shell" },
+  { id: "volume", kind: "volume", range_mm3: [230000, 300000], target: "shell" },
+]);
+
+export const SEQ74_PLAN: Plan = midSessionPlan([
+  { id: "envelope", kind: "bbox", size_mm: [180, 95, 260], tol: 2, target: "shell" },
+  { id: "nozzle", kind: "hole_through", diameter: 8, count: 1, tol: 0.8, target: "shell" },
+  { id: "symmetry", kind: "symmetric", plane: "XZ", tol_pct: 5, target: "shell" },
+  { id: "volume", kind: "volume", range_mm3: [230000, 300000], target: "shell" },
+]);
+
+/** Seq 80: the symmetry check deleted outright and the volume range widened again. */
+export const SEQ80_PLAN: Plan = midSessionPlan([
+  { id: "envelope", kind: "bbox", size_mm: [95, 180, 260], tol: 2, target: "shell" },
+  { id: "nozzle", kind: "hole_through", diameter: 8, count: 1, tol: 0.8, target: "shell" },
+  { id: "volume", kind: "volume", range_mm3: [220000, 300000], target: "shell" },
+]);
+
+/**
  * The seq 5 weakening, translated to id-based refs: the wall_thickness and boss
  * checks were deleted, the volume range moved off the drawing-derived value, and
  * the shell-wall and bosses rows were downgraded to unverifiable - all silently

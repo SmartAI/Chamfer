@@ -10,6 +10,21 @@ const checkId = Type.String({
   description:
     'Stable short slug identifying this check within its component (e.g. "wall", "volume"); unique per component and kept identical across plan revisions.',
 });
+// Audit metadata for the check-monotonicity ratchet: tightening is free, any
+// weakening carries a user-visible reason, and deletion leaves a tombstone.
+const revisionReason = Type.Optional(
+  Type.String({
+    minLength: 1,
+    description:
+      "Why this check was weakened (or removed) relative to the previous plan snapshot. Required for any non-tightening edit; rendered to the user beside the check and kept in every later snapshot.",
+  }),
+);
+const removed = Type.Optional(
+  Type.Literal(true, {
+    description:
+      "Retires this check from the acceptance criteria while keeping it visible as an audit tombstone. Requires revision_reason; the entry must stay in every later snapshot.",
+  }),
+);
 // Fixed-length homogeneous arrays instead of Type.Tuple throughout this file:
 // TypeBox tuples serialize to draft-07 syntax (items: [...] + additionalItems),
 // which the Anthropic API rejects under its JSON Schema draft 2020-12 validation.
@@ -24,6 +39,8 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       id: checkId,
+      revision_reason: revisionReason,
+      removed,
       kind: Type.Union([Type.Literal("hole_through"), Type.Literal("hole_blind"), Type.Literal("hole_internal")]),
       diameter: positive,
       count: Type.Integer({ minimum: 0 }),
@@ -36,6 +53,8 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       id: checkId,
+      revision_reason: revisionReason,
+      removed,
       kind: Type.Literal("clearance"),
       a: Type.String({ minLength: 1 }),
       b: Type.String({ minLength: 1 }),
@@ -47,6 +66,8 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       id: checkId,
+      revision_reason: revisionReason,
+      removed,
       kind: Type.Literal("bbox"),
       size_mm: fixedNumbers(positive, 3),
       tol: Type.Optional(positive),
@@ -57,6 +78,8 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       id: checkId,
+      revision_reason: revisionReason,
+      removed,
       kind: Type.Literal("volume"),
       range_mm3: fixedNumbers(Type.Number(), 2),
       target,
@@ -66,6 +89,8 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
   Type.Object(
     {
       id: checkId,
+      revision_reason: revisionReason,
+      removed,
       kind: Type.Literal("wall_thickness"),
       range_mm: fixedNumbers(positive, 2),
       target,
@@ -73,12 +98,21 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
-    { id: checkId, kind: Type.Union([Type.Literal("count_faces"), Type.Literal("count_edges")]), count, target },
+    {
+      id: checkId,
+      revision_reason: revisionReason,
+      removed,
+      kind: Type.Union([Type.Literal("count_faces"), Type.Literal("count_edges")]),
+      count,
+      target,
+    },
     { additionalProperties: false },
   ),
   Type.Object(
     {
       id: checkId,
+      revision_reason: revisionReason,
+      removed,
       kind: Type.Literal("symmetric"),
       plane: Type.Union([Type.Literal("XY"), Type.Literal("XZ"), Type.Literal("YZ")]),
       tol_pct: Type.Optional(positive),
