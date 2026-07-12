@@ -109,6 +109,7 @@ describe("POST /api/conversations/:id/generate-title", () => {
     const promptText = context.messages[0]?.content[0]?.text ?? "";
     expect(promptText).toContain("User: make me a 10mm gear");
     expect(promptText).toContain("Assistant: Here is a parametric gear.");
+    expect(llm.calls[0]?.options.sessionId).toBe(conversationId);
   });
 
   it("sanitizes quoted, multi-line, punctuated model output", async () => {

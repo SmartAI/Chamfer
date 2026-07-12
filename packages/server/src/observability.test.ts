@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { langfuseConfig, observeLlm, usageAttributes } from "./observability";
+import { langfuseConfig, langfuseSessionId, observeLlm, usageAttributes } from "./observability";
 import type { LlmStreamer, PiEvent } from "./llm";
 
 const usage = {
@@ -130,5 +130,18 @@ describe("usage mapping", () => {
     };
     const events = await collect(observeLlm(bareDone, "conversation-title").stream({}, {}, {}));
     expect(events.map((e) => e.type)).toEqual(["done"]);
+  });
+});
+
+describe("langfuseSessionId", () => {
+  it("accepts conversation IDs that satisfy Langfuse's session contract", () => {
+    expect(langfuseSessionId("conversation-123")).toBe("conversation-123");
+  });
+
+  it("rejects empty, non-ASCII, and 200-character IDs", () => {
+    expect(langfuseSessionId(123)).toBeUndefined();
+    expect(langfuseSessionId("")).toBeUndefined();
+    expect(langfuseSessionId("conversation-\u2603")).toBeUndefined();
+    expect(langfuseSessionId("x".repeat(200))).toBeUndefined();
   });
 });

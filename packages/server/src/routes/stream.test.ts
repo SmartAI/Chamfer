@@ -178,12 +178,13 @@ describe("POST /api/stream", () => {
     const res = await app.request("/api/stream", {
       method: "POST",
       headers: { authorization: "Bearer chamfer-local", "content-type": "application/json" },
-      body: JSON.stringify({ model: {}, context: { messages: [] }, options: {} }),
+      body: JSON.stringify({ model: {}, context: { messages: [] }, options: { sessionId: "conversation-123" } }),
     });
     expect(res.status).toBe(200);
     await res.text();
 
     expect(streamCapture.options?.signal).toBeInstanceOf(AbortSignal);
+    expect(streamCapture.options?.sessionId).toBe("conversation-123");
   });
 
   it("passes the selected provider's key and custom base URL to pi-ai", async () => {
