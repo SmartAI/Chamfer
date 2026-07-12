@@ -99,4 +99,43 @@ describe("PlanCard", () => {
     expect(link.getAttribute("href")).toBe("#plan-check-base-0");
     expect(document.getElementById("plan-check-base-0")?.textContent).toContain("volume");
   });
+
+  it("renders persisted check revision reasons beside live and removed checks", () => {
+    const revised: Plan = {
+      ...plan,
+      components: plan.components.map((component) =>
+        component.id === "base"
+          ? {
+              ...component,
+              checks: [
+                {
+                  id: "volume",
+                  kind: "volume",
+                  range_mm3: [4500, 6500],
+                  target: "base",
+                  revision_reason: "Included the drawing's internal rib.",
+                },
+                {
+                  id: "holes",
+                  kind: "hole_through",
+                  diameter: 4,
+                  count: 2,
+                  target: "base",
+                  removed: true,
+                  revision_reason: "The detail view shows these are surface marks.",
+                },
+              ],
+            }
+          : component,
+      ),
+    };
+    render(<PlanCard plan={revised} />);
+    fireEvent.click(screen.getByTestId("plan-card-toggle"));
+
+    const revisions = screen.getAllByTestId("plan-check-revision");
+    expect(revisions).toHaveLength(2);
+    expect(revisions[0]?.textContent).toContain("Revised: Included the drawing's internal rib.");
+    expect(revisions[1]?.textContent).toContain("hole_through (removed)");
+    expect(revisions[1]?.textContent).toContain("surface marks");
+  });
 });

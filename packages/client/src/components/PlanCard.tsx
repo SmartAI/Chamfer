@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Ban, Check, ChevronDown, ChevronRight, Circle, FileText, Hammer, Link2 } from "lucide-react";
+import { AlertOctagon, AlertTriangle, Ban, Check, ChevronDown, ChevronRight, Circle, FileText, Hammer, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanComponent } from "@/agent/plan";
 
@@ -7,6 +7,7 @@ function StatusIcon({ status }: { status: PlanComponent["status"] }) {
   if (status === "done") return <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />;
   if (status === "building")
     return <Hammer className="h-3 w-3 animate-pulse text-amber-600 motion-reduce:animate-none" aria-hidden="true" />;
+  if (status === "blocked") return <AlertOctagon className="h-3 w-3 text-red-600" aria-hidden="true" />;
   if (status === "abandoned") return <Ban className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
   return <Circle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
 }
@@ -55,6 +56,7 @@ export function PlanCard({ plan }: PlanCardProps) {
                 className={cn(
                   "flex min-w-0 items-center gap-1.5",
                   component.status === "abandoned" && "text-muted-foreground line-through",
+                  component.status === "blocked" && "text-red-800 dark:text-red-200",
                 )}
               >
                 <StatusIcon status={component.status} />
@@ -63,6 +65,11 @@ export function PlanCard({ plan }: PlanCardProps) {
                 {component.status === "abandoned" && component.abandon_reason && (
                   <span data-testid="plan-abandon-reason" className="min-w-0 truncate no-underline">
                     - {component.abandon_reason}
+                  </span>
+                )}
+                {component.status === "blocked" && component.blocked_reason && (
+                  <span data-testid="plan-blocked-reason" className="min-w-0 truncate font-medium text-red-700 dark:text-red-300">
+                    - Blocked: {component.blocked_reason}
                   </span>
                 )}
               </div>
@@ -75,9 +82,16 @@ export function PlanCard({ plan }: PlanCardProps) {
                       <span
                         key={checkId}
                         id={`plan-check-${component.id}-${checkId}`}
-                        className="rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                        data-testid={check.revision_reason ? "plan-check-revision" : undefined}
+                        className={cn(
+                          "rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground",
+                          check.removed && "line-through",
+                          check.revision_reason && "border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-100",
+                        )}
                       >
                         {check.kind}
+                        {check.removed ? " (removed)" : ""}
+                        {check.revision_reason ? ` - Revised: ${check.revision_reason}` : ""}
                       </span>
                     );
                   })}

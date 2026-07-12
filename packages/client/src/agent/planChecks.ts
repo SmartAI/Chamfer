@@ -197,7 +197,7 @@ export const CHECK_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
  * Keys that exist only on plan checks (identity and audit metadata); run CHECKS
  * entries never carry them, so they are stripped before any plan-to-run comparison.
  */
-export const PLAN_CHECK_METADATA_KEYS: readonly string[] = ["id"];
+export const PLAN_CHECK_METADATA_KEYS: readonly string[] = ["id", "revision_reason", "removed"];
 
 /**
  * Runtime mirror of the harness CHECKS contract plus the plan-only metadata
@@ -215,6 +215,13 @@ export function validatePlanCheck(value: unknown): string[] {
   const errors: string[] = [];
   if (typeof check.id !== "string" || !CHECK_ID_PATTERN.test(check.id)) {
     errors.push(`id must be a short slug matching ${CHECK_ID_PATTERN}, stable across plan revisions`);
+  }
+  if (check.revision_reason !== undefined && (typeof check.revision_reason !== "string" || check.revision_reason.trim() === "")) {
+    errors.push("revision_reason must be a non-empty string when provided");
+  }
+  if (check.removed !== undefined && check.removed !== true) errors.push("removed must be true when provided");
+  if (check.removed === true && (typeof check.revision_reason !== "string" || check.revision_reason.trim() === "")) {
+    errors.push("removed checks require a non-empty revision_reason");
   }
   if (missing.length > 0) errors.push(`missing keys: ${JSON.stringify(missing)}`);
   if (unknown.length > 0) errors.push(`unknown keys: ${JSON.stringify(unknown)}`);

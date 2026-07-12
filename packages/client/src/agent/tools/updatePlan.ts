@@ -4,6 +4,7 @@ import {
   PLAN_COMPONENT_STATUSES,
   PLAN_INTERFACE_KINDS,
   UPDATE_PLAN_TOOL_NAME,
+  acceptedCheckRevisions,
   collectComponentEvidence,
   describePlanStatus,
   latestPlan,
@@ -30,10 +31,13 @@ const component = Type.Object({
     }),
   status: StringEnum(PLAN_COMPONENT_STATUSES as unknown as string[], {
     description:
-      '"done" is accepted only with gate evidence; "abandoned" requires abandon_reason and is the only legal way to shrink the plan.',
+      '"done" is accepted only with gate evidence; "blocked" requires blocked_reason when a genuine limitation prevents completion; "abandoned" requires abandon_reason and is the only legal way to shrink the plan.',
   }),
   abandon_reason: Type.Optional(
     Type.String({ description: "Why this component is no longer part of the design. Required when abandoned." }),
+  ),
+  blocked_reason: Type.Optional(
+    Type.String({ description: "What genuine limitation prevented completion. Required when blocked." }),
   ),
   free_floating_reason: Type.Optional(
     Type.String({
@@ -92,21 +96,26 @@ export function createUpdatePlanTool(deps: {
     execute: async (_toolCallId, args) => {
       const messages = deps.getMessages();
       const next = args as unknown as Plan;
+      const previous = latestPlan(messages);
       const errors = validatePlanSnapshot({
         next,
-        previous: latestPlan(messages),
+        previous,
         evidence: collectComponentEvidence(messages),
         requireSpecSheet: deps.requireSpecSheet?.() ?? false,
       });
       if (errors.length > 0) {
         throw new Error(`Plan rejected:\n${errors.map((e) => `- ${e}`).join("\n")}`);
       }
+      const revisions = acceptedCheckRevisions(next, previous);
+      const revisionText = revisions.length === 0
+        ? ""
+        : `\nCheck revisions recorded and shown to the user:\n${revisions.map((revision) => `- ${revision.componentId}/${revision.checkId}: ${revision.reason}`).join("\n")}`;
       deps.onAccepted?.(next);
       return {
         content: [
           {
             type: "text",
-            text: `Plan accepted: ${describePlanStatus(next)}.\n${JSON.stringify(next)}`,
+            text: `Plan accepted: ${describePlanStatus(next)}.${revisionText}\n${JSON.stringify(next)}`,
           },
         ],
         details: { plan: next },
