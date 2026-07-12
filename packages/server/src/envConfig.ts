@@ -92,5 +92,13 @@ export function envSettings(env: Env = process.env, lookup: ModelLookup = defaul
       console.warn(`CHAMFER_MAX_CAD_RUNS=${maxCadRuns} is not a positive integer; ignoring`);
     }
   }
+  const showCadCode = env.CHAMFER_SHOW_CAD_CODE;
+  if (showCadCode) {
+    if (showCadCode === "1") {
+      settings.showCadCode = "1";
+    } else if (showCadCode !== "0") {
+      console.warn(`CHAMFER_SHOW_CAD_CODE=${showCadCode} is not 1 or 0; ignoring (CAD code stays hidden)`);
+    }
+  }
   return settings;
 }

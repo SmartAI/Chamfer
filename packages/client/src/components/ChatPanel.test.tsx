@@ -80,6 +80,7 @@ function makeContextValue(overrides: Partial<ChatContextValue>): ChatContextValu
     sendQueuedNow: vi.fn(),
     modelName: "Test Model",
     maxCadRuns: 10,
+    showCadCode: false,
     ...overrides,
   };
   // Unless a test overrides it, sendMessage behaves like the idle-path provider:

@@ -3,7 +3,7 @@ import { ChevronDown } from "lucide-react";
 import type { Gate, Measurements } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import { cn } from "@/lib/utils";
-import { CadCodeActions } from "./CadCodeActions";
+import { CadCodeBlock } from "./CadCodeBlock";
 
 /** Shape of a run_build123d/lookup_docs tool-result as rendered by the card.
  * Exported so MessageList can reuse it instead of duplicating the type. */
@@ -17,6 +17,10 @@ interface ToolCallCardProps {
   call: { id: string; name: string; arguments: Record<string, unknown> };
   result?: ToolCallCardResult;
   resultMessageId?: string;
+  /** Whether the CAD code body is rendered. Off by default (CHAMFER_SHOW_CAD_CODE
+   * gates it); hidden mode keeps the label-and-actions row so Copy/Render 3D
+   * still work. */
+  showCadCode?: boolean;
 }
 
 function inlineImage(content: unknown): string | undefined {
@@ -48,7 +52,7 @@ function errorText(content: unknown): string {
   return text || "Tool call failed";
 }
 
-export function ToolCallCard({ call, result, resultMessageId }: ToolCallCardProps) {
+export function ToolCallCard({ call, result, resultMessageId, showCadCode = false }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [sheetUrl, setSheetUrl] = useState<string | undefined>(() => inlineImage(result?.content));
 
@@ -90,15 +94,7 @@ export function ToolCallCard({ call, result, resultMessageId }: ToolCallCardProp
       </button>
       {expanded && (
         <div className="space-y-3 border-t p-3">
-          {code && (
-            <div className="overflow-hidden rounded-md border bg-muted/30">
-              <div className="flex items-center justify-between border-b px-2 py-1.5">
-                <span className="font-mono text-[11px] text-muted-foreground">Python</span>
-                <CadCodeActions code={code} />
-              </div>
-              <pre className="max-h-56 overflow-auto whitespace-pre-wrap p-2 font-mono text-xs">{code}</pre>
-            </div>
-          )}
+          {code && <CadCodeBlock code={code} show={showCadCode} className="bg-muted/30" />}
           {result?.isError && (
             <pre
               data-testid="tool-error"
