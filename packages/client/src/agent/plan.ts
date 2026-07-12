@@ -341,7 +341,16 @@ function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): 
   if (!sameValue(current.target, prior.target)) reasons.push(`target changed from ${JSON.stringify(prior.target)} to ${JSON.stringify(current.target)}`);
   if (current.kind !== prior.kind) return reasons;
 
-  const intervalKey = current.kind === "volume" ? "range_mm3" : current.kind === "wall_thickness" ? "range_mm" : undefined;
+  const intervalKey =
+    current.kind === "volume"
+      ? "range_mm3"
+      : current.kind === "wall_thickness"
+        ? "range_mm"
+        : (current.kind === "count_faces" || current.kind === "count_edges") &&
+            Array.isArray(current.count) &&
+            Array.isArray(prior.count)
+          ? "count"
+          : undefined;
   if (intervalKey) {
     const reason = intervalWeakening(current[intervalKey], prior[intervalKey], intervalKey);
     if (reason) reasons.push(reason);
@@ -353,6 +362,7 @@ function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): 
   }
 
   const freelyComparable = new Set(["id", "revision_reason", "removed", "refit_to_measurement", "kind", "target", "range_mm3", "range_mm", "tol", "tol_pct"]);
+  if (intervalKey === "count") freelyComparable.add("count");
   for (const key of new Set([...Object.keys(prior), ...Object.keys(current)])) {
     if (freelyComparable.has(key)) continue;
     let before = prior[key];
@@ -531,8 +541,16 @@ function validateCheckMonotonicity(next: Plan, previous: Plan): string[] {
         errors.push(`component "${component.id}": check "${id}": refit_to_measurement cannot be dropped once recorded`);
       }
       const weakenings = checkWeakeningReasons(newCheck, oldCheck);
-      if (weakenings.length > 0 && !newCheck.revision_reason?.trim()) {
-        for (const weakening of weakenings) errors.push(`component "${component.id}": check "${id}": ${weakening}; provide a non-empty revision_reason`);
+      if (weakenings.length > 0) {
+        const oldReason = oldCheck.revision_reason?.trim();
+        const newReason = newCheck.revision_reason?.trim();
+        if (!newReason) {
+          for (const weakening of weakenings) errors.push(`component "${component.id}": check "${id}": ${weakening}; provide a non-empty revision_reason`);
+        } else if (oldReason && (newReason === oldReason || !newReason.startsWith(oldReason))) {
+          errors.push(
+            `component "${component.id}": check "${id}": this new weakening must append a new explanation while preserving the previous revision_reason`,
+          );
+        }
       }
     }
   }
@@ -763,10 +781,8 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       );
       continue;
     }
-    const previousComponent = previous?.components.find((candidate) => candidate.id === component.id);
-    const isDoneTransition = previousComponent?.status !== "done";
     const isImagePlan = Boolean(next.spec_sheet?.length || previous?.spec_sheet?.length);
-    if (isDoneTransition && isImagePlan) {
+    if (isImagePlan) {
       const review = component.form_review;
       const entries = Array.isArray(review?.views) ? review.views : [];
       const entriesByView = new Map(entries.map((entry) => [entry?.view, entry]));

@@ -16,6 +16,13 @@ function hasReason(row: PlanSpecSheetRow): boolean {
   return Boolean(row.revision_reason?.trim());
 }
 
+function hasFreshReason(next: PlanSpecSheetRow, previous: PlanSpecSheetRow): boolean {
+  const nextReason = next.revision_reason?.trim();
+  if (!nextReason) return false;
+  const previousReason = previous.revision_reason?.trim();
+  return !previousReason || (nextReason !== previousReason && nextReason.startsWith(previousReason));
+}
+
 function hasLegacyRefs(row: PlanSpecSheetRow): boolean {
   return (row.check_refs ?? []).some((ref) => typeof (ref as { check_id?: unknown }).check_id !== "string");
 }
@@ -44,18 +51,24 @@ export function validateSpecSheetRevision(
 
     const previousHadRefs = (previous.check_refs?.length ?? 0) > 0;
     const nextHasRefs = (next.check_refs?.length ?? 0) > 0;
-    if (previousHadRefs && !nextHasRefs && !hasReason(next)) {
+    if (previousHadRefs && !nextHasRefs && !hasFreshReason(next, previous)) {
       errors.push(
-        `spec_sheet row ${JSON.stringify(previous.id)} was downgraded to unverifiable; provide a non-empty revision_reason`,
+        previous.revision_reason?.trim()
+          ? `spec_sheet row ${JSON.stringify(previous.id)} was downgraded to unverifiable; append a new explanation while preserving the previous revision_reason`
+          : `spec_sheet row ${JSON.stringify(previous.id)} was downgraded to unverifiable; provide a non-empty revision_reason`,
       );
     } else if (
       previousHadRefs &&
       nextHasRefs &&
       !hasLegacyRefs(previous) &&
       !sameRefs(previous, next) &&
-      !hasReason(next)
+      !hasFreshReason(next, previous)
     ) {
-      errors.push(`spec_sheet row ${JSON.stringify(previous.id)} was repointed to different checks; provide a non-empty revision_reason`);
+      errors.push(
+        previous.revision_reason?.trim()
+          ? `spec_sheet row ${JSON.stringify(previous.id)} was repointed to different checks; append a new explanation while preserving the previous revision_reason`
+          : `spec_sheet row ${JSON.stringify(previous.id)} was repointed to different checks; provide a non-empty revision_reason`,
+      );
     }
   }
 

@@ -3,6 +3,7 @@ import {
   collectComponentEvidence,
   collectComponentMeasurements,
   applyPlanSnapshotEvidence,
+  FORM_REVIEW_VIEWS,
   hasAssemblyEvidence,
   latestPlan,
   parseComponentDeclaration,
@@ -203,6 +204,15 @@ describe("validatePlanSnapshot", () => {
 
     repointed.spec_sheet![0]!.revision_reason = "The image dimension labels material volume, not the envelope.";
     expect(validatePlanSnapshot({ next: repointed, previous, evidence: noEvidence })).toEqual([]);
+
+    const repointedAgain = structuredClone(repointed);
+    repointedAgain.spec_sheet![0]!.check_refs = [{ component_id: "base", check_id: "envelope" }];
+    expect(validatePlanSnapshot({ next: repointedAgain, previous: repointed, evidence: noEvidence }).join("\n")).toMatch(
+      /append a new explanation.*previous revision_reason/,
+    );
+    repointedAgain.spec_sheet![0]!.revision_reason =
+      "The image dimension labels material volume, not the envelope. A clearer source image restores the envelope callout.";
+    expect(validatePlanSnapshot({ next: repointedAgain, previous: repointed, evidence: noEvidence })).toEqual([]);
 
     const reasonDropped = structuredClone(repointed);
     delete reasonDropped.spec_sheet![0]!.revision_reason;
@@ -528,6 +538,29 @@ describe("validatePlanSnapshot", () => {
     expect(validatePlanSnapshot({ next, previous, evidence })).toEqual([]);
   });
 
+  it("keeps image form review permanent and tied to the latest evidence after completion", () => {
+    const previous = structuredClone(SEQ106_PREVIOUS_PLAN);
+    const evidence = collectComponentEvidence([SEQ105_GATE_EVIDENCE]);
+    const done = structuredClone(SEQ106_DONE_WITHOUT_FORM_REVIEW);
+    const views = FORM_REVIEW_VIEWS.map((view) => ({ view, verdict: "match" as const, note: `${view} matches.` }));
+    done.components[0]!.form_review = { evidence_id: "seq-105-run", views };
+    expect(validatePlanSnapshot({ next: done, previous, evidence })).toEqual([]);
+
+    const dropped = structuredClone(done);
+    delete dropped.components[0]!.form_review;
+    expect(validatePlanSnapshot({ next: dropped, previous: done, evidence }).join("\n")).toMatch(
+      /form_review is missing the isometric view/,
+    );
+
+    const newerEvidence = collectComponentEvidence([
+      SEQ105_GATE_EVIDENCE,
+      { ...SEQ105_GATE_EVIDENCE, toolCallId: "seq-107-run", timestamp: 107 },
+    ]);
+    expect(validatePlanSnapshot({ next: done, previous: done, evidence: newerEvidence }).join("\n")).toMatch(
+      /seq-105-run.*latest gate-passed evidence.*seq-107-run/,
+    );
+  });
+
   it("gate-gaming regression: rejects the scrubbed seq 106 done transition without a form review", () => {
     const evidence = collectComponentEvidence([SEQ105_GATE_EVIDENCE]);
     expect(
@@ -806,6 +839,41 @@ describe("check monotonicity", () => {
     expect(validateRevision([baseVolume, tombstone], [baseVolume, tombstone])).toEqual([]);
     const reinstated: PlanCheckEntry = { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "base" };
     expect(validateRevision([baseVolume, tombstone], [baseVolume, reinstated])).toEqual([]);
+  });
+
+  it("requires each later weakening to append a fresh reason without erasing history", () => {
+    const previouslyWidened: PlanCheckEntry = {
+      id: "volume",
+      kind: "volume",
+      range_mm3: [4500, 6500],
+      target: "base",
+      revision_reason: "Included the internal rib volume.",
+    };
+    const widenedAgain: PlanCheckEntry = {
+      ...previouslyWidened,
+      range_mm3: [4400, 6500],
+    };
+    expect(validateRevision([previouslyWidened], [widenedAgain]).join("\n")).toMatch(
+      /append a new explanation.*previous revision_reason/,
+    );
+
+    widenedAgain.revision_reason =
+      "Included the internal rib volume. Later review found an omitted mounting flange.";
+    expect(validateRevision([previouslyWidened], [widenedAgain])).toEqual([]);
+  });
+
+  it("accepts subset tightening for face and edge count intervals", () => {
+    const previousCounts: PlanCheckEntry[] = [
+      baseVolume,
+      { id: "faces", kind: "count_faces", count: [10, 20], target: "base" },
+      { id: "edges", kind: "count_edges", count: [20, 40], target: "base" },
+    ];
+    const tightened: PlanCheckEntry[] = [
+      baseVolume,
+      { id: "faces", kind: "count_faces", count: [12, 18], target: "base" },
+      { id: "edges", kind: "count_edges", count: [25, 35], target: "base" },
+    ];
+    expect(validateRevision(previousCounts, tightened)).toEqual([]);
   });
 
   it("pairs legacy previous checks by content so unchanged checks need no reason", () => {
