@@ -1,5 +1,22 @@
 # Chamfer agent guide
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked as local Markdown under `.scratch/`.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five canonical role strings.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Chamfer uses a single-context domain layout.
+See `docs/agents/domain.md`.
+
 Chamfer is an AI CAD designer that runs in the browser.
 The LLM writes [build123d](https://build123d.readthedocs.io/) Python, which executes in a Pyodide web worker on the client; the geometry kernel verifies every result before it reaches the user.
 Node >= 22.19 is required.
