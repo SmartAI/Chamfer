@@ -57,6 +57,19 @@ function* streamToolCall(id: string, name: string, args: object): Generator<Assi
   yield { type: "done", reason: "toolUse", message: complete };
 }
 
+const LONG_PLAN = {
+  goal: "stress-test the expanded plan layout",
+  components: Array.from({ length: 40 }, (_, index) => ({
+    id: `part-${index + 1}`,
+    description: `Component ${index + 1} with enough detail to represent a substantial plan`,
+    bbox_mm: [10, 10, 10],
+    checks: [{ id: "volume", kind: "volume", range_mm3: [900, 1100], target: `part-${index + 1}` }],
+    status: "todo",
+    free_floating_reason: "Independent layout fixture component.",
+  })),
+  interfaces: [],
+};
+
 // --- plan-flow scenario (triggered by "plan-flow" in the transcript) ---
 // Drives the full plan artifact loop: plan -> build base -> mark done ->
 // premature stop (drawing the deterministic plan nudge) -> assembly run ->
@@ -328,6 +341,14 @@ export function fakeLlm(): LlmStreamer {
       // The plan-flow scenario drives the whole plan artifact loop and owns its
       // own step machine, including the plan-check nudge reply.
       const transcript = JSON.stringify(messages);
+      if (transcript.includes("long-plan-layout")) {
+        if (transcript.includes('"name":"update_plan"')) {
+          yield* streamText("Long plan ready for review.");
+        } else {
+          yield* streamToolCall("long-plan-layout-plan", "update_plan", LONG_PLAN);
+        }
+        return;
+      }
       if (transcript.includes("plan-flow")) {
         yield* planFlowStep(transcript, JSON.stringify(messages.at(-1)));
         return;

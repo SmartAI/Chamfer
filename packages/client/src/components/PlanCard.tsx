@@ -32,6 +32,7 @@ export function PlanCard({ plan }: PlanCardProps) {
         type="button"
         data-testid="plan-card-toggle"
         aria-expanded={expanded}
+        aria-controls="plan-card-contents"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-1.5 text-left text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -47,7 +48,11 @@ export function PlanCard({ plan }: PlanCardProps) {
         <span className="min-w-0 flex-1 truncate">{plan.goal}</span>
       </button>
       {expanded && (
-        <div className="mt-1.5 flex flex-col gap-1 pb-1 pl-4.5">
+        <div
+          id="plan-card-contents"
+          data-testid="plan-card-contents"
+          className="mt-1.5 flex max-h-[min(40vh,24rem)] flex-col gap-1 overflow-y-auto overscroll-contain pb-1 pl-4.5"
+        >
           {plan.components.map((component) => (
             <div key={component.id}>
               <div
