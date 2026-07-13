@@ -1,6 +1,6 @@
 {
   "name": "chamfer",
-  "version": "2.0.0",
+  "version": "0.2.0",
   "description": "AI CAD designer that runs entirely in your browser — describe a part in plain words and export STEP, STL, or 3MF.",
   "license": "Apache-2.0",
   "type": "module",
