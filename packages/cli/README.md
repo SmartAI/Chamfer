@@ -37,6 +37,6 @@ The first part you build downloads the CAD kernel (build123d + OpenCascade via P
 ## Links
 
 - [Project page](https://smartai.github.io/Chamfer/)
-- [Latest demo: image to espresso machine](https://youtu.be/rvVmGJ5AsDQ)
-- [Text-to-CAD demo](https://youtu.be/QUC5HnAoHCI) and [Image-to-3D demo](https://youtu.be/n72PvB1WUfw)
+- [Espresso machine from a product image](https://youtu.be/rvVmGJ5AsDQ)
+- [A Text/Image to 3D CAD AI Agent](https://youtu.be/QUC5HnAoHCI)
 - [Source](https://github.com/SmartAI/Chamfer) (Apache-2.0)

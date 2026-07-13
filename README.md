@@ -1,22 +1,8 @@
-<p align="center">
-  <img src="packages/client/public/brand/chamfer-logo.svg" alt="Chamfer" width="474">
-</p>
+# Chamfer
 
-<h3 align="center">Describe it. Watch it take shape.</h3>
+**Describe it. Watch it take shape.**
 
-<p align="center">
-  <a href="https://smartai.github.io/Chamfer/"><b>Project page</b></a> ·
-  <a href="https://youtu.be/rvVmGJ5AsDQ">Latest demo</a> ·
-  <a href="https://youtu.be/QUC5HnAoHCI">Text-to-CAD demo</a> ·
-  <a href="https://youtu.be/n72PvB1WUfw">Image-to-3D demo</a>
-</p>
-
-<p align="center">
-  <a href="https://www.npmjs.com/package/chamfer"><img src="https://img.shields.io/npm/v/chamfer?color=cb3837&label=npm" alt="chamfer on npm"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
-</p>
-
-![The Chamfer workspace: a finished part in the 3D viewer with the conversation that built it](docs/media/hero.png)
+[Project page](https://smartai.github.io/Chamfer/) · [npm](https://www.npmjs.com/package/chamfer) · [Apache-2.0](LICENSE)
 
 ## What is Chamfer
 
@@ -26,21 +12,10 @@ CAD executes locally in your browser; fine-tune dimensions with live sliders, th
 Prompts and attached images are sent to the model provider you configure.
 CAD execution, geometry, conversations, and settings stay local.
 
-**The finished part, live in the viewer:**
+## Demos
 
-![A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer](docs/media/plane-rotating.gif)
-
-**Latest demo, building an espresso machine from a product image:**
-
-[![Watch the latest Chamfer demo](https://img.youtube.com/vi/rvVmGJ5AsDQ/maxresdefault.jpg)](https://youtu.be/rvVmGJ5AsDQ)
-
-**Text to CAD:**
-
-[![Watch the Chamfer demo](https://img.youtube.com/vi/QUC5HnAoHCI/maxresdefault.jpg)](https://youtu.be/QUC5HnAoHCI)
-
-**Image to 3D, from a single 2D picture:**
-
-[![Watch Chamfer build a part from a 2D image](https://img.youtube.com/vi/n72PvB1WUfw/maxresdefault.jpg)](https://youtu.be/n72PvB1WUfw)
+- [Espresso machine from a product image](https://youtu.be/rvVmGJ5AsDQ)
+- [A Text/Image to 3D CAD AI Agent](https://youtu.be/QUC5HnAoHCI)
 
 ## Features
 
