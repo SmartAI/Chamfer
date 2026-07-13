@@ -93,6 +93,19 @@ All variables are documented in `.env.example`; notable ones: `CHAMFER_MODEL`, `
 - CI (`.github/workflows/ci.yml`): typecheck + tests + build on Node 22. It does not run `py-tests/` or e2e; run those locally before merging changes they cover.
 - Release: pushing a `v*` tag publishes `packages/cli` to npm via Trusted Publishing (`release.yml`). The tag must exactly match the version in `packages/cli/package.json` or the workflow fails.
 
+### Release versioning
+
+- GitHub releases and npm packages must use the same semantic version line.
+- The current release line is `0.2.x`; the next normal patch release after `v0.2.1` is `v0.2.2` with npm version `0.2.2`.
+- Default to a patch increment unless the user explicitly requests a minor or major release.
+- Derive the next version from the latest intended GitHub release, not from product-generation names or an accidentally higher npm version.
+- Before preparing a release, compare `gh release list`, `git tag`, `npm view chamfer versions --json`, and `npm view chamfer dist-tags --json`.
+- If GitHub tags, GitHub releases, npm versions, or npm dist-tags disagree, stop and confirm the intended version before publishing anything.
+- Update both `packages/cli/package.json` and the `packages/cli` workspace entry in `package-lock.json` to the same version.
+- Use the `v` prefix only for the Git tag and GitHub release; npm package metadata uses the bare version.
+- Verify that the pushed tag, package manifest, lockfile, GitHub release, published npm version, and npm `latest` dist-tag all agree before declaring the release complete.
+- Publish and verify corrected replacement versions before unpublishing an erroneous npm version because npm unpublish is irreversible and deleted name-version pairs cannot be reused.
+
 ## Gotchas
 
 - The client test environment is jsdom; shims for `localStorage`, pointer capture, and `scrollIntoView` live in `packages/client/src/vitest.setup.ts`. Add new browser-API shims there, not in individual tests.
