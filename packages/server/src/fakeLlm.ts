@@ -64,12 +64,12 @@ function* streamToolCall(id: string, name: string, args: object): Generator<Assi
 // between the plan and the scripts, which is what evidence-checked "done"
 // requires.
 const BASE_CHECKS = [
-  { kind: "bbox", size_mm: [30, 30, 6], target: "base" },
-  { kind: "volume", range_mm3: [5100, 5700], target: "base" },
+  { id: "envelope", kind: "bbox", size_mm: [30, 30, 6], target: "base" },
+  { id: "volume", kind: "volume", range_mm3: [5100, 5700], target: "base" },
 ];
 const LID_CHECKS = [
-  { kind: "bbox", size_mm: [30, 30, 4], target: "lid" },
-  { kind: "volume", range_mm3: [3400, 3800], target: "lid" },
+  { id: "envelope", kind: "bbox", size_mm: [30, 30, 4], target: "lid" },
+  { id: "volume", kind: "volume", range_mm3: [3400, 3800], target: "lid" },
 ];
 
 const PLAN_V1 = {
@@ -179,8 +179,8 @@ function* planFlowStep(transcript: string, lastMessage: string): Generator<Assis
 // Exercises both deterministic rejection paths before completing a one-part image plan:
 // premature CAD run -> plan without spec sheet -> valid plan -> verified run -> done plan.
 const IMAGE_PLAN_CHECKS = [
-  { kind: "bbox", size_mm: [10, 10, 10], target: "spacer" },
-  { kind: "volume", range_mm3: [900, 1100], target: "spacer" },
+  { id: "envelope", kind: "bbox", size_mm: [10, 10, 10], target: "spacer" },
+  { id: "volume", kind: "volume", range_mm3: [900, 1100], target: "spacer" },
 ];
 
 const IMAGE_PLAN_WITHOUT_SPEC = {
@@ -205,7 +205,7 @@ const IMAGE_PLAN = {
       id: "overall-size",
       text: "The drawing shows a 10 mm overall width, depth, and height.",
       source: "image",
-      check_refs: [{ component_id: "spacer", check_index: 0 }],
+      check_refs: [{ component_id: "spacer", check_id: "envelope" }],
     },
     {
       id: "surface-finish",
@@ -261,10 +261,27 @@ function* imagePlanGateStep(transcript: string, lastMessage: string): Generator<
     yield* streamToolCall("image-plan-run-valid", "run_build123d", { code: IMAGE_PLAN_SCRIPT });
     return;
   }
+  if (plans === 2 && !transcript.includes("Dominant-form review:")) {
+    yield* streamText(
+      "Dominant-form review: the spacer is prismatic, and the largest semantic mismatch is none; all seven silhouettes match the dimensioned cube before detail work.",
+    );
+    return;
+  }
   if (plans === 2) {
     yield* streamToolCall("image-plan-done", "update_plan", {
       ...IMAGE_PLAN,
-      components: IMAGE_PLAN.components.map((component) => ({ ...component, status: "done" })),
+      components: IMAGE_PLAN.components.map((component) => ({
+        ...component,
+        status: "done",
+        form_review: {
+          evidence_id: "image-plan-run-valid",
+          views: ["isometric", "front", "back", "left", "right", "top", "bottom"].map((view) => ({
+            view,
+            verdict: "match",
+            note: `${view} view matches the dimensioned cube drawing.`,
+          })),
+        },
+      })),
     });
     return;
   }

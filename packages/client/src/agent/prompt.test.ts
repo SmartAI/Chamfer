@@ -64,6 +64,32 @@ describe("systemPrompt", () => {
     expect(systemPrompt).toContain("Do not invent hidden geometry");
   });
 
+  it("prioritizes fidelity and requires a dominant-form review", () => {
+    const size = systemPrompt.indexOf("absolute size");
+    const census = systemPrompt.indexOf("feature census");
+    const form = systemPrompt.indexOf("overall form");
+    const cosmetic = systemPrompt.indexOf("cosmetic detail");
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThan(census);
+    expect(census).toBeLessThan(form);
+    expect(form).toBeLessThan(cosmetic);
+    expect(systemPrompt).toContain("A blocky envelope meeting the numbers is not close enough");
+    expect(systemPrompt).toContain("faceted-versus-curved is not cosmetic");
+    expect(systemPrompt).toContain("thin-walled shell, cored housing, axisymmetric, organic casting, or prismatic");
+    expect(systemPrompt).toContain("Validity is not fidelity");
+  });
+
+  it("documents recovery discipline, interpretation defaults, and the mechanical plan contract", () => {
+    expect(systemPrompt).toContain("attempt a second construction strategy before simplifying");
+    expect(systemPrompt).toContain("Reverting to simpler geometry is a last resort");
+    expect(systemPrompt).toContain("An explicit depth callout means a blind feature by default");
+    expect(systemPrompt).toContain("revision_reason");
+    expect(systemPrompt).toContain("refit-to-measurement");
+    expect(systemPrompt).toContain("run CHECKS conformance");
+    expect(systemPrompt).toContain("blocked_reason");
+    expect(systemPrompt).toContain("form_review");
+  });
+
   it("points verification at the new diagnostics", () => {
     expect(systemPrompt).toContain("holes (every detected bore");
     expect(systemPrompt).toContain("clearances (pairwise child states)");

@@ -5,6 +5,7 @@ import * as rest from "../api/rest";
 import {
   classifySessionError,
   createSession,
+  buildPlanNudgePrompt,
   PLAN_NUDGE_MARKER,
   SELF_CHECK_MARKER,
   type SessionError,
@@ -735,7 +736,7 @@ describe("createSession agent-loop policies", () => {
           bbox_mm: [10, 10, 10],
           status: "todo",
           free_floating_reason: "single component",
-          checks: [{ kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
+          checks: [{ id: "volume", kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
         },
       ],
       interfaces: [],
@@ -744,7 +745,7 @@ describe("createSession agent-loop policies", () => {
           id: "cube-size",
           text: "The image shows a 10 mm cube.",
           source: "image",
-          check_refs: [{ component_id: "spacer", check_index: 0 }],
+          check_refs: [{ component_id: "spacer", check_id: "volume" }],
         },
       ],
     };
@@ -835,6 +836,10 @@ describe("createSession agent-loop policies", () => {
       );
     });
     expect(selfChecks).toHaveLength(1);
+    const selfCheckText = (selfChecks[0] as { content: { text?: string }[] }).content[0]?.text ?? "";
+    expect(selfCheckText).toContain("isometric, front, back, left, right, top, and bottom");
+    expect(selfCheckText).toContain("match or mismatch verdict");
+    expect(selfCheckText).toContain("evidence_id");
     expect(latest?.error).toBeUndefined();
 
     // The injected nudge was persisted like any other message.
@@ -1012,7 +1017,7 @@ describe("createSession agent-loop policies", () => {
   // --- plan enforcement ---
 
   function acceptedPlanResult(
-    components: { id: string; status: string }[],
+    components: { id: string; status: string; blocked_reason?: string }[],
     interfaces: object[] = [],
   ): unknown {
     return {
@@ -1031,6 +1036,208 @@ describe("createSession agent-loop policies", () => {
       timestamp: 1,
     };
   }
+
+  it("marks a gate-passed run as an error when its CHECKS weaken the active plan", async () => {
+    const plan = {
+      goal: "checked housing",
+      components: [
+        {
+          id: "housing",
+          description: "single housing",
+          bbox_mm: [100, 80, 30],
+          status: "building",
+          free_floating_reason: "single part",
+          checks: [
+            { id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "housing" },
+            { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "housing" },
+          ],
+        },
+      ],
+      interfaces: [],
+    };
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "gate passed" }],
+        details: {
+          gate: { status: "passed", checks: [] },
+          measurements: {
+            component: "housing",
+            checks: [{ kind: "volume", range_mm3: [4500, 6500], target: "housing" }],
+          },
+        },
+      })),
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallWithCode("weak-run", 'COMPONENT = "housing"\nresult = Box(1, 1, 1)'),
+      textMessage("The run finished."),
+      textMessage("I will restore the planned checks."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [
+        {
+          role: "toolResult",
+          toolCallId: "plan-1",
+          toolName: "update_plan",
+          content: [{ type: "text", text: "Plan accepted" }],
+          details: { plan },
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    const run = (latest?.messages ?? []).find(
+      (message) =>
+        (message as { role?: string; toolCallId?: string }).role === "toolResult" &&
+        (message as { toolCallId?: string }).toolCallId === "weak-run",
+    ) as { isError?: boolean; content?: { text?: string }[] } | undefined;
+    expect(run?.isError).toBe(true);
+    expect(run?.content?.[0]?.text).toContain('planned check "holes" is missing');
+    expect(run?.content?.[0]?.text).toContain('planned check "volume" is weaker');
+    expect(run?.content?.[0]?.text).toContain("update_plan");
+    expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(0);
+  });
+
+  it("names both honest exits and forbids weakening checks in the plan nudge", () => {
+    const prompt = buildPlanNudgePrompt([{ id: "shell", status: "building" }]);
+    expect(prompt).toContain("continue building");
+    expect(prompt).toContain("mark it blocked with a non-empty blocked_reason");
+    expect(prompt).toContain("Weakening checks to force closure is never acceptable");
+  });
+
+  it("nudges building components while suppressing blocked components in the same plan", async () => {
+    const { streamFn, turnContexts } = makeScriptedStreamFn([textMessage("Stopping with an honest limitation.")]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [
+        acceptedPlanResult([
+          { id: "shell", status: "blocked", blocked_reason: "The swept shell fails kernel tessellation." },
+          { id: "button", status: "building" },
+        ]),
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("continue");
+
+    expect(turnContexts).toHaveLength(2);
+    const nudge = (latest?.messages ?? []).find((message) => {
+      const candidate = message as { role?: string; content?: { text?: string }[] };
+      return candidate.role === "user" && candidate.content?.[0]?.text?.startsWith(PLAN_NUDGE_MARKER);
+    }) as { content?: { text?: string }[] } | undefined;
+    expect(nudge?.content?.[0]?.text).toContain('"button" (building)');
+    expect(nudge?.content?.[0]?.text).not.toContain('"shell"');
+  });
+
+  it("ends cleanly when all remaining plan work is blocked", async () => {
+    const { streamFn, turnContexts } = makeScriptedStreamFn([textMessage("The loft is blocked; here is why.")]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [
+        acceptedPlanResult([
+          { id: "shell", status: "blocked", blocked_reason: "The swept shell fails kernel tessellation." },
+        ]),
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("continue");
+
+    expect(turnContexts).toHaveLength(1);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(0);
+    expect(latest?.error).toBeUndefined();
+  });
+
+  it("pressure-loop regression: marking the stuck component blocked ends without another nudge or stop error", async () => {
+    const buildingPlan = {
+      goal: "organic device shell",
+      components: [
+        {
+          id: "shell",
+          description: "curved outer shell",
+          bbox_mm: [120, 50, 30],
+          checks: [{ id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "shell" }],
+          status: "building",
+          free_floating_reason: "single part",
+        },
+      ],
+      interfaces: [],
+    };
+    const blockedPlan = {
+      ...buildingPlan,
+      components: [
+        {
+          ...buildingPlan.components[0],
+          status: "blocked",
+          blocked_reason: "The curved shell repeatedly fails tessellation after alternative loft and sweep strategies.",
+        },
+      ],
+    };
+    const blockCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{ type: "toolCall", id: "block-plan", name: "update_plan", arguments: blockedPlan }],
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("The curved construction is still failing."),
+      blockCall,
+      textMessage("The shell is blocked because the attempted curved constructions fail tessellation."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [
+        {
+          role: "toolResult",
+          toolCallId: "initial-plan",
+          toolName: "update_plan",
+          content: [{ type: "text", text: "Plan accepted" }],
+          details: { plan: buildingPlan },
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("finish the shell");
+
+    expect(turnContexts).toHaveLength(3);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    expect(latest?.error).toBeUndefined();
+    const accepted = (latest?.messages ?? []).find(
+      (message) =>
+        (message as { role?: string; toolName?: string; details?: { plan?: { components?: { status?: string }[] } } }).role ===
+          "toolResult" &&
+        (message as { toolName?: string }).toolName === "update_plan" &&
+        (message as { details?: { plan?: { components?: { status?: string }[] } } }).details?.plan?.components?.[0]
+          ?.status === "blocked",
+    ) as { details?: { plan?: { components?: { blocked_reason?: string }[] } } } | undefined;
+    expect(accepted?.details?.plan?.components?.[0]?.blocked_reason).toContain("fails tessellation");
+  });
 
   function toolCallWithCode(id: string, code: string): AssistantMessage {
     return {
@@ -1278,7 +1485,7 @@ describe("createSession agent-loop policies", () => {
           bbox_mm: [10, 10, 10],
           status: "todo",
           free_floating_reason: "single part",
-          checks: [{ kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
+          checks: [{ id: "volume", kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
         },
       ],
       interfaces: [],
@@ -1314,10 +1521,10 @@ describe("createSession agent-loop policies", () => {
     expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
   });
 
-  function loadSkillCall(id: string): AssistantMessage {
+  function loadSkillCall(id: string, name = "sweep-and-loft"): AssistantMessage {
     return {
       ...textMessage("", "toolUse"),
-      content: [{ type: "toolCall", id, name: "load_skill", arguments: { name: "sweep-and-loft" } }],
+      content: [{ type: "toolCall", id, name: "load_skill", arguments: { name } }],
     };
   }
 
@@ -1363,6 +1570,47 @@ describe("createSession agent-loop policies", () => {
     const textOf = (result: typeof first) => (result?.content ?? []).map((block) => block.text ?? "").join("\n");
     expect(textOf(first)).not.toContain("Skill hint:");
     expect(textOf(second)).toContain('Skill hint: load_skill("sweep-and-loft") covers this failure pattern.');
+  });
+
+  it("reaches the disjoint-solids recipe in one load after the repeated session-derived gate failure", async () => {
+    const multipleBodies = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Verify gate: FAILED\n- bodies: expected 1, found 3" }],
+      details: { gate: { status: "failed", checks: [] } },
+    }));
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: multipleBodies,
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("boss-run-1"),
+      toolCallMessage("boss-run-2"),
+      loadSkillCall("boss-recovery", "recover-disjoint-solids"),
+      textMessage("I will preserve and overlap the bosses."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-boss-recovery",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("add two internal bosses");
+
+    const secondFailure = resultFor(latest, "boss-run-2");
+    const failureText = (secondFailure?.content ?? []).map((block) => block.text ?? "").join("\n");
+    expect(failureText).toContain('load_skill("recover-disjoint-solids")');
+
+    const recovery = resultFor(latest, "boss-recovery");
+    const recoveryText = (recovery?.content ?? []).map((block) => block.text ?? "").join("\n");
+    expect(recoveryText).toContain("Never abandon the feature");
+    expect(recovery?.details).toEqual({ skill: "recover-disjoint-solids", loaded: true });
   });
 
   it("serves load_skill in the default treatment and withholds it from the pre-skill arms", async () => {

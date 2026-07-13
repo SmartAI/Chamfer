@@ -12,6 +12,7 @@ import {
   parseComponentDeclaration,
   planIncompleteComponents,
   runBudgetBucket,
+  validateRunChecksConformance,
 } from "./plan";
 import { createUpdatePlanTool } from "./tools/updatePlan";
 import { createLoadSkillTool } from "./tools/loadSkill";
@@ -109,7 +110,7 @@ export const DEFAULT_MAX_CAD_RUNS = 10;
  * system chip and the rate-limit Retry action never resends it as the user's prompt. */
 export const SELF_CHECK_MARKER = "[Chamfer self-check]";
 
-export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed for the current script. A passing gate only confirms the current geometry matches its own EXPECT block - it does not mean the whole request is done. Re-read the original request, list every requested part, feature, and step, and mark each one satisfied or missing against the latest measurements and views. If anything is missing, continue building it now. If everything is satisfied, reply with the final summary.`;
+export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed for the current script. A passing gate only confirms the current geometry matches its own EXPECT block - it does not mean the whole request is done. For an image request, compare the latest inspection sheet against the reference image view by view: isometric, front, back, left, right, top, and bottom. Record a match or mismatch verdict and a concrete note for every view in form_review, tied by evidence_id to that latest gate-passed run. Fix any mismatch before marking the component done. For a text-only request, re-read the original request and check every requested part, feature, and step against the latest measurements and views. If anything is missing, continue building it now. If everything is satisfied, reply with the final summary.`;
 
 /** Prefix identifying the deterministic plan stop-gate nudge (planned turns replace
  * the prose self-check with this; the UI renders it as a system chip). */
@@ -124,7 +125,7 @@ export const IMAGE_PLAN_GATE_ERROR =
 
 export function buildPlanNudgePrompt(incomplete: readonly { id: string; status: string }[]): string {
   const list = incomplete.map((c) => `"${c.id}" (${c.status})`).join(", ");
-  return `${PLAN_NUDGE_MARKER} The plan still has unfinished components: ${list}. A component only counts as done after a gate-passed run declares it via COMPONENT and passes its planned checks, and update_plan records it. Continue with the next unfinished component now, or - only if the request genuinely changed - revise the plan with update_plan and state why. Do not stop while the plan has unfinished components and budget remains.`;
+  return `${PLAN_NUDGE_MARKER} The plan still has unfinished components: ${list}. A component only counts as done after a gate-passed run declares it via COMPONENT and passes its planned checks, and update_plan records it. For each unfinished component, either continue building it now, or mark it blocked with a non-empty blocked_reason that clearly states the genuine limitation. Weakening checks to force closure is never acceptable. Do not stop while the plan has unfinished components and budget remains.`;
 }
 const persistenceIds = new WeakMap<object, string>();
 
@@ -235,7 +236,29 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       return undefined;
     },
     afterToolCall: async ({ toolCall, result, isError, context }) => {
-      if (toolCall.name !== "run_build123d" || skillTools.length === 0) return undefined;
+      if (toolCall.name !== "run_build123d") return undefined;
+      if (!isError) {
+        const activePlan = latestPlan(context.messages);
+        const measurements = (result.details as { measurements?: unknown } | undefined)?.measurements;
+        if (activePlan && measurements && typeof measurements === "object") {
+          const errors = validateRunChecksConformance(activePlan, measurements);
+          if (errors.length > 0) {
+            const content = Array.isArray(result.content) ? result.content : [];
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Plan conformance: FAILED\n${errors.map((error) => `- ${error}`).join("\n")}`,
+                },
+                ...content,
+              ],
+              details: result.details,
+              isError: true,
+            };
+          }
+        }
+      }
+      if (skillTools.length === 0) return undefined;
       const nudge = skillNudgeBlock(context.messages, result, isError);
       if (!nudge) return undefined;
       const content = Array.isArray(result.content) ? result.content : [];

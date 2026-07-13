@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Ban, Check, ChevronDown, ChevronRight, Circle, FileText, Hammer, Link2 } from "lucide-react";
+import { AlertOctagon, AlertTriangle, Ban, Check, ChevronDown, ChevronRight, Circle, FileText, Hammer, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Plan, PlanComponent } from "@/agent/plan";
 
@@ -7,6 +7,7 @@ function StatusIcon({ status }: { status: PlanComponent["status"] }) {
   if (status === "done") return <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />;
   if (status === "building")
     return <Hammer className="h-3 w-3 animate-pulse text-amber-600 motion-reduce:animate-none" aria-hidden="true" />;
+  if (status === "blocked") return <AlertOctagon className="h-3 w-3 text-red-600" aria-hidden="true" />;
   if (status === "abandoned") return <Ban className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
   return <Circle className="h-3 w-3 text-muted-foreground" aria-hidden="true" />;
 }
@@ -55,6 +56,7 @@ export function PlanCard({ plan }: PlanCardProps) {
                 className={cn(
                   "flex min-w-0 items-center gap-1.5",
                   component.status === "abandoned" && "text-muted-foreground line-through",
+                  component.status === "blocked" && "text-red-800 dark:text-red-200",
                 )}
               >
                 <StatusIcon status={component.status} />
@@ -65,17 +67,53 @@ export function PlanCard({ plan }: PlanCardProps) {
                     - {component.abandon_reason}
                   </span>
                 )}
+                {component.status === "blocked" && component.blocked_reason && (
+                  <span data-testid="plan-blocked-reason" className="min-w-0 truncate font-medium text-red-700 dark:text-red-300">
+                    - Blocked: {component.blocked_reason}
+                  </span>
+                )}
               </div>
               {(component.checks ?? []).length > 0 && (
                 <div className="ml-4.5 mt-0.5 flex flex-wrap gap-1">
-                  {(component.checks ?? []).map((check, checkIndex) => (
-                    <span
-                      key={checkIndex}
-                      id={`plan-check-${component.id}-${checkIndex}`}
-                      className="rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                  {(component.checks ?? []).map((check, checkIndex) => {
+                    // Snapshots persisted before stable check ids anchor by position.
+                    const checkId = (check as { id?: string }).id ?? checkIndex;
+                    return (
+                      <span
+                        key={checkId}
+                        id={`plan-check-${component.id}-${checkId}`}
+                        data-testid={check.revision_reason ? "plan-check-revision" : undefined}
+                        className={cn(
+                          "rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground",
+                          check.removed && "line-through",
+                          check.revision_reason && "border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-100",
+                        )}
+                      >
+                        {check.kind}
+                        {check.removed ? " (removed)" : ""}
+                        {check.revision_reason ? ` - Revised: ${check.revision_reason}` : ""}
+                        {check.refit_to_measurement ? " - Refit to latest measurement" : ""}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              {component.form_review && (
+                <div className="ml-4.5 mt-1 flex flex-col gap-0.5 border-l-2 border-emerald-400 pl-2" data-testid="plan-form-review">
+                  <span className="font-medium text-foreground">Form review</span>
+                  {component.form_review.views.map((entry) => (
+                    <div
+                      key={entry.view}
+                      data-testid="plan-form-review-verdict"
+                      className={cn(
+                        "flex gap-1.5",
+                        entry.verdict === "match" ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300",
+                      )}
                     >
-                      {check.kind}
-                    </span>
+                      <span className="w-14 shrink-0 font-mono">{entry.view}</span>
+                      <span className="shrink-0 font-medium">{entry.verdict}</span>
+                      <span className="text-muted-foreground">- {entry.note}</span>
+                    </div>
                   ))}
                 </div>
               )}
@@ -112,17 +150,23 @@ export function PlanCard({ plan }: PlanCardProps) {
                       )}
                     >
                       <span className="min-w-0 flex-1">{row.text}</span>
-                      {(row.check_refs ?? []).map((ref, refIndex) => (
-                        <a
-                          key={`${ref.component_id}-${ref.check_index}-${refIndex}`}
-                          data-testid="plan-spec-check-link"
-                          href={`#plan-check-${ref.component_id}-${ref.check_index}`}
-                          className="inline-flex items-center gap-1 font-mono text-emerald-700 underline decoration-dotted underline-offset-2 hover:text-emerald-900 dark:text-emerald-300"
-                        >
-                          <Link2 className="h-3 w-3" aria-hidden="true" />
-                          {ref.component_id} check {ref.check_index + 1}
-                        </a>
-                      ))}
+                      {(row.check_refs ?? []).map((ref, refIndex) => {
+                        // Legacy refs (pre check-id snapshots) carry check_index instead.
+                        const legacy = ref as { component_id: string; check_id?: string; check_index?: number };
+                        const anchor = legacy.check_id ?? legacy.check_index ?? 0;
+                        const label = legacy.check_id ?? `check ${(legacy.check_index ?? 0) + 1}`;
+                        return (
+                          <a
+                            key={`${ref.component_id}-${anchor}-${refIndex}`}
+                            data-testid="plan-spec-check-link"
+                            href={`#plan-check-${ref.component_id}-${anchor}`}
+                            className="inline-flex items-center gap-1 font-mono text-emerald-700 underline decoration-dotted underline-offset-2 hover:text-emerald-900 dark:text-emerald-300"
+                          >
+                            <Link2 className="h-3 w-3" aria-hidden="true" />
+                            {ref.component_id} {label}
+                          </a>
+                        );
+                      })}
                       {unverifiable && (
                         <span
                           data-testid="plan-spec-unverifiable"
@@ -131,6 +175,14 @@ export function PlanCard({ plan }: PlanCardProps) {
                           <AlertTriangle className="h-3 w-3" aria-hidden="true" />
                           <span className="font-medium">Unverifiable:</span>
                           {row.unverifiable_reason}
+                        </span>
+                      )}
+                      {row.revision_reason && (
+                        <span
+                          data-testid="plan-spec-revision"
+                          className="inline-flex items-center rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+                        >
+                          Revised: {row.revision_reason}
                         </span>
                       )}
                     </div>
