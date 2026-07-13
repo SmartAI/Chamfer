@@ -1,19 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamProxy } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import { openDb } from "../db";
 import { createApp } from "../app";
 import type { LlmStreamer } from "../llm";
 
 const scripted: LlmStreamer = {
   async *stream() {
-    yield { type: "start", partial: {} } as never;
-    yield { type: "text_start", contentIndex: 0, partial: {} } as never;
-    yield { type: "text_delta", contentIndex: 0, delta: "hello", partial: {} } as never;
-    yield { type: "text_end", contentIndex: 0, partial: {} } as never;
+    yield { type: "start", partial: { role: "assistant", content: [] } } as never;
+    yield { type: "text_start", contentIndex: 0, partial: { role: "assistant", content: [{ type: "text", text: "" }] } } as never;
+    yield { type: "text_delta", contentIndex: 0, delta: "hello", partial: { role: "assistant", content: [{ type: "text", text: "hello" }] } } as never;
+    yield { type: "text_end", contentIndex: 0, partial: { role: "assistant", content: [{ type: "text", text: "hello" }] } } as never;
     yield { type: "done", message: { stopReason: "stop", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } } as never;
   },
 };
 
 const toolCallUsage = { input: 8, output: 12, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+const toolThoughtSignature = "dGhvdWdodC1zaWduYXR1cmU=";
 
 const toolCallScripted: LlmStreamer = {
   async *stream() {
@@ -23,7 +26,7 @@ const toolCallScripted: LlmStreamer = {
       contentIndex: 0,
       partial: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: {} }],
+        content: [{ type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: {}, thoughtSignature: toolThoughtSignature }],
       },
     } as never;
     yield {
@@ -47,10 +50,16 @@ const toolCallScripted: LlmStreamer = {
     yield {
       type: "toolcall_end",
       contentIndex: 0,
-      toolCall: { type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: { location: "Paris" } },
+      toolCall: {
+        type: "toolCall",
+        id: "call_xyz789",
+        name: "get_weather",
+        arguments: { location: "Paris" },
+        thoughtSignature: toolThoughtSignature,
+      },
       partial: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: { location: "Paris" } }],
+        content: [{ type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: { location: "Paris" }, thoughtSignature: toolThoughtSignature }],
       },
     } as never;
     yield {
@@ -59,7 +68,7 @@ const toolCallScripted: LlmStreamer = {
         role: "assistant",
         stopReason: "toolUse",
         usage: toolCallUsage,
-        content: [{ type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: { location: "Paris" } }],
+        content: [{ type: "toolCall", id: "call_xyz789", name: "get_weather", arguments: { location: "Paris" }, thoughtSignature: toolThoughtSignature }],
       },
     } as never;
   },
@@ -91,6 +100,10 @@ const signalRecordingScripted: LlmStreamer = {
     yield { type: "done", message: { stopReason: "stop", usage: zeroedUsage } } as never;
   },
 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("POST /api/stream", () => {
   it("rejects a missing token", async () => {
@@ -141,10 +154,51 @@ describe("POST /api/stream", () => {
     for (const d of deltas) expect(d.partial).toBeUndefined();
 
     const end = events.find((e) => e.type === "toolcall_end");
-    expect(end).toEqual({ type: "toolcall_end", contentIndex: 0 });
+    expect(end).toEqual({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: {
+        type: "toolCall",
+        id: "call_xyz789",
+        name: "get_weather",
+        arguments: { location: "Paris" },
+        thoughtSignature: toolThoughtSignature,
+      },
+    });
 
     const done = events.at(-1);
     expect(done).toEqual({ type: "done", reason: "toolUse", usage: toolCallUsage });
+  });
+
+  it("preserves a Gemini thought signature across the complete proxy round trip", async () => {
+    const app = createApp(openDb(":memory:"), toolCallScripted);
+    vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return app.request(new URL(url).pathname, init);
+    });
+
+    const model = {
+      id: "gemini-test",
+      name: "Gemini Test",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    } satisfies Model<"google-generative-ai">;
+    const events = [];
+    for await (const event of streamProxy(model, { messages: [] }, {
+      authToken: "chamfer-local",
+      proxyUrl: "http://chamfer.test",
+    })) {
+      events.push(event);
+    }
+
+    const end = events.find((event) => event.type === "toolcall_end");
+    expect(end?.type === "toolcall_end" ? end.toolCall.thoughtSignature : undefined).toBe(toolThoughtSignature);
   });
 
   it("surfaces a mid-stream throw as an in-band SSE error event and still completes the response", async () => {

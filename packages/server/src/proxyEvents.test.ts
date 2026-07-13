@@ -37,14 +37,34 @@ describe("toProxyEvent", () => {
     expect(out).toEqual({ type: "toolcall_delta", contentIndex: 1, delta: '{"location":"S' });
   });
 
-  it("strips contentIndex-only fields for toolcall_end", () => {
+  it("forwards the complete tool call on toolcall_end", () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call_abc123",
+      name: "get_weather",
+      arguments: { location: "SF" },
+      thoughtSignature: "dGhvdWdodC1zaWduYXR1cmU=",
+    } as const;
     const out = toProxyEvent({
       type: "toolcall_end",
       contentIndex: 1,
-      toolCall: { type: "toolCall", id: "call_abc123", name: "get_weather", arguments: { location: "SF" } },
+      toolCall,
       partial: { role: "assistant", content: [] },
     } as never);
-    expect(out).toEqual({ type: "toolcall_end", contentIndex: 1 });
+    expect(out).toEqual({ type: "toolcall_end", contentIndex: 1, toolCall });
+  });
+
+  it("forwards text and thinking signatures on end events", () => {
+    expect(toProxyEvent({
+      type: "text_end",
+      contentIndex: 0,
+      partial: { content: [{ type: "text", text: "answer", textSignature: "text-signature" }] },
+    } as never)).toEqual({ type: "text_end", contentIndex: 0, contentSignature: "text-signature" });
+    expect(toProxyEvent({
+      type: "thinking_end",
+      contentIndex: 0,
+      partial: { content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "thinking-signature" }] },
+    } as never)).toEqual({ type: "thinking_end", contentIndex: 0, contentSignature: "thinking-signature" });
   });
 
   it("maps done events with stopReason toolUse to reason toolUse", () => {

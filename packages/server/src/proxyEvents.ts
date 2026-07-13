@@ -23,14 +23,26 @@ export function toProxyEvent(event: PiEvent): ProxyAssistantMessageEvent | null 
       return { type: "text_start", contentIndex: event.contentIndex };
     case "text_delta":
       return { type: "text_delta", contentIndex: event.contentIndex, delta: event.delta };
-    case "text_end":
-      return { type: "text_end", contentIndex: event.contentIndex };
+    case "text_end": {
+      const content = event.partial.content[event.contentIndex];
+      return {
+        type: "text_end",
+        contentIndex: event.contentIndex,
+        contentSignature: content?.type === "text" ? content.textSignature : undefined,
+      };
+    }
     case "thinking_start":
       return { type: "thinking_start", contentIndex: event.contentIndex };
     case "thinking_delta":
       return { type: "thinking_delta", contentIndex: event.contentIndex, delta: event.delta };
-    case "thinking_end":
-      return { type: "thinking_end", contentIndex: event.contentIndex };
+    case "thinking_end": {
+      const content = event.partial.content[event.contentIndex];
+      return {
+        type: "thinking_end",
+        contentIndex: event.contentIndex,
+        contentSignature: content?.type === "thinking" ? content.thinkingSignature : undefined,
+      };
+    }
     case "toolcall_start": {
       // pi-ai's toolcall_start only carries contentIndex + partial (the
       // in-progress AssistantMessage); the proxy wire format wants the
@@ -47,7 +59,7 @@ export function toProxyEvent(event: PiEvent): ProxyAssistantMessageEvent | null 
     case "toolcall_delta":
       return { type: "toolcall_delta", contentIndex: event.contentIndex, delta: event.delta };
     case "toolcall_end":
-      return { type: "toolcall_end", contentIndex: event.contentIndex };
+      return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: event.toolCall };
     case "done":
       return { type: "done", reason: event.message.stopReason as "stop" | "length" | "toolUse", usage: event.message.usage };
     case "error":
