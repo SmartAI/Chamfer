@@ -1,6 +1,6 @@
 {
   "name": "chamfer",
-  "version": "2.1.0",
+  "version": "0.2.1",
   "description": "AI CAD designer that turns text and reference images into verified, parametric 3D models.",
   "license": "Apache-2.0",
   "type": "module",

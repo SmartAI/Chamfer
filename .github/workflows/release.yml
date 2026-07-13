@@ -1,6 +1,7 @@
 name: Release
 
-# Publishes the `chamfer` npm package when a v* tag is pushed.
+# Publishes the current `chamfer` package when a v* tag is pushed.
+# The manual input is a one-time migration path for the verified 2.0.0 artifact.
 # Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN secret. The trusted
 # publisher (repo SmartAI/Chamfer, workflow release.yml) must be configured
 # in the package settings on npmjs.com; the very first publish is manual.
@@ -8,6 +9,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish_legacy_0_2_0:
+        description: "Republish the verified chamfer@2.0.0 artifact as chamfer@0.2.0"
+        required: true
+        type: boolean
 
 permissions:
   contents: read
@@ -15,6 +22,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,4 +44,46 @@ jobs:
       - run: npm run typecheck --workspaces --if-present
       - run: npm run test --workspaces --if-present
       - run: npm run build
-      - run: npm publish -w chamfer --provenance --access public
+      - run: npm publish -w chamfer --provenance --access public --tag latest
+
+  publish-legacy-0-2-0:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_legacy_0_2_0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install -g npm@latest
+      - name: Prepare verified chamfer 0.2.0 artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          work_dir="$(mktemp -d)"
+          npm pack chamfer@2.0.0 --pack-destination "$work_dir"
+          tarball="$work_dir/chamfer-2.0.0.tgz"
+          expected_sha512="afb6c7bd0c4e3a1f7e3145ad9571bcdb392d58d5fd114917a505e05d6700889188ffd90bb764378d48f2d74d7346d41a4ad2dd57a28073251ae387b343d75dd6"
+          actual_sha512="$(sha512sum "$tarball" | cut -d' ' -f1)"
+          test "$actual_sha512" = "$expected_sha512"
+          tar -xzf "$tarball" -C "$work_dir"
+          PACKAGE_DIR="$work_dir/package" node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const packagePath = path.join(process.env.PACKAGE_DIR, "package.json");
+          const source = fs.readFileSync(packagePath, "utf8");
+          const packageJson = JSON.parse(source);
+          if (packageJson.name !== "chamfer" || packageJson.version !== "2.0.0") {
+            throw new Error(`Unexpected legacy package: ${packageJson.name}@${packageJson.version}`);
+          }
+          const versionField = '"version": "2.0.0"';
+          if (source.split(versionField).length !== 2) {
+            throw new Error("Legacy package must contain exactly one expected version field");
+          }
+          const updated = source.replace(versionField, '"version": "0.2.0"');
+          if (JSON.parse(updated).version !== "0.2.0") {
+            throw new Error("Failed to prepare corrected legacy version");
+          }
+          fs.writeFileSync(packagePath, updated);
+          NODE
+          echo "LEGACY_PACKAGE_DIR=$work_dir/package" >> "$GITHUB_ENV"
+      - run: npm publish "$LEGACY_PACKAGE_DIR" --provenance --access public --tag latest

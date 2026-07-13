@@ -14,8 +14,13 @@ CAD execution, geometry, conversations, and settings stay local.
 
 ## Demos
 
-- [Espresso machine from a product image](https://youtu.be/rvVmGJ5AsDQ)
-- [A Text/Image to 3D CAD AI Agent](https://youtu.be/QUC5HnAoHCI)
+### Espresso machine from a product image
+
+[![Watch the espresso machine demo](https://img.youtube.com/vi/rvVmGJ5AsDQ/hqdefault.jpg)](https://youtu.be/rvVmGJ5AsDQ)
+
+### A Text/Image to 3D CAD AI Agent
+
+[![Watch the Text/Image to 3D CAD demo](https://img.youtube.com/vi/QUC5HnAoHCI/hqdefault.jpg)](https://youtu.be/QUC5HnAoHCI)
 
 ## Features
 

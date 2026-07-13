@@ -9,6 +9,16 @@ Fine-tune dimensions with live sliders, then export STEP, STL, 3MF, or Python.
 Prompts and attached images are sent to the model provider you configure.
 CAD execution, geometry, conversations, and settings stay local.
 
+## Demos
+
+### Espresso machine from a product image
+
+[![Watch the espresso machine demo](https://img.youtube.com/vi/rvVmGJ5AsDQ/hqdefault.jpg)](https://youtu.be/rvVmGJ5AsDQ)
+
+### A Text/Image to 3D CAD AI Agent
+
+[![Watch the Text/Image to 3D CAD demo](https://img.youtube.com/vi/QUC5HnAoHCI/hqdefault.jpg)](https://youtu.be/QUC5HnAoHCI)
+
 ## Features
 
 - Text and image prompts for reference-guided CAD
@@ -37,6 +47,4 @@ The first part you build downloads the CAD kernel (build123d + OpenCascade via P
 ## Links
 
 - [Project page](https://smartai.github.io/Chamfer/)
-- [Espresso machine from a product image](https://youtu.be/rvVmGJ5AsDQ)
-- [A Text/Image to 3D CAD AI Agent](https://youtu.be/QUC5HnAoHCI)
 - [Source](https://github.com/SmartAI/Chamfer) (Apache-2.0)
