@@ -1,6 +1,13 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ToolCallCard } from "./ToolCallCard";
+import * as rest from "@/api/rest";
+
+vi.mock("@/api/rest", () => ({
+  downloadAttachment: vi.fn(),
+  listAttachments: vi.fn(async () => []),
+  attachmentUrl: (id: string) => `/api/attachments/${id}`,
+}));
 
 const call = {
   id: "tc-1",
@@ -9,12 +16,97 @@ const call = {
 };
 
 describe("ToolCallCard status", () => {
+  it("renders every ordered inspect_evidence reference regardless of attachment kind", async () => {
+    vi.mocked(rest.downloadAttachment).mockImplementation(async (id) => ({
+      type: "image",
+      data: `pixels-${id}`,
+      mimeType: "image/png",
+    }));
+    render(
+      <ToolCallCard
+        call={{ id: "inspect-1", name: "inspect_evidence", arguments: { evidenceIds: ["ref-1", "sheet-1"] } }}
+        result={{
+          content: [
+            { type: "text", text: "Inspection opened" },
+            { type: "attachment-reference", attachmentId: "ref-1", kind: "user-image", mimeType: "image/png" },
+            { type: "attachment-reference", attachmentId: "sheet-1", kind: "view-sheet", mimeType: "image/png" },
+          ],
+          isError: false,
+        }}
+      />,
+    );
+
+    const images = await screen.findAllByTestId("inspection-evidence-image");
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "data:image/png;base64,pixels-ref-1",
+      "data:image/png;base64,pixels-sheet-1",
+    ]);
+  });
+
+  it("renders an explicit unavailable state for a missing inspected reference", async () => {
+    vi.mocked(rest.downloadAttachment).mockRejectedValue(new Error("evidence ref-missing is missing"));
+    render(
+      <ToolCallCard
+        call={{ id: "inspect-missing", name: "inspect_evidence", arguments: { evidenceIds: ["ref-missing"] } }}
+        result={{
+          content: [
+            { type: "attachment-reference", attachmentId: "ref-missing", kind: "user-image", mimeType: "image/png" },
+          ],
+          isError: false,
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Attachment missing")).toBeTruthy();
+  });
+
+  it("keeps a long tool name on one truncated line while status remains nonshrinking", () => {
+    render(
+      <ToolCallCard
+        call={{ id: "observe-1", name: "record_inspection_observation", arguments: {} }}
+        result={{ content: [], isError: false }}
+      />,
+    );
+
+    const label = screen.getByTitle("record_inspection_observation");
+    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("whitespace-nowrap");
+    expect(screen.getByText("Complete").className).toContain("shrink-0");
+  });
+
+  it("renders a reloaded inspection-sheet reference through attachment retrieval", async () => {
+    vi.mocked(rest.downloadAttachment).mockResolvedValue({ type: "image", data: "sheet", mimeType: "image/png" });
+    render(
+      <ToolCallCard
+        call={call}
+        result={{
+          content: [
+            { type: "text", text: "Measurements: {}" },
+            { type: "attachment-reference", attachmentId: "sheet-1", kind: "view-sheet", mimeType: "image/png" },
+          ],
+          isError: false,
+        }}
+      />,
+    );
+
+    expect((await screen.findByTestId("view-sheet-image")).getAttribute("src")).toBe(
+      "data:image/png;base64,sheet",
+    );
+  });
+
   it("shows Running while there is no result yet", () => {
     render(<ToolCallCard call={call} />);
 
     expect(screen.getByText("Running")).toBeTruthy();
     expect(screen.queryByText("Complete")).toBeNull();
     expect(screen.queryByText("Failed")).toBeNull();
+  });
+
+  it("shows Failed when generation ended before the tool produced a result", () => {
+    render(<ToolCallCard call={call} interrupted />);
+
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.queryByText("Running")).toBeNull();
   });
 
   it("shows Complete for a successful result", () => {

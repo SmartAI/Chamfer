@@ -9,9 +9,12 @@ import { loadDotenv, startServer } from "./startServer";
 for (const file of loadDotenv().files) {
   console.log(`chamfer: loaded environment from ${file}`);
 }
-startServer({
+void startServer({
   dbPath: process.env.CHAMFER_DATA_DIR
     ? join(process.env.CHAMFER_DATA_DIR, "chamfer.db")
     : fileURLToPath(new URL("../../../data/chamfer.db", import.meta.url)),
   clientDist: fileURLToPath(new URL("../../client/dist", import.meta.url)),
+}).catch((error: unknown) => {
+  console.error("chamfer: startup failed", error);
+  process.exitCode = 1;
 });

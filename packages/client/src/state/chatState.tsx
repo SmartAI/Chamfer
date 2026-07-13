@@ -28,7 +28,7 @@ import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
 import { createSearchDocsTool } from "@/agent/tools/searchDocs";
 import { useOptionalAppState } from "@/state/appState";
 
-const EMPTY_SESSION_STATE: SessionState = { messages: [], streaming: false };
+const EMPTY_SESSION_STATE: SessionState = { messages: [], referenceRecords: [], streaming: false };
 
 /** A message the user sent while the agent was busy, waiting for its own turn. */
 export interface QueuedMessage {
@@ -224,8 +224,16 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
 
     if (!id) return;
 
-    Promise.all([rest.getSettings(), rest.listMessages(id), rest.listArtifacts(id)])
-      .then(async ([settings, messages, artifacts]) => {
+    Promise.all([
+      rest.getSettings(),
+      rest.listMessages(id),
+      rest.listArtifacts(id),
+      rest.listReferenceRecords(id),
+      rest.listOpenInspectionLeases(id),
+      rest.listVisualVerifications(id),
+      rest.listVisualVerificationBatches(id),
+    ])
+      .then(async ([settings, messages, artifacts, referenceRecords, openInspectionLeases, visualVerifications, visualVerificationBatches]) => {
         if (cancelled()) return;
 
         const modelJson = settings.modelJson;
@@ -263,9 +271,11 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
                   publishCadResult({ mesh, measurements });
                   restoreScript?.(code);
                   try {
-                    await rest.postArtifact(id, { pySource: code, paramsJson: null });
+                    const artifact = await rest.postArtifact(id, { pySource: code, paramsJson: null });
+                    return { artifactId: artifact.id, artifactVersion: artifact.version };
                   } catch (artifactError) {
                     setError(artifactError instanceof Error ? artifactError.message : String(artifactError));
+                    return undefined;
                   }
                 },
               }),
@@ -285,6 +295,10 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
             systemPrompt: assembleAgentPrompt(runtimePrompt, { skill: skillMode }),
             tools,
             priorMessages,
+            referenceRecords,
+            openInspectionLeases,
+            visualVerifications,
+            visualVerificationBatches,
             maxCadRuns,
             skillMode,
           });

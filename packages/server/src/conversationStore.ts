@@ -38,7 +38,11 @@ interface AttachmentRow {
   message_id: string;
   kind: string;
   mime: string;
-  data: Uint8Array;
+  data: Uint8Array | null;
+  content_hash: string | null;
+  byte_size: number | null;
+  blob_path: string | null;
+  display_order: number | null;
 }
 
 function toConversationDto(row: ConversationRow): ConversationDto {
@@ -70,6 +74,9 @@ function toAttachmentDto(row: AttachmentRow): AttachmentDto {
     messageId: row.message_id,
     kind: row.kind as AttachmentDto["kind"],
     mime: row.mime,
+    contentHash: row.content_hash ?? "",
+    byteSize: row.byte_size ?? row.data?.byteLength ?? 0,
+    displayOrder: row.display_order ?? 0,
   };
 }
 
@@ -107,6 +114,11 @@ export function messageExists(db: DatabaseSync, id: string): boolean {
   return row !== undefined;
 }
 
+export function getMessage(db: DatabaseSync, id: string): MessageDto | undefined {
+  const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as unknown as MessageRow | undefined;
+  return row ? toMessageDto(row) : undefined;
+}
+
 /** Internal-only title setter: titles are server-generated (see routes'
  * generate-title); there is no user-facing rename endpoint. */
 export function setConversationTitle(db: DatabaseSync, id: string, title: string): boolean {
@@ -116,17 +128,6 @@ export function setConversationTitle(db: DatabaseSync, id: string, title: string
     id,
   );
   return result.changes > 0;
-}
-
-export function deleteConversation(db: DatabaseSync, id: string): boolean {
-  if (!conversationExists(db, id)) return false;
-  db.prepare(
-    `DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)`,
-  ).run(id);
-  db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
-  db.prepare("DELETE FROM artifacts WHERE conversation_id = ?").run(id);
-  db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
-  return true;
 }
 
 export function createMessage(
@@ -164,29 +165,105 @@ export function createAttachment(
   db: DatabaseSync,
   messageId: string,
   kind: string,
-  mime: string,
-  data: Uint8Array,
+  blob: { mime: string; contentHash: string; byteSize: number; blobPath: string },
+  id: string = crypto.randomUUID(),
 ): AttachmentDto {
-  const id = crypto.randomUUID();
-  db.prepare("INSERT INTO attachments (id, message_id, kind, mime, data) VALUES (?, ?, ?, ?, ?)").run(
+  const orderRow = db.prepare(
+    "SELECT COALESCE(MAX(display_order), -1) + 1 AS display_order FROM attachments WHERE message_id = ?",
+  ).get(messageId) as { display_order: number };
+  const displayOrder = orderRow.display_order;
+  db.prepare(
+    `INSERT INTO attachments
+      (id, message_id, kind, mime, content_hash, byte_size, blob_path, display_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
     id,
     messageId,
     kind,
-    mime,
-    data,
+    blob.mime,
+    blob.contentHash,
+    blob.byteSize,
+    blob.blobPath,
+    displayOrder,
   );
-  return { id, messageId, kind: kind as AttachmentDto["kind"], mime };
+  return {
+    id,
+    messageId,
+    kind: kind as AttachmentDto["kind"],
+    mime: blob.mime,
+    contentHash: blob.contentHash,
+    byteSize: blob.byteSize,
+    displayOrder,
+  };
 }
 
-export function getAttachment(db: DatabaseSync, id: string): { mime: string; data: Uint8Array } | undefined {
-  const row = db.prepare("SELECT mime, data FROM attachments WHERE id = ?").get(id) as
-    | { mime: string; data: Uint8Array }
+export function createMessageWithAttachments(
+  db: DatabaseSync,
+  conversationId: string,
+  message: { id: string; seq: number; role: string; contentJson: string },
+  attachments: Array<{
+    id: string;
+    kind: string;
+    blob: { mime: string; contentHash: string; byteSize: number; blobPath: string };
+  }>,
+): MessageDto {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const created = createMessage(db, conversationId, message);
+    for (const attachment of attachments) {
+      createAttachment(db, message.id, attachment.kind, attachment.blob, attachment.id);
+    }
+    db.exec("COMMIT");
+    return created;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function getAttachment(db: DatabaseSync, id: string):
+  | { storage: "blob"; mime: string; contentHash: string; byteSize: number; blobPath: string }
+  | { storage: "legacy"; mime: string; data: Uint8Array }
+  | undefined {
+  const hasLegacyData = (db.prepare("PRAGMA table_info(attachments)").all() as Array<{ name: string }>).some(
+    (column) => column.name === "data",
+  );
+  const row = db.prepare(
+    `SELECT mime, ${hasLegacyData ? "data" : "NULL AS data"}, content_hash, byte_size, blob_path
+       FROM attachments WHERE id = ?`,
+  ).get(id) as
+    | {
+        mime: string;
+        data: Uint8Array | null;
+        content_hash: string | null;
+        byte_size: number | null;
+        blob_path: string | null;
+      }
     | undefined;
   if (!row) return undefined;
-  return { mime: row.mime, data: row.data };
+  if (row.content_hash !== null && row.byte_size !== null && row.blob_path !== null) {
+    return {
+      storage: "blob",
+      mime: row.mime,
+      contentHash: row.content_hash,
+      byteSize: row.byte_size,
+      blobPath: row.blob_path,
+    };
+  }
+  // Direct API tests can create a pre-startup database; production startup removes this column.
+  return row.data === null ? undefined : { storage: "legacy", mime: row.mime, data: row.data };
+}
+
+export function attachmentReferenceCount(db: DatabaseSync, contentHash: string): number {
+  const row = db.prepare("SELECT COUNT(*) AS count FROM attachments WHERE content_hash = ?").get(contentHash) as {
+    count: number;
+  };
+  return row.count;
 }
 
 export function listAttachments(db: DatabaseSync, messageId: string): AttachmentDto[] {
-  const rows = db.prepare("SELECT * FROM attachments WHERE message_id = ? ORDER BY rowid ASC").all(messageId) as unknown as AttachmentRow[];
+  const rows = db.prepare(
+    "SELECT * FROM attachments WHERE message_id = ? ORDER BY display_order ASC, rowid ASC",
+  ).all(messageId) as unknown as AttachmentRow[];
   return rows.map(toAttachmentDto);
 }

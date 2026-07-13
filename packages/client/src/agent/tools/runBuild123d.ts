@@ -3,6 +3,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { Gate, Measurements, MeshPayload } from "@chamfer/shared";
 import type { CadClient } from "@/cad/cadClient";
 import { renderViewSheet } from "@/viewer/viewSheet";
+import type { CadCodeVersion } from "../inspectionSheetLifecycle";
 
 const parameters = Type.Object({
   code: Type.String({
@@ -51,18 +52,18 @@ export function createRunBuild123dTool(deps: {
     mesh: MeshPayload;
     measurements: Measurements;
     sheetPng: Blob;
-  }) => Promise<void>;
-}): AgentTool<typeof parameters, { measurements: Measurements; gate?: Gate }> {
+  }) => Promise<Pick<CadCodeVersion, "artifactId" | "artifactVersion"> | void>;
+}): AgentTool<typeof parameters, { measurements: Measurements; gate?: Gate; code: CadCodeVersion }> {
   return {
     name: "run_build123d",
     label: "Run build123d",
     description:
       "Execute one complete, self-contained build123d Python script. The script must assign the finished geometry to a top-level result variable.",
     parameters,
-    execute: async (_toolCallId, { code }) => {
+    execute: async (toolCallId, { code }) => {
       const { stdout, measurements, mesh, gate } = await deps.cad.run(code);
       const sheetPng = await renderViewSheet(mesh);
-      await deps.onSuccess({ code, mesh, measurements, sheetPng });
+      const artifact = await deps.onSuccess({ code, mesh, measurements, sheetPng });
       const data = await blobToBase64(sheetPng);
       const prefix = stdout ? `${stdout}\n` : "";
       return {
@@ -73,7 +74,11 @@ export function createRunBuild123dTool(deps: {
           },
           { type: "image", data, mimeType: "image/png" },
         ],
-        details: { measurements, gate },
+        details: {
+          measurements,
+          ...(gate ? { gate } : {}),
+          code: { toolCallId, ...(artifact ?? {}) },
+        },
       };
     },
   };

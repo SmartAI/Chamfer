@@ -7,7 +7,18 @@ import type {
   ModelInfoDto,
   SettingsPatchDto,
   SettingsResponseDto,
+  ClassifyReferenceInput,
+  ReferenceClassificationDto,
+  ReferenceRecordDto,
+  InspectEvidenceInput,
+  InspectionLeaseDto,
+  InspectionObservationInput,
+  RecordVisualVerificationInput,
+  RecordVisualVerificationBatchInput,
+  VisualVerificationBatchRecordDto,
+  VisualVerificationRecordDto,
 } from "@chamfer/shared";
+import type { ImageContent } from "@earendil-works/pi-ai";
 
 async function throwOnError(res: Response): Promise<void> {
   if (res.ok) return;
@@ -40,6 +51,12 @@ function jsonInit(method: string, body: unknown): RequestInit {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function idempotentJsonInit(method: string, body: unknown, idempotencyKey?: string): RequestInit {
+  const init = jsonInit(method, body);
+  if (idempotencyKey) (init.headers as Record<string, string>)["Idempotency-Key"] = idempotencyKey;
+  return init;
 }
 
 // ---------- Settings ----------
@@ -95,6 +112,17 @@ export function postMessage(conversationId: string, message: PostMessageInput): 
   return requestJson<MessageDto>(`/api/conversations/${conversationId}/messages`, jsonInit("POST", message));
 }
 
+export function postMessageWithAttachments(
+  conversationId: string,
+  message: PostMessageInput,
+  attachments: Array<{ id: string; kind: AttachmentDto["kind"]; mime: string; data: string }>,
+): Promise<MessageDto> {
+  return requestJson<MessageDto>(
+    `/api/conversations/${conversationId}/messages-with-attachments`,
+    jsonInit("POST", { message, attachments }),
+  );
+}
+
 // ---------- Artifacts ----------
 
 export function listArtifacts(conversationId: string): Promise<ArtifactDto[]> {
@@ -118,8 +146,10 @@ export function uploadAttachment(
   kind: AttachmentDto["kind"],
   mime: string,
   bytes: BodyInit,
+  id?: string,
 ): Promise<AttachmentDto> {
   const params = new URLSearchParams({ kind, mime });
+  if (id) params.set("id", id);
   return requestJson<AttachmentDto>(`/api/messages/${messageId}/attachments?${params.toString()}`, {
     method: "POST",
     headers: { "content-type": mime },
@@ -131,6 +161,96 @@ export function listAttachments(messageId: string): Promise<AttachmentDto[]> {
   return requestJson<AttachmentDto[]>(`/api/messages/${messageId}/attachments`);
 }
 
+export function listReferenceRecords(conversationId: string): Promise<ReferenceRecordDto[]> {
+  return requestJson<ReferenceRecordDto[]>(`/api/conversations/${conversationId}/references`);
+}
+
+export function classifyReference(
+  conversationId: string,
+  input: ClassifyReferenceInput,
+  idempotencyKey?: string,
+): Promise<ReferenceClassificationDto> {
+  return requestJson<ReferenceClassificationDto>(
+    `/api/conversations/${conversationId}/reference-classifications`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function listOpenInspectionLeases(conversationId: string): Promise<InspectionLeaseDto[]> {
+  return requestJson<InspectionLeaseDto[]>(`/api/conversations/${conversationId}/inspection-leases?status=open`);
+}
+
+export function openInspectionLease(
+  conversationId: string,
+  input: InspectEvidenceInput,
+  idempotencyKey?: string,
+): Promise<InspectionLeaseDto> {
+  return requestJson<InspectionLeaseDto>(
+    `/api/conversations/${conversationId}/inspection-leases`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function recordInspectionObservation(
+  conversationId: string,
+  leaseId: string,
+  input: InspectionObservationInput,
+  idempotencyKey?: string,
+): Promise<InspectionLeaseDto> {
+  return requestJson<InspectionLeaseDto>(
+    `/api/conversations/${conversationId}/inspection-leases/${leaseId}/observations`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function listVisualVerifications(conversationId: string): Promise<VisualVerificationRecordDto[]> {
+  return requestJson<VisualVerificationRecordDto[]>(`/api/conversations/${conversationId}/visual-verifications`);
+}
+
+export function recordVisualVerification(
+  conversationId: string,
+  input: RecordVisualVerificationInput,
+  idempotencyKey?: string,
+): Promise<VisualVerificationRecordDto> {
+  return requestJson<VisualVerificationRecordDto>(
+    `/api/conversations/${conversationId}/visual-verifications`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function listVisualVerificationBatches(conversationId: string): Promise<VisualVerificationBatchRecordDto[]> {
+  return requestJson<VisualVerificationBatchRecordDto[]>(`/api/conversations/${conversationId}/visual-verification-batches`);
+}
+
+export function recordVisualVerificationBatch(
+  conversationId: string,
+  input: RecordVisualVerificationBatchInput,
+  idempotencyKey?: string,
+): Promise<VisualVerificationBatchRecordDto> {
+  return requestJson<VisualVerificationBatchRecordDto>(
+    `/api/conversations/${conversationId}/visual-verification-batches`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
 export function attachmentUrl(id: string): string {
   return `/api/attachments/${id}`;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+/** Materializes one durable attachment for the pi model-context boundary. */
+export async function downloadAttachment(id: string, expectedMimeType: string): Promise<ImageContent> {
+  const response = await fetch(attachmentUrl(id));
+  await throwOnError(response);
+  const mimeType = response.headers.get("content-type")?.split(";", 1)[0] || expectedMimeType;
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return { type: "image", data: bytesToBase64(bytes), mimeType };
 }

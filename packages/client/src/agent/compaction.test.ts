@@ -180,6 +180,42 @@ describe("runCompaction", () => {
     expect(prompt).toContain("Never round, drop, or paraphrase a number");
   });
 
+  it("is deterministic for identical durable attachment and reference-record state", async () => {
+    const durableReference = {
+      role: "user",
+      content: [
+        { type: "text", text: "[Reference ref-primary: status=active; purpose=primary profile; relationships=[]; specificationLinks=[visual.profile]; attachmentAvailable=true]" },
+        { type: "attachment-reference", attachmentId: "ref-primary", kind: "user-image", mimeType: "image/png" },
+      ],
+      timestamp: 0,
+    } as unknown as AgentMessage;
+    const messages = [
+      durableReference,
+      assistant("Reference recorded"),
+      bigUser(45_000, "stable requirements one"),
+      assistant("ack"),
+      bigUser(45_000, "stable requirements two"),
+      assistant("ack"),
+      user("recent durable tail"),
+      assistant("done"),
+    ];
+    const firstStream = summaryStreamFn("- Stable reference ref-primary and exact requirements retained.");
+    const secondStream = summaryStreamFn("- Stable reference ref-primary and exact requirements retained.");
+    const first = await runCompaction({ messages: structuredClone(messages), model: MODEL, streamFn: firstStream });
+    const second = await runCompaction({ messages: structuredClone(messages), model: MODEL, streamFn: secondStream });
+
+    expect({ ...first, timestamp: 0 }).toEqual({ ...second, timestamp: 0 });
+    const firstPrompt = ((firstStream as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as {
+      messages: Array<{ content: Array<{ text: string }> }>;
+    }).messages[0]!.content[0]!.text;
+    const secondPrompt = ((secondStream as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as {
+      messages: Array<{ content: Array<{ text: string }> }>;
+    }).messages[0]!.content[0]!.text;
+    expect(secondPrompt).toBe(firstPrompt);
+    expect(firstPrompt).toContain("ref-primary");
+    expect(firstPrompt).not.toContain("base64");
+  });
+
   it("folds the previous summary in when compacting a second time", async () => {
     const previous = {
       role: "compaction",

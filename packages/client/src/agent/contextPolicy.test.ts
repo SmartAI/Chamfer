@@ -25,6 +25,25 @@ function sheet(id: number): AgentMessage {
   } as unknown as AgentMessage;
 }
 
+function referencedSheet(id: number): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: `call-${id}`,
+    toolName: "run_build123d",
+    content: [
+      { type: "text", text: `Measurements: {} run ${id}` },
+      {
+        type: "attachment-reference",
+        attachmentId: `sheet-${id}`,
+        kind: "view-sheet",
+        mimeType: "image/png",
+      },
+    ],
+    isError: false,
+    timestamp: id,
+  } as unknown as AgentMessage;
+}
+
 function user(text: string): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp: 0 } as AgentMessage;
 }
@@ -48,45 +67,19 @@ function stubCount(messages: AgentMessage[]): number {
 }
 
 describe("applySheetStubs", () => {
-  it("keeps everything untouched at or below the threshold", () => {
-    const messages = [user("go"), ...Array.from({ length: 8 }, (_, i) => sheet(i))];
-    expect(applySheetStubs(messages)).toBe(messages);
-  });
-
-  it("stubs down to the newest keep-count in one batch when the threshold trips", () => {
-    const messages = Array.from({ length: 9 }, (_, i) => sheet(i));
+  it("keeps only the newest successful inspection sheet pixel-bearing", () => {
+    const messages = Array.from({ length: 3 }, (_, i) => sheet(i));
     const result = applySheetStubs(messages);
-    expect(stubCount(result)).toBe(6);
-    // Newest three sheets keep their images.
-    expect(imageOf(result[6])).toBe("png-6");
-    expect(imageOf(result[7])).toBe("png-7");
-    expect(imageOf(result[8])).toBe("png-8");
-    // Stubbed results keep their text content (measurements + gate verdict).
+    expect(stubCount(result)).toBe(2);
+    expect(imageOf(result[2])).toBe("png-2");
     const first = result[0] as { content: { type: string; text?: string }[] };
     expect(first.content[0]?.text).toContain("Measurements");
     expect(first.content.some((b) => b.type === "image")).toBe(false);
   });
 
-  it("is sticky: decisions about a prefix never change as sheets append (batched cache breaks)", () => {
-    const nine = Array.from({ length: 9 }, (_, i) => sheet(i));
-    const after9 = applySheetStubs(nine);
-    // Sheets 10..14 leave 4..8 live sheets (under the threshold); the second batch
-    // fires at sheet 15, when the live count reaches 9 again.
-    for (let n = 10; n <= 15; n += 1) {
-      const messages = Array.from({ length: n }, (_, i) => sheet(i));
-      const result = applySheetStubs(messages);
-      if (n < 15) {
-        // No new batch yet: the transformed prefix is identical to the 9-sheet run.
-        for (let i = 0; i < 9; i += 1) {
-          expect(JSON.stringify(result[i])).toBe(JSON.stringify(after9[i]));
-        }
-        expect(stubCount(result)).toBe(6);
-      } else {
-        // Second batch: everything but the newest three is stubbed.
-        expect(stubCount(result)).toBe(12);
-        expect(imageOf(result[14])).toBe("png-14");
-      }
-    }
+  it("is byte-stable for an unchanged transcript", () => {
+    const messages = Array.from({ length: 9 }, (_, i) => sheet(i));
+    expect(JSON.stringify(applySheetStubs(messages))).toBe(JSON.stringify(applySheetStubs(messages)));
   });
 
   it("never touches user-uploaded images", () => {
@@ -101,7 +94,20 @@ describe("applySheetStubs", () => {
     const messages = [reference, ...Array.from({ length: 12 }, (_, i) => sheet(i))];
     const result = applySheetStubs(messages);
     expect(imageOf(result[0])).toBe("user-photo");
-    expect(stubCount(result)).toBeGreaterThan(0);
+    expect(stubCount(result)).toBe(11);
+  });
+
+  it("stubs durable view-sheet references before model materialization", () => {
+    const messages = Array.from({ length: 9 }, (_, index) => referencedSheet(index));
+    const result = applySheetStubs(messages);
+
+    expect(stubCount(result)).toBe(8);
+    expect((result[0] as unknown as { content: Array<{ type: string }> }).content).not.toContainEqual(
+      expect.objectContaining({ type: "attachment-reference" }),
+    );
+    expect((result[8] as unknown as { content: Array<{ attachmentId?: string }> }).content).toContainEqual(
+      expect.objectContaining({ attachmentId: "sheet-8" }),
+    );
   });
 });
 
@@ -168,6 +174,48 @@ describe("compaction boundary", () => {
     expect(context.some((m) => isCompactionMessage(m))).toBe(false);
     expect(context[1]).toBe(messages[2]);
     expect(context[2]).toBe(messages[4]);
+  });
+
+  it("pins an active current sheet across compaction without duplicating a visible sheet", () => {
+    const current = referencedSheet(7);
+    const intermediate = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "docs-1", name: "lookup_docs", arguments: { query: "fillet" } }],
+      stopReason: "toolUse",
+      timestamp: 8,
+    } as unknown as AgentMessage;
+    const compactedAway = [
+      user("build the part"),
+      current,
+      intermediate,
+      { ...row, keptTail: 1 } as unknown as AgentMessage,
+      user("continue the repair"),
+    ];
+
+    const pinned = transformLlmContext(compactedAway);
+    expect(pinned[1]).toBe(current);
+    expect(pinned.filter((message) => message === current)).toHaveLength(1);
+    expect(JSON.stringify(pinned)).toContain("sheet-7");
+    expect(JSON.stringify(transformLlmContext(compactedAway))).toBe(JSON.stringify(pinned));
+
+    const alreadyVisible = [
+      user("build the part"),
+      current,
+      intermediate,
+      { ...row, keptTail: 2 } as unknown as AgentMessage,
+      user("continue the repair"),
+    ];
+    const unpinned = transformLlmContext(alreadyVisible);
+    expect(unpinned.filter((message) => message === current)).toHaveLength(1);
+
+    const finalized = [
+      user("build the part"),
+      current,
+      assistant("Finished"),
+      { ...row, keptTail: 1 } as unknown as AgentMessage,
+      user("start a new request"),
+    ];
+    expect(JSON.stringify(transformLlmContext(finalized))).not.toContain("sheet-7");
   });
 
   it("is byte-stable across calls for the same transcript (prompt-cache safety)", () => {

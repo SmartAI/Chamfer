@@ -19,6 +19,7 @@
     "@langfuse/tracing": "^5.9.1",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
     "hono": "^4.6.0",
+    "sharp": "^0.35.3",
     "tsx": "^4.19.0"
   },
   "devDependencies": {

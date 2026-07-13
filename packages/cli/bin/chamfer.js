@@ -36,7 +36,7 @@ for (const file of loadDotenv().files) {
 }
 
 const dataDir = process.env.CHAMFER_DATA_DIR ?? join(homedir(), ".chamfer");
-startServer({
+await startServer({
   dbPath: join(dataDir, "chamfer.db"),
   clientDist: join(here, "../dist/client"),
   port,

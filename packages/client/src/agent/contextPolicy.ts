@@ -1,14 +1,20 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { findSkill, skillBodyText, skillResourceText } from "./skillRegistry";
 import { isSkillLoadResult, skillLoadKey, type LoadSkillDetails } from "./tools/loadSkill";
+import {
+  currentInspectionSheet,
+  INSPECTION_SHEET_STUB_TEXT,
+  isInspectionSheetResult,
+  projectCurrentInspectionSheet,
+} from "./inspectionSheetLifecycle";
 
 /**
  * Chamfer's LLM-visible context policy: what the model sees may be smaller than the
  * persisted transcript, but the transcript itself is never rewritten. Three mechanisms:
  *
- * 1. Sheet stubbing: every run_build123d result carries a ~350KB seven-view PNG. Once
- *    enough of them accumulate, older sheets are replaced by a text stub in the LLM
- *    context only (the DB row and the UI keep the image).
+ * 1. Current-sheet projection: exactly the newest successful run_build123d sheet stays
+ *    pixel-bearing during reasoning and repair. Older and finalized sheets become compact
+ *    evidence in model context only; the DB row and UI retain their attachment references.
  * 2. Compaction boundary: a persisted `compaction` row summarizes everything before it;
  *    the LLM context becomes [summary-as-user-message, kept tail, everything after].
  * 3. Skill pinning: load_skill results are durable for the whole conversation. Loads
@@ -21,16 +27,15 @@ import { isSkillLoadResult, skillLoadKey, type LoadSkillDetails } from "./tools/
  * reloads) and decisions about a prefix never change as new messages append.
  */
 
-/** Stub a sheet only when more than this many un-stubbed sheets are in context. */
-export const MAX_LIVE_SHEETS = 8;
-/** When the threshold trips, stub down to this many newest sheets in one batch. */
-export const KEEP_SHEETS = 3;
-
-export const SHEET_STUB_TEXT =
-  "[Inspection sheet image removed: superseded by newer CAD runs. The measurements and gate verdict in this result are still valid; run run_build123d again if fresh views are needed.]";
+export const SHEET_STUB_TEXT = INSPECTION_SHEET_STUB_TEXT;
 
 const FAILED_TOOL_NON_TEXT_STUB = "[Non-text tool result content omitted because the tool failed.]";
 const EMPTY_FAILED_TOOL_STUB = "Tool failed without a text error message.";
+
+interface ContentBlock {
+  type?: string;
+  text?: string;
+}
 
 /**
  * Persisted marker row for a compaction event. Appended to the end of the transcript
@@ -54,17 +59,9 @@ export function isCompactionMessage(message: unknown): message is CompactionMess
   return m.role === "compaction" && typeof m.summary === "string" && typeof m.keptTail === "number";
 }
 
-interface ContentBlock {
-  type?: string;
-  text?: string;
-}
-
 /** True for a run_build123d tool result still carrying its inspection-sheet image. */
 export function isSheetResult(message: unknown): boolean {
-  if (typeof message !== "object" || message === null) return false;
-  const m = message as { role?: unknown; toolName?: unknown; content?: unknown };
-  if (m.role !== "toolResult" || m.toolName !== "run_build123d") return false;
-  return Array.isArray(m.content) && m.content.some((block: ContentBlock) => block?.type === "image");
+  return isInspectionSheetResult(message);
 }
 
 export interface CompactionBoundary {
@@ -145,16 +142,6 @@ export function skillReinjectionMessage(
   } as AgentMessage;
 }
 
-function stubSheet(message: AgentMessage): AgentMessage {
-  const m = message as unknown as { content: ContentBlock[] };
-  return {
-    ...(message as object),
-    content: m.content.map((block) =>
-      block?.type === "image" ? { type: "text", text: SHEET_STUB_TEXT } : block,
-    ),
-  } as AgentMessage;
-}
-
 function textOnlyFailedToolResults(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => {
     const result = message as unknown as { role?: unknown; isError?: unknown; content?: unknown };
@@ -171,29 +158,9 @@ function textOnlyFailedToolResults(messages: AgentMessage[]): AgentMessage[] {
   });
 }
 
-/**
- * Threshold + batch sheet stubbing with hysteresis, replayed deterministically over
- * the message order: walking the transcript from the start, whenever the number of
- * live (un-stubbed) sheets exceeds `maxLive`, all but the newest `keep` are stubbed
- * in one batch. Decisions about earlier messages never change as new sheets append,
- * so the prompt-cache prefix only breaks once per batch, not on every turn.
- */
-export function applySheetStubs(
-  messages: AgentMessage[],
-  maxLive: number = MAX_LIVE_SHEETS,
-  keep: number = KEEP_SHEETS,
-): AgentMessage[] {
-  const stubbed = new Set<number>();
-  const live: number[] = [];
-  messages.forEach((message, index) => {
-    if (!isSheetResult(message)) return;
-    live.push(index);
-    if (live.length > maxLive) {
-      while (live.length > keep) stubbed.add(live.shift() as number);
-    }
-  });
-  if (stubbed.size === 0) return messages;
-  return messages.map((message, index) => (stubbed.has(index) ? stubSheet(message) : message));
+/** Compatibility name retained for callers while the policy is now one current sheet. */
+export function applySheetStubs(messages: AgentMessage[]): AgentMessage[] {
+  return projectCurrentInspectionSheet(messages);
 }
 
 /**
@@ -204,6 +171,7 @@ export function applySheetStubs(
 export function transformLlmContext(messages: AgentMessage[]): AgentMessage[] {
   try {
     const boundary = compactionBoundary(messages);
+    const currentSheet = currentInspectionSheet(messages);
     let context: AgentMessage[];
     if (boundary) {
       const tail = [
@@ -211,11 +179,17 @@ export function transformLlmContext(messages: AgentMessage[]): AgentMessage[] {
         ...messages.slice(boundary.index + 1),
       ].filter((message) => !isCompactionMessage(message));
       const skillContext = skillReinjectionMessage(messages, boundary.visibleStart, boundary.row.timestamp);
-      context = [summaryAsUserMessage(boundary.row), ...(skillContext ? [skillContext] : []), ...tail];
+      const pinnedSheet = currentSheet && !tail.includes(currentSheet) ? [currentSheet] : [];
+      context = [
+        summaryAsUserMessage(boundary.row),
+        ...pinnedSheet,
+        ...(skillContext ? [skillContext] : []),
+        ...tail,
+      ];
     } else {
       context = messages.filter((message) => !isCompactionMessage(message));
     }
-    return applySheetStubs(textOnlyFailedToolResults(context));
+    return projectCurrentInspectionSheet(textOnlyFailedToolResults(context));
   } catch {
     return messages;
   }

@@ -1,0 +1,265 @@
+import type { DatabaseSync } from "node:sqlite";
+import type {
+  ClassifyReferenceInput,
+  ReferenceClassificationDto,
+  ReferenceClassificationStatus,
+  ReferenceRecordDto,
+  ReferenceRelationship,
+} from "@chamfer/shared";
+import { AttachmentStore } from "./attachmentStore";
+import { getAttachment } from "./conversationStore";
+
+interface ReferenceRow {
+  reference_id: string;
+  conversation_id: string;
+  classification_id: string | null;
+  status: string | null;
+  purpose: string | null;
+  relationships_json: string | null;
+  rationale: string | null;
+  specification_links_json: string | null;
+  no_specification_reason: string | null;
+  actor: string | null;
+  created_at: number | null;
+}
+
+export class ReferenceClassificationError extends Error {
+  constructor(message: string, readonly code: "invalid" | "conflict" = "invalid") { super(message); }
+}
+
+const STATUSES = new Set<ReferenceClassificationStatus>(["active", "complementary", "superseded"]);
+const RELATIONSHIP_TYPES = new Set(["complements", "superseded-by"]);
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseJsonArray<T>(json: string | null): T[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function toClassification(row: ReferenceRow): ReferenceClassificationDto | undefined {
+  if (!row.classification_id || !row.status || !row.purpose || !row.rationale || !row.actor || row.created_at === null) {
+    return undefined;
+  }
+  return {
+    id: row.classification_id,
+    conversationId: row.conversation_id,
+    referenceId: row.reference_id,
+    status: row.status as ReferenceClassificationStatus,
+    purpose: row.purpose,
+    relationships: parseJsonArray<ReferenceRelationship>(row.relationships_json),
+    rationale: row.rationale,
+    specificationLinks: parseJsonArray<string>(row.specification_links_json),
+    ...(row.no_specification_reason ? { noSpecificationReason: row.no_specification_reason } : {}),
+    actor: row.actor as "agent",
+    timestamp: row.created_at,
+  };
+}
+
+function historyFor(db: DatabaseSync, conversationId: string, referenceId: string): ReferenceClassificationDto[] {
+  const rows = db.prepare(`
+    SELECT reference_id, conversation_id, id AS classification_id, status, purpose,
+      relationships_json, rationale, specification_links_json, no_specification_reason,
+      actor, created_at
+    FROM reference_classifications
+    WHERE conversation_id = ? AND reference_id = ?
+    ORDER BY created_at ASC, rowid ASC
+  `).all(conversationId, referenceId) as unknown as ReferenceRow[];
+  return rows.flatMap((row) => {
+    const classification = toClassification(row);
+    return classification ? [classification] : [];
+  });
+}
+
+export function listReferenceRecords(db: DatabaseSync, conversationId: string): ReferenceRecordDto[] {
+  const rows = db.prepare(`
+    SELECT a.id AS reference_id, m.conversation_id,
+      rc.id AS classification_id, rc.status, rc.purpose, rc.relationships_json,
+      rc.rationale, rc.specification_links_json, rc.no_specification_reason,
+      rc.actor, rc.created_at
+    FROM attachments a
+    JOIN messages m ON m.id = a.message_id
+    LEFT JOIN reference_classifications rc ON rc.rowid = (
+      SELECT current.rowid FROM reference_classifications current
+      WHERE current.conversation_id = m.conversation_id AND current.reference_id = a.id
+      ORDER BY current.created_at DESC, current.rowid DESC LIMIT 1
+    )
+    WHERE m.conversation_id = ? AND a.kind = 'user-image'
+    ORDER BY m.seq ASC, a.display_order ASC, a.rowid ASC
+  `).all(conversationId) as unknown as ReferenceRow[];
+  return rows.map((row) => {
+    const current = toClassification(row);
+    return {
+      referenceId: row.reference_id,
+      conversationId: row.conversation_id,
+      attachmentAvailable: true,
+      status: current?.status ?? "unclassified",
+      purpose: current?.purpose,
+      relationships: current?.relationships ?? [],
+      rationale: current?.rationale,
+      specificationLinks: current?.specificationLinks ?? [],
+      noSpecificationReason: current?.noSpecificationReason,
+      actor: current?.actor,
+      timestamp: current?.timestamp,
+      history: historyFor(db, conversationId, row.reference_id),
+    };
+  });
+}
+
+export async function listReferenceRecordsWithAvailability(
+  db: DatabaseSync,
+  store: AttachmentStore,
+  conversationId: string,
+): Promise<ReferenceRecordDto[]> {
+  return Promise.all(listReferenceRecords(db, conversationId).map(async (record) => {
+    const attachment = getAttachment(db, record.referenceId);
+    if (!attachment) return { ...record, attachmentAvailable: false };
+    if (attachment.storage === "legacy") {
+      return { ...record, attachmentAvailable: attachment.data.byteLength > 0 };
+    }
+    try {
+      await store.read(attachment);
+      return { ...record, attachmentAvailable: true };
+    } catch {
+      return { ...record, attachmentAvailable: false };
+    }
+  }));
+}
+
+function validateInput(input: ClassifyReferenceInput): void {
+  if (!STATUSES.has(input.status)) throw new ReferenceClassificationError("invalid reference status");
+  if (!nonEmpty(input.purpose)) throw new ReferenceClassificationError("purpose is required");
+  if (!nonEmpty(input.rationale)) throw new ReferenceClassificationError("rationale is required");
+  if (!Array.isArray(input.relationships)) throw new ReferenceClassificationError("relationships must be an array");
+  if (input.relationships.some((relationship) =>
+    typeof relationship !== "object" || relationship === null ||
+    !RELATIONSHIP_TYPES.has(relationship.type) || !nonEmpty(relationship.referenceId))) {
+    throw new ReferenceClassificationError("invalid reference relationship");
+  }
+  if (!Array.isArray(input.specificationLinks)) {
+    throw new ReferenceClassificationError("specificationLinks must be an array");
+  }
+  const links = input.specificationLinks.filter(nonEmpty);
+  const reason = input.noSpecificationReason?.trim();
+  if ((links.length === 0) === !reason) {
+    throw new ReferenceClassificationError("provide specificationLinks or noSpecificationReason, but not both");
+  }
+  const supersededBy = input.relationships.filter((relationship) => relationship.type === "superseded-by");
+  if (input.status === "superseded" && supersededBy.length === 0) {
+    throw new ReferenceClassificationError("superseded references require a superseded-by relationship");
+  }
+  if (input.status !== "superseded" && supersededBy.length > 0) {
+    throw new ReferenceClassificationError("only superseded references may use superseded-by relationships");
+  }
+}
+
+function assertOwnership(db: DatabaseSync, conversationId: string, referenceId: string): void {
+  const row = db.prepare(`
+    SELECT m.conversation_id, a.kind FROM attachments a
+    JOIN messages m ON m.id = a.message_id WHERE a.id = ?
+  `).get(referenceId) as { conversation_id: string; kind: string } | undefined;
+  if (!row || row.kind !== "user-image" || row.conversation_id !== conversationId) {
+    throw new ReferenceClassificationError(`reference ${referenceId} does not belong to this conversation`);
+  }
+}
+
+function assertNoSupersessionCycle(
+  records: ReferenceRecordDto[],
+  input: ClassifyReferenceInput,
+): void {
+  const edges = new Map<string, string[]>();
+  for (const record of records) {
+    if (record.referenceId === input.referenceId) continue;
+    edges.set(record.referenceId, record.relationships
+      .filter((relationship) => relationship.type === "superseded-by")
+      .map((relationship) => relationship.referenceId));
+  }
+  edges.set(input.referenceId, input.relationships
+    .filter((relationship) => relationship.type === "superseded-by")
+    .map((relationship) => relationship.referenceId));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    if ((edges.get(id) ?? []).some(visit)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  if ([...edges.keys()].some(visit)) throw new ReferenceClassificationError("supersession cycle rejected");
+}
+
+export function classifyReference(
+  db: DatabaseSync,
+  conversationId: string,
+  input: ClassifyReferenceInput,
+  idempotencyKey?: string,
+): ReferenceClassificationDto {
+  validateInput(input);
+  const normalized = {
+    ...input,
+    purpose: input.purpose.trim(),
+    rationale: input.rationale.trim(),
+    specificationLinks: input.specificationLinks.map((link) => link.trim()).filter(nonEmpty),
+    ...(input.noSpecificationReason ? { noSpecificationReason: input.noSpecificationReason.trim() } : {}),
+  };
+  if (idempotencyKey) {
+    const row = db.prepare(`SELECT reference_id, conversation_id, id AS classification_id, status, purpose,
+      relationships_json, rationale, specification_links_json, no_specification_reason, actor, created_at
+      FROM reference_classifications WHERE id = ?`).get(idempotencyKey) as unknown as ReferenceRow | undefined;
+    if (row) {
+      const existing = toClassification(row)!;
+      const exact = existing.conversationId === conversationId && existing.referenceId === normalized.referenceId &&
+        existing.status === normalized.status && existing.purpose === normalized.purpose &&
+        JSON.stringify(existing.relationships) === JSON.stringify(normalized.relationships) &&
+        existing.rationale === normalized.rationale &&
+        JSON.stringify(existing.specificationLinks) === JSON.stringify(normalized.specificationLinks) &&
+        (existing.noSpecificationReason ?? undefined) === (normalized.noSpecificationReason ?? undefined);
+      if (exact) return existing;
+      throw new ReferenceClassificationError("idempotency key conflicts with an existing classification", "conflict");
+    }
+  }
+  assertOwnership(db, conversationId, input.referenceId);
+  for (const relationship of input.relationships) {
+    if (relationship.referenceId === input.referenceId) {
+      throw new ReferenceClassificationError("a reference cannot relate to itself");
+    }
+    assertOwnership(db, conversationId, relationship.referenceId);
+  }
+  assertNoSupersessionCycle(listReferenceRecords(db, conversationId), input);
+  const classification: ReferenceClassificationDto = {
+    ...normalized,
+    id: idempotencyKey ?? crypto.randomUUID(),
+    conversationId,
+    actor: "agent",
+    timestamp: Date.now(),
+  };
+  db.prepare(`
+    INSERT INTO reference_classifications
+      (id, conversation_id, reference_id, status, purpose, relationships_json,
+       rationale, specification_links_json, no_specification_reason, actor, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    classification.id,
+    conversationId,
+    classification.referenceId,
+    classification.status,
+    classification.purpose,
+    JSON.stringify(classification.relationships),
+    classification.rationale,
+    JSON.stringify(classification.specificationLinks),
+    classification.noSpecificationReason ?? null,
+    classification.actor,
+    classification.timestamp,
+  );
+  return classification;
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import * as rest from "../api/rest";
 import {
   classifySessionError,
@@ -8,6 +9,9 @@ import {
   buildPlanNudgePrompt,
   PLAN_NUDGE_MARKER,
   SELF_CHECK_MARKER,
+  VISUAL_NUDGE_MARKER,
+  normalizeInspectionEvidenceMessage,
+  materializeAttachmentReferences,
   type SessionError,
   type SessionState,
 } from "./session";
@@ -22,12 +26,29 @@ vi.mock("../api/rest", () => ({
     contentJson: message.contentJson,
     createdAt: Date.now(),
   })),
+  postMessageWithAttachments: vi.fn(async (
+    _conversationId: string,
+    message: { id: string; seq: number; role: string; contentJson: string },
+  ) => ({
+    id: message.id,
+    conversationId: "conv-1",
+    seq: message.seq,
+    role: message.role,
+    contentJson: message.contentJson,
+    createdAt: Date.now(),
+  })),
   uploadAttachment: vi.fn(async (messageId: string, kind: string, mime: string) => ({
     id: "attachment-1",
     messageId,
     kind,
     mime,
   })),
+  downloadAttachment: vi.fn(),
+  classifyReference: vi.fn(),
+  openInspectionLease: vi.fn(),
+  recordInspectionObservation: vi.fn(),
+  recordVisualVerification: vi.fn(),
+  recordVisualVerificationBatch: vi.fn(),
 }));
 
 const FAKE_MODEL: Model<Api> = {
@@ -51,6 +72,36 @@ const ZERO_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+it("never leaves native inspection pixels in durable content when lease details are malformed", () => {
+  const malformed = {
+    role: "toolResult",
+    toolCallId: "inspect-malformed",
+    toolName: "inspect_evidence",
+    content: [{ type: "image", data: "must-not-persist", mimeType: "image/png" }],
+    details: {},
+    isError: false,
+    timestamp: 1,
+  };
+  const durable = normalizeInspectionEvidenceMessage(malformed as never);
+  expect(JSON.stringify(durable)).not.toContain("must-not-persist");
+  expect(JSON.stringify(durable)).toContain("durable lease metadata was unavailable");
+});
+
+it("aborts an exact visual batch when any selected image cannot materialize", async () => {
+  vi.mocked(rest.downloadAttachment)
+    .mockResolvedValueOnce({ type: "image", data: "sheet", mimeType: "image/png" })
+    .mockRejectedValueOnce(new Error("corrupt blob"));
+  await expect(materializeAttachmentReferences([{
+    role: "user",
+    content: [
+      { type: "text", text: "Compare this exact evidence set." },
+      { type: "attachment-reference", attachmentId: "sheet-1", kind: "view-sheet", mimeType: "image/png" },
+      { type: "attachment-reference", attachmentId: "ref-a", kind: "user-image", mimeType: "image/png" },
+    ],
+    timestamp: 1,
+  } as never])).rejects.toThrow("Visual verification batch image unavailable: ref-a");
+});
 
 /** Fake streamFn: yields two text deltas then completes, matching the AssistantMessageEventStream contract. */
 function makeFakeStreamFn() {
@@ -141,6 +192,66 @@ describe("createSession", () => {
     expect(finalState?.messages).toHaveLength(2);
   });
 
+  it("recovers after a mid-stream network error without persisting the interrupted assistant response", async () => {
+    pinResolvingPostMessage();
+    const successfulAttempt = makeFakeStreamFn() as StreamFn;
+    let attempts = 0;
+    const streamFn = vi.fn((...args: Parameters<StreamFn>) => {
+      attempts += 1;
+      if (attempts > 1) return successfulAttempt(...args);
+
+      const stream = createAssistantMessageEventStream();
+      const partial: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "I'll start by classifying the references." }],
+        api: FAKE_MODEL.api,
+        provider: FAKE_MODEL.provider,
+        model: FAKE_MODEL.id,
+        usage: ZERO_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      const failed: AssistantMessage = {
+        ...partial,
+        stopReason: "error",
+        errorMessage: "network error",
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial });
+        stream.push({ type: "text_start", contentIndex: 0, partial });
+        stream.push({
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "I'll start by classifying the references.",
+          partial,
+        });
+        stream.push({ type: "error", reason: "error", error: failed });
+      });
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn,
+      __retryOptions: { sleep: async () => undefined },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Build from these references");
+
+    expect(attempts).toBe(2);
+    expect(latest?.error).toBeUndefined();
+    expect(latest?.messages).toHaveLength(2);
+    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    const persistedAssistant = JSON.parse(postMessage.mock.calls[1]?.[1].contentJson);
+    expect(persistedAssistant.stopReason).toBe("stop");
+    expect(persistedAssistant.content).toEqual([{ type: "text", text: "Hello world" }]);
+  });
+
   it("replays prior messages into state on creation", () => {
     const streamFn = makeFakeStreamFn();
     const prior = [{ role: "user", content: "earlier", timestamp: 1 }];
@@ -158,6 +269,32 @@ describe("createSession", () => {
     })();
 
     expect(latest?.messages).toEqual(prior);
+  });
+
+  it("restores the error state of an interrupted persisted assistant response", () => {
+    const prior = [
+      { role: "user", content: "earlier", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial" }],
+        stopReason: "error",
+        errorMessage: "network error",
+        timestamp: 2,
+      },
+    ];
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: prior,
+      __streamFn: makeFakeStreamFn(),
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state))();
+
+    expect(latest?.error).toEqual({ kind: "generic", message: "network error" });
+    expect(latest?.streaming).toBe(false);
   });
 
   it("abort() does not reject or throw when no run is active", () => {
@@ -471,7 +608,7 @@ describe("createSession", () => {
   });
 
   // vi.clearAllMocks() does not undo mockImplementation() set by earlier tests, so both
-  // image tests pin postMessage/uploadAttachment to known implementations up front.
+  // Image tests pin atomic persistence to known implementations up front.
   function pinResolvingPostMessage(): void {
     const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
     postMessage.mockImplementation(
@@ -486,15 +623,17 @@ describe("createSession", () => {
     );
   }
 
-  it("send with an image embeds one image block after the text block in the persisted user message and uploads one user-image attachment", async () => {
+  function pinResolvingAtomicPost(): void {
+    const atomicPost = rest.postMessageWithAttachments as unknown as ReturnType<typeof vi.fn>;
+    atomicPost.mockImplementation(async (
+      _conversationId: string,
+      message: { id: string; seq: number; role: string; contentJson: string },
+    ) => ({ ...message, conversationId: "conv-1", createdAt: Date.now() }));
+  }
+
+  it("persists an ordered attachment reference without base64 while the live model request receives native pixels", async () => {
     pinResolvingPostMessage();
-    const uploadAttachment = rest.uploadAttachment as unknown as ReturnType<typeof vi.fn>;
-    uploadAttachment.mockImplementation(async (messageId: string, kind: string, mime: string) => ({
-      id: "attachment-1",
-      messageId,
-      kind,
-      mime,
-    }));
+    pinResolvingAtomicPost();
 
     const streamFn = makeFakeStreamFn();
     const session = createSession({
@@ -505,34 +644,59 @@ describe("createSession", () => {
       __streamFn: streamFn,
     } as unknown as Parameters<typeof createSession>[0]);
 
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
     const file = new File([bytes], "sketch.png", { type: "image/png" });
 
     await session.send("like this", [file]);
 
-    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
-    const userCall = postMessage.mock.calls[0];
-    if (!userCall) throw new Error("expected a persisted user message");
-    expect(userCall[1].role).toBe("user");
-    const content = JSON.parse(userCall[1].contentJson).content as { type: string; text?: string; data?: string; mimeType?: string }[];
+    const atomicPost = rest.postMessageWithAttachments as unknown as ReturnType<typeof vi.fn>;
+    expect(atomicPost).toHaveBeenCalledTimes(1);
+    const atomicCall = atomicPost.mock.calls[0];
+    expect(atomicCall?.[0]).toBe("conv-1");
+    const persisted = JSON.parse(atomicCall?.[1].contentJson as string);
+    const content = persisted.content as Array<Record<string, unknown>>;
     expect(content[0]).toEqual({ type: "text", text: "like this" });
-    const imageBlocks = content.filter((block) => block.type === "image");
-    expect(imageBlocks).toHaveLength(1);
-    expect(imageBlocks[0]?.mimeType).toBe("image/png");
-    expect(imageBlocks[0]?.data).toBe(btoa(String.fromCharCode(...bytes)));
+    expect(content[1]).toMatchObject({
+      type: "attachment-reference",
+      kind: "user-image",
+      mimeType: "image/png",
+    });
+    const attachmentId = content[1]?.attachmentId;
+    expect(attachmentId).toEqual(expect.any(String));
+    expect(atomicCall?.[1].contentJson).not.toContain('"data"');
+    expect(atomicCall?.[1].contentJson).not.toContain(btoa(String.fromCharCode(...bytes)));
 
-    // Exactly one attachment upload, tied to the persisted user message id.
-    expect(uploadAttachment).toHaveBeenCalledTimes(1);
-    const attachmentCall = uploadAttachment.mock.calls[0];
-    expect(attachmentCall?.[0]).toBe(userCall[1].id);
-    expect(attachmentCall?.[1]).toBe("user-image");
-    expect(attachmentCall?.[2]).toBe("image/png");
+    const liveCalls = streamFn.mock.calls as unknown as Array<[unknown, { messages: Array<{ role: string; content: Array<Record<string, unknown>> }> }] >;
+    const liveContext = liveCalls[0]?.[1];
+    if (!liveContext) throw new Error("expected a live model context");
+    expect(liveContext.messages[0]?.content).toEqual([
+      { type: "text", text: "like this" },
+      { type: "image", data: btoa(String.fromCharCode(...bytes)), mimeType: "image/png" },
+      expect.objectContaining({ type: "text", text: expect.stringContaining("Pending reference images:") }),
+    ]);
+    const visibleUser = latest?.messages.find((message) => (message as { role?: string }).role === "user") as
+      | { content?: Array<{ type?: string; text?: string }> }
+      | undefined;
+    expect(visibleUser?.content?.[0]).toEqual({ type: "text", text: "like this" });
+    expect(visibleUser?.content?.some((block) => block.text?.includes("Pending reference images"))).toBe(false);
+
+    expect(atomicCall?.[2]).toEqual([{
+      id: attachmentId,
+      kind: "user-image",
+      mime: "image/png",
+      data: btoa(String.fromCharCode(...bytes)),
+    }]);
+    const ordinaryPosts = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    expect(ordinaryPosts.mock.calls.some((call) => call[1].role === "user")).toBe(false);
   });
 
-  it("a failing attachment upload sets state.error but send still resolves", async () => {
+  it("a failing atomic attachment request keeps native pixels in memory and never posts a message row", async () => {
     pinResolvingPostMessage();
-    const uploadAttachment = rest.uploadAttachment as unknown as ReturnType<typeof vi.fn>;
-    uploadAttachment.mockImplementation(async () => {
+    const atomicPost = rest.postMessageWithAttachments as unknown as ReturnType<typeof vi.fn>;
+    atomicPost.mockImplementation(async () => {
       throw new Error("disk full");
     });
 
@@ -558,9 +722,161 @@ describe("createSession", () => {
     expect(latest?.error?.kind).toBe("generic");
     expect(latest?.error?.message).toContain("attachment-persist-failed");
     expect(latest?.error?.message).toContain("disk full");
+    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    expect(postMessage.mock.calls.some((call) => call[1].role === "user")).toBe(false);
+    const liveUser = latest?.messages.find((message) => (message as { role?: string }).role === "user") as
+      | { content?: Array<{ type?: string; data?: string }> }
+      | undefined;
+    expect(liveUser?.content?.[1]).toMatchObject({ type: "image", data: expect.any(String) });
     // The turn itself still completed: both messages present, not streaming.
     expect(latest?.messages).toHaveLength(2);
     expect(latest?.streaming).toBe(false);
+  });
+
+  it("retries the exact atomic request after a lost response", async () => {
+    pinResolvingPostMessage();
+    const atomicPost = rest.postMessageWithAttachments as unknown as ReturnType<typeof vi.fn>;
+    atomicPost
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockImplementation(async (_conversationId: string, message: object) => message);
+    const session = createSession({
+      conversationId: "conv-1", modelJson: JSON.stringify(FAKE_MODEL), systemPrompt,
+      priorMessages: [], __streamFn: makeFakeStreamFn(),
+      __retryOptions: { sleep: async () => undefined },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("retry image", [new File([new Uint8Array([1, 2, 3])], "retry.png", { type: "image/png" })]);
+
+    expect(atomicPost).toHaveBeenCalledTimes(2);
+    expect(atomicPost.mock.calls[0]).toEqual(atomicPost.mock.calls[1]);
+  });
+
+  it("materializes reloaded attachment references for model context without rewriting durable history", async () => {
+    pinResolvingPostMessage();
+    const downloadAttachment = rest.downloadAttachment as unknown as ReturnType<typeof vi.fn>;
+    downloadAttachment.mockResolvedValue({ type: "image", data: "reloaded-pixels", mimeType: "image/png" });
+    const prior = {
+      role: "user",
+      content: [
+        { type: "text", text: "match this" },
+        {
+          type: "attachment-reference",
+          attachmentId: "stored-image",
+          kind: "user-image",
+          mimeType: "image/png",
+        },
+      ],
+      timestamp: 1,
+    };
+    const durableBefore = JSON.stringify(prior);
+    const streamFn = makeFakeStreamFn();
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [prior],
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("continue");
+
+    const calls = streamFn.mock.calls as unknown as Array<[unknown, { messages: Array<{ content: Array<Record<string, unknown>> }> }] >;
+    const context = calls[0]?.[1];
+    if (!context) throw new Error("expected a materialized model context");
+    expect(context.messages[0]?.content).toEqual([
+      { type: "text", text: "match this" },
+      { type: "image", data: "reloaded-pixels", mimeType: "image/png" },
+      { type: "text", text: expect.stringContaining("Pending reference images: stored-image") },
+    ]);
+    expect(downloadAttachment).toHaveBeenCalledWith("stored-image", "image/png");
+    expect(JSON.stringify(prior)).toBe(durableBefore);
+  });
+
+  it("replays the prior current sheet after a newer CAD execution fails without rendering", async () => {
+    pinResolvingPostMessage();
+    const downloadAttachment = rest.downloadAttachment as unknown as ReturnType<typeof vi.fn>;
+    downloadAttachment.mockResolvedValue({ type: "image", data: "current-sheet", mimeType: "image/png" });
+    const prior = [
+      {
+        role: "toolResult",
+        toolCallId: "successful-run",
+        toolName: "run_build123d",
+        content: [
+          { type: "text", text: "Measurements: volume 1" },
+          { type: "attachment-reference", attachmentId: "current-sheet", kind: "view-sheet", mimeType: "image/png" },
+        ],
+        isError: false,
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "failed-run",
+        toolName: "run_build123d",
+        content: [{ type: "text", text: "Traceback" }],
+        isError: true,
+        timestamp: 2,
+      },
+    ];
+    const streamFn = makeFakeStreamFn();
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: prior,
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("repair it");
+
+    expect(downloadAttachment).toHaveBeenCalledWith("current-sheet", "image/png");
+    const calls = streamFn.mock.calls as unknown as Array<[
+      unknown,
+      { messages: Array<{ content?: Array<{ type?: string }> }> },
+    ]>;
+    const context = calls[0]![1].messages;
+    expect(context.flatMap((message) => message.content ?? []).filter((block) => block.type === "image")).toHaveLength(1);
+  });
+
+  it("does not replay finalized current-sheet pixels on a later user request", async () => {
+    pinResolvingPostMessage();
+    const downloadAttachment = rest.downloadAttachment as unknown as ReturnType<typeof vi.fn>;
+    const prior = [
+      {
+        role: "toolResult",
+        toolCallId: "successful-run",
+        toolName: "run_build123d",
+        content: [
+          { type: "text", text: "Measurements: volume 1" },
+          { type: "attachment-reference", attachmentId: "final-sheet", kind: "view-sheet", mimeType: "image/png" },
+        ],
+        isError: false,
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Finished" }],
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ];
+    const streamFn = makeFakeStreamFn();
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: prior,
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("start something new");
+
+    expect(downloadAttachment).not.toHaveBeenCalledWith("final-sheet", "image/png");
+    const calls = streamFn.mock.calls as unknown as Array<[
+      unknown,
+      { messages: Array<{ content?: Array<{ type?: string }> }> },
+    ]>;
+    const context = calls[0]![1].messages;
+    expect(context.flatMap((message) => message.content ?? []).filter((block) => block.type === "image")).toHaveLength(0);
   });
 
   it("maps a 401 streamFn failure to an invalid-key error, and a follow-up send() still streams and clears it", async () => {
@@ -725,6 +1041,302 @@ describe("createSession agent-loop policies", () => {
     };
   }
 
+  it("blocks terminal completion when a newer failed artifact invalidates an older visual approval", async () => {
+    const olderRun = {
+      role: "toolResult",
+      toolCallId: "older-run",
+      toolName: "run_build123d",
+      content: [{ type: "text", text: "passed" }],
+      details: {
+        code: { artifactId: "artifact-1", artifactVersion: 1 },
+        inspectionSheet: {
+          attachmentId: "sheet-1",
+          code: { artifactId: "artifact-1", artifactVersion: 1 },
+          gate: { status: "passed" },
+        },
+      },
+      isError: false,
+      timestamp: 1,
+    };
+    const failedNewerRun = {
+      role: "toolResult",
+      toolCallId: "newer-run",
+      toolName: "run_build123d",
+      content: [{ type: "text", text: "failed" }],
+      details: {
+        code: { artifactId: "artifact-2", artifactVersion: 2 },
+        gate: { status: "failed" },
+      },
+      isError: true,
+      timestamp: 3,
+    };
+    const olderApproval = {
+      id: "verification-1",
+      conversationId: "conv-1",
+      artifactId: "artifact-1",
+      artifactVersion: 1,
+      inspectionSheetId: "sheet-1",
+      coveredReferenceIds: ["ref-a"],
+      verdict: "match" as const,
+      observations: [{ referenceId: "ref-a", relevantViews: ["front"], findings: ["Matches."], affectedComponents: [] }],
+      recordedAt: 2,
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("The older approval should still count."),
+      textMessage("Stopping after the visual check."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [olderRun, failedNewerRun],
+      referenceRecords: [{
+        referenceId: "ref-a",
+        conversationId: "conv-1",
+        attachmentAvailable: true,
+        status: "active",
+        purpose: "Primary profile",
+        relationships: [],
+        specificationLinks: ["visual.profile"],
+        history: [],
+      }],
+      visualVerifications: [olderApproval],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Finish the current revision");
+
+    expect(turnContexts).toHaveLength(2);
+    expect(countMarker(latest, VISUAL_NUDGE_MARKER)).toBe(1);
+    expect(latest?.error?.message).toContain("visual finalization check");
+  });
+
+  it("exposes exactly the current sheet and sole active reference before one-reference finalization", async () => {
+    vi.mocked(rest.downloadAttachment).mockImplementation(async (attachmentId) => ({
+      type: "image",
+      data: attachmentId === "sheet-1" ? "sheet-pixels" : "reference-pixels",
+      mimeType: "image/png",
+    }));
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      textMessage("Attempting to finish without looking at the active reference."),
+      textMessage("Stopping after the projected comparison request."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify({ ...FAKE_MODEL, input: ["text", "image"], maxInputImages: 4 }),
+      systemPrompt,
+      priorMessages: [
+        {
+          role: "user",
+          content: [{ type: "attachment-reference", attachmentId: "ref-a", kind: "user-image", mimeType: "image/png" }],
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "run-1",
+          toolName: "run_build123d",
+          content: [{ type: "attachment-reference", attachmentId: "sheet-1", kind: "view-sheet", mimeType: "image/png" }],
+          details: {
+            code: { artifactId: "artifact-1", artifactVersion: 1 },
+            inspectionSheet: {
+              attachmentId: "sheet-1",
+              code: { artifactId: "artifact-1", artifactVersion: 1 },
+              gate: { status: "passed" },
+            },
+          },
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+      referenceRecords: [{
+        referenceId: "ref-a",
+        conversationId: "conv-1",
+        attachmentAvailable: true,
+        status: "active",
+        purpose: "Primary profile",
+        relationships: [],
+        specificationLinks: ["visual.profile"],
+        history: [],
+      }],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("Finish the current artifact");
+
+    expect(turnContexts).toHaveLength(2);
+    const second = JSON.stringify(turnContexts[1]?.messages);
+    expect(second).toContain("Visual verification batch 1/1");
+    expect(second.match(/\"type\":\"image\"/g)).toHaveLength(2);
+    expect(second).toContain("sheet-pixels");
+    expect(second).toContain("reference-pixels");
+  });
+
+  it("retrieves historical evidence through a durable lease and evicts pixels only after observation", async () => {
+    const lease = {
+      id: "lease-1",
+      conversationId: "conv-1",
+      purpose: "Compare the earlier front profile",
+      status: "open" as const,
+      evidence: [{ attachmentId: "ref-a", kind: "user-image" as const, mime: "image/png" }],
+      openedAt: 10,
+    };
+    vi.mocked(rest.openInspectionLease).mockResolvedValue(lease);
+    vi.mocked(rest.recordInspectionObservation).mockResolvedValue({
+      ...lease,
+      status: "closed",
+      closedAt: 20,
+      observation: {
+        id: "observation-1",
+        leaseId: "lease-1",
+        relevantViews: ["front"],
+        facts: ["The flange extends beyond the body."],
+        affectedSpecifications: ["spec.mount-width"],
+        affectedComponents: ["mount"],
+        recordedAt: 20,
+      },
+    });
+    vi.mocked(rest.downloadAttachment).mockResolvedValue({ type: "image", data: "leased-pixels", mimeType: "image/png" });
+    const inspectCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "inspect-1",
+        name: "inspect_evidence",
+        arguments: { evidenceIds: ["ref-a"], purpose: lease.purpose },
+      }],
+    };
+    const observationCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "observe-1",
+        name: "record_inspection_observation",
+        arguments: {
+          leaseId: "lease-1",
+          relevantViews: ["front"],
+          facts: ["The flange extends beyond the body."],
+          affectedSpecifications: ["spec.mount-width"],
+          affectedComponents: ["mount"],
+        },
+      }],
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      inspectCall,
+      observationCall,
+      textMessage("Inspection complete."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Earlier reference" },
+          { type: "attachment-reference", attachmentId: "ref-a", kind: "user-image", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      }],
+      referenceRecords: [{
+        referenceId: "ref-a",
+        conversationId: "conv-1",
+        attachmentAvailable: true,
+        status: "active",
+        purpose: "Primary profile",
+        relationships: [],
+        specificationLinks: ["spec.mount-width"],
+        history: [],
+      }],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("Inspect the earlier profile again");
+
+    const imageCounts = turnContexts.map((context) => JSON.stringify(context.messages).match(/"type":"image"/g)?.length ?? 0);
+    expect(imageCounts).toEqual([0, 1, 0, 0]);
+    expect(JSON.stringify(turnContexts[1]?.messages)).toContain("Open inspection lease lease-1");
+    expect(JSON.stringify(turnContexts[2]?.messages)).toContain("Inspection observation recorded");
+    const persistedInspection = vi.mocked(rest.postMessage).mock.calls
+      .map((call) => call[1].contentJson)
+      .find((json) => json.includes('"toolName":"inspect_evidence"'));
+    expect(persistedInspection).toContain('"attachmentId":"ref-a"');
+    expect(persistedInspection).not.toContain("leased-pixels");
+  });
+
+  it("blocks unrelated tools until every open inspection lease records observations", async () => {
+    const lease = {
+      id: "lease-open",
+      conversationId: "conv-1",
+      purpose: "Inspect the earlier profile",
+      status: "open" as const,
+      evidence: [{ attachmentId: "ref-old", kind: "user-image" as const, mime: "image/png" }],
+      openedAt: 10,
+    };
+    const unrelatedExecute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "should not run" }] }));
+    vi.mocked(rest.recordInspectionObservation).mockResolvedValue({
+      ...lease,
+      status: "closed",
+      closedAt: 20,
+      observation: {
+        id: "observation-open",
+        leaseId: lease.id,
+        relevantViews: ["front"],
+        facts: ["The earlier profile is narrower."],
+        affectedSpecifications: [],
+        affectedComponents: ["body"],
+        recordedAt: 20,
+      },
+    });
+    vi.mocked(rest.downloadAttachment).mockResolvedValue({ type: "image", data: "leased-pixels", mimeType: "image/png" });
+    const unrelatedCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{ type: "toolCall", id: "unrelated-1", name: "unrelated_action", arguments: {} }],
+    };
+    const observationCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "observe-open",
+        name: "record_inspection_observation",
+        arguments: {
+          leaseId: lease.id,
+          relevantViews: ["front"],
+          facts: ["The earlier profile is narrower."],
+          affectedSpecifications: [],
+          affectedComponents: ["body"],
+        },
+      }],
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      unrelatedCall,
+      observationCall,
+      textMessage("Observation recorded before continuing."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      openInspectionLeases: [lease],
+      tools: [{
+        name: "unrelated_action",
+        label: "Unrelated action",
+        description: "Must be blocked while evidence is leased.",
+        parameters: Type.Object({}),
+        execute: unrelatedExecute,
+      }],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("Continue");
+
+    expect(unrelatedExecute).not.toHaveBeenCalled();
+    expect(JSON.stringify(turnContexts[1]?.messages)).toContain("blocked while inspection lease");
+    expect(rest.recordInspectionObservation).toHaveBeenCalledWith("conv-1", lease.id, expect.any(Object), "observe-open");
+  });
+
   it("blocks run_build123d for an image turn until update_plan accepts a spec-sheet plan", async () => {
     const { tool, execute } = gateTool("failed");
     const plan = {
@@ -753,7 +1365,25 @@ describe("createSession agent-loop policies", () => {
       ...textMessage("", "toolUse"),
       content: [{ type: "toolCall", id: "plan-1", name: "update_plan", arguments: plan }],
     };
+    const classificationCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "classify-plan-image",
+        name: "classify_reference",
+        arguments: {
+          referenceId: "ref-plan",
+          status: "active",
+          purpose: "Dimensioned spacer drawing",
+          relationships: [],
+          rationale: "Defines the requested spacer.",
+          specificationLinks: ["plan.spec_sheet.cube-size"],
+        },
+      }],
+    };
     const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("run-before-classification"),
+      classificationCall,
       toolCallMessage("run-before-plan"),
       updatePlanCall,
       toolCallMessage("run-after-plan"),
@@ -771,6 +1401,14 @@ describe("createSession agent-loop policies", () => {
 
     let latest: SessionState | undefined;
     session.subscribe((state) => (latest = state));
+    vi.spyOn(crypto, "randomUUID").mockReturnValueOnce("ref-plan" as `${string}-${string}-${string}-${string}-${string}`);
+    vi.mocked(rest.classifyReference).mockImplementation(async (conversationId, input) => ({
+      ...input,
+      id: "classification-plan",
+      conversationId,
+      actor: "agent",
+      timestamp: 10,
+    }));
     await session.send("Build the dimensioned part in this image", [new File(["image"], "drawing.png", { type: "image/png" })]);
 
     expect(execute).toHaveBeenCalledTimes(1);
@@ -782,6 +1420,152 @@ describe("createSession agent-loop policies", () => {
     expect(rejectedRun?.content?.[0]?.text).toContain("update_plan");
     expect(rejectedRun?.content?.[0]?.text).toContain("spec sheet");
     expect(rejectedRun?.content?.[0]?.text).toContain("every readable dimension, feature, and spec-table row");
+  });
+
+  it("keeps pixels through CAD rejection, then evicts them only after durable classification", async () => {
+    const { tool, execute } = gateTool("failed");
+    const classifyCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "classify-ref",
+        name: "classify_reference",
+        arguments: {
+          referenceId: "ref-a",
+          status: "active",
+          purpose: "Primary drawing",
+          relationships: [],
+          rationale: "Defines the requested geometry.",
+          specificationLinks: ["plan.spec_sheet.envelope"],
+        },
+      }],
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      toolCallMessage("premature-run"),
+      classifyCall,
+      toolCallMessage("classified-run"),
+      textMessage("Classified CAD run completed."),
+    ]);
+    vi.mocked(rest.downloadAttachment).mockResolvedValue({
+      type: "image",
+      data: "pixels",
+      mimeType: "image/png",
+    });
+    vi.mocked(rest.classifyReference).mockImplementation(async (conversationId, input) => ({
+      ...input,
+      id: "classification-1",
+      conversationId,
+      actor: "agent",
+      timestamp: 10,
+    }));
+    const priorMessages = [{
+      role: "user",
+      content: [
+        { type: "text", text: "Build this reference" },
+        { type: "attachment-reference", attachmentId: "ref-a", kind: "user-image", mimeType: "image/png" },
+      ],
+      timestamp: 1,
+    }];
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages,
+      referenceRecords: [{
+        referenceId: "ref-a",
+        conversationId: "conv-1",
+        attachmentAvailable: true,
+        status: "unclassified",
+        relationships: [],
+        specificationLinks: [],
+        history: [],
+      }],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Continue from the uploaded drawing");
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const rejected = (latest?.messages ?? []).find((message) =>
+      (message as { role?: string; toolCallId?: string }).toolCallId === "premature-run",
+    ) as { isError?: boolean; content?: Array<{ text?: string }> } | undefined;
+    expect(rejected?.isError).toBe(true);
+    expect(rejected?.content?.[0]?.text).toContain("classify_reference");
+    expect(rejected?.content?.[0]?.text).toContain("ref-a");
+    expect(rest.classifyReference).toHaveBeenCalledTimes(1);
+
+    const imageCounts = turnContexts.map((context) => context.messages.reduce<number>((count, message) => {
+      const content = (message as { content?: unknown }).content;
+      return count + (Array.isArray(content)
+        ? content.filter((block: { type?: string }) => block.type === "image").length
+        : 0);
+    }, 0));
+    expect(imageCounts.slice(0, 2)).toEqual([1, 1]);
+    expect(imageCounts.slice(2)).toEqual([0, 0, 0]);
+    expect(JSON.stringify(turnContexts[2]?.messages)).toContain("[Reference ref-a: status=active");
+  });
+
+  it("keeps reference pixels when classification persistence fails", async () => {
+    const classifyCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "failed-classification",
+        name: "classify_reference",
+        arguments: {
+          referenceId: "ref-a",
+          status: "active",
+          purpose: "Primary drawing",
+          relationships: [],
+          rationale: "Defines the requested geometry.",
+          specificationLinks: ["plan.spec_sheet.envelope"],
+        },
+      }],
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      classifyCall,
+      textMessage("Classification persistence failed; stopping."),
+    ]);
+    vi.mocked(rest.downloadAttachment).mockResolvedValue({
+      type: "image",
+      data: "pixels",
+      mimeType: "image/png",
+    });
+    vi.mocked(rest.classifyReference).mockRejectedValue(new Error("classification store unavailable"));
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Build this reference" },
+          { type: "attachment-reference", attachmentId: "ref-a", kind: "user-image", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      }],
+      referenceRecords: [{
+        referenceId: "ref-a",
+        conversationId: "conv-1",
+        attachmentAvailable: true,
+        status: "unclassified",
+        relationships: [],
+        specificationLinks: [],
+        history: [],
+      }],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("Classify the drawing");
+
+    expect(turnContexts).toHaveLength(2);
+    for (const context of turnContexts) {
+      expect(JSON.stringify(context.messages)).toContain('"type":"image"');
+      expect(JSON.stringify(context.messages)).toContain("Pending reference images: ref-a");
+    }
   });
 
   it("does not apply the plan gate to a text-only turn", async () => {
@@ -978,7 +1762,7 @@ describe("createSession agent-loop policies", () => {
     expect(summaryContexts).toHaveLength(1);
   });
 
-  it("stubs superseded view sheets in the LLM context while the transcript keeps every image", async () => {
+  it("exposes only the current view sheet while the transcript keeps every image", async () => {
     const sheets = Array.from({ length: 9 }, (_, i) => ({
       role: "toolResult",
       toolCallId: `call-${i}`,
@@ -992,12 +1776,18 @@ describe("createSession agent-loop policies", () => {
     }));
     const { streamFn, turnContexts } = makeScriptedStreamFn([textMessage("looked at the sheets")]);
 
+    const exposures: Array<{ totalImages: number; currentSheetImages: number; currentSheetAttachmentIds: string[] }> = [];
     const session = createSession({
       conversationId: "conv-1",
       modelJson: JSON.stringify(FAKE_MODEL),
       systemPrompt,
       priorMessages: sheets,
       __streamFn: streamFn as never,
+      __onImageExposure: (trace: {
+        totalImages: number;
+        currentSheetImages: number;
+        currentSheetAttachmentIds: string[];
+      }) => exposures.push(trace),
     } as unknown as Parameters<typeof createSession>[0]);
 
     let latest: SessionState | undefined;
@@ -1006,12 +1796,60 @@ describe("createSession agent-loop policies", () => {
 
     const contextMessages = (turnContexts[0]?.messages ?? []) as { content?: { type?: string }[] }[];
     const imagesInContext = contextMessages.flatMap((m) => (m.content ?? []).filter((b) => b.type === "image"));
-    expect(imagesInContext).toHaveLength(3);
+    expect(imagesInContext).toHaveLength(1);
+    expect(exposures).toEqual([{ totalImages: 1, currentSheetImages: 1, currentSheetAttachmentIds: [] }]);
 
     const imagesInTranscript = (latest?.messages ?? []).flatMap((m) =>
       ((m as { content?: { type?: string }[] }).content ?? []).filter((b) => b.type === "image"),
     );
     expect(imagesInTranscript).toHaveLength(9);
+  });
+
+  it("persists artifact-to-sheet evidence on a successful CAD result", async () => {
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: vi.fn(async () => ({
+        content: [
+          { type: "text" as const, text: "Measurements: volume 1" },
+          { type: "image" as const, data: "cG5n", mimeType: "image/png" },
+        ],
+        details: {
+          measurements: { bboxMm: [1, 1, 1], volumeMm3: 1, areaMm2: 6, children: [] },
+          gate: { status: "passed", checks: [] },
+          code: { toolCallId: "run-evidence", artifactId: "artifact-7", artifactVersion: 7 },
+        },
+      })),
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      toolCallMessage("run-evidence"),
+      textMessage("CAD complete"),
+      textMessage("Checked"),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      tools: [tool],
+      __streamFn: streamFn as never,
+    });
+
+    await session.send("build it");
+
+    const atomicPost = rest.postMessageWithAttachments as unknown as ReturnType<typeof vi.fn>;
+    const persistedCall = atomicPost.mock.calls.find((call) => call[1].role === "toolResult");
+    if (!persistedCall) throw new Error("expected persisted CAD result");
+    const persisted = JSON.parse(persistedCall[1].contentJson);
+    const reference = persisted.content.find((block: { type?: string }) => block.type === "attachment-reference");
+    expect(persisted.details.inspectionSheet).toEqual({
+      attachmentId: reference.attachmentId,
+      code: { toolCallId: "run-evidence", artifactId: "artifact-7", artifactVersion: 7 },
+      measurements: { bboxMm: [1, 1, 1], volumeMm3: 1, areaMm2: 6, children: [] },
+      gate: { status: "passed", checks: [] },
+    });
   });
 
   // --- plan enforcement ---

@@ -113,16 +113,27 @@ describe("withStreamRetry", () => {
     expect(events.at(-1)?.type).toBe("error");
   });
 
-  it("does not retry once content has streamed (mid-stream failure passes through)", async () => {
+  it("retries a mid-stream network failure without starting a second assistant message", async () => {
     let calls = 0;
     const base: StreamFn = () => {
       calls += 1;
+      if (calls > 1) return successStream("recovered");
       const stream = createAssistantMessageEventStream();
-      const failed = assistantMessage({ stopReason: "error", errorMessage: "429 rate limited mid-flight" });
+      const partial = assistantMessage({ content: [{ type: "text", text: "I'll start by classifying the references." }] });
+      const failed = assistantMessage({
+        content: partial.content,
+        stopReason: "error",
+        errorMessage: "network error",
+      });
       queueMicrotask(() => {
-        stream.push({ type: "start", partial: failed });
-        stream.push({ type: "text_start", contentIndex: 0, partial: failed });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "partial", partial: failed });
+        stream.push({ type: "start", partial });
+        stream.push({ type: "text_start", contentIndex: 0, partial });
+        stream.push({
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "I'll start by classifying the references.",
+          partial,
+        });
         stream.push({ type: "error", reason: "error", error: failed });
       });
       return stream;
@@ -131,8 +142,11 @@ describe("withStreamRetry", () => {
 
     const events = await collect(await wrapped(MODEL, CONTEXT, {}));
 
-    expect(calls).toBe(1);
-    expect(events.map((e) => e.type)).toEqual(["start", "text_start", "text_delta", "error"]);
+    expect(calls).toBe(2);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("done");
+    const done = events.at(-1);
+    if (done?.type === "done") expect(done.message.content).toEqual([{ type: "text", text: "recovered" }]);
   });
 
   it("resolves result() with the final message of the successful attempt", async () => {
@@ -172,10 +186,13 @@ describe("withStreamRetry", () => {
 });
 
 describe("retry classification", () => {
-  it("matches 429/529/rate-limit/overloaded and rejects the rest", () => {
+  it("matches rate-limit, overload, and transient transport failures but rejects permanent errors", () => {
     expect(isRetryableFailure("HTTP 429")).toBe(true);
     expect(isRetryableFailure("error 529: overloaded_error")).toBe(true);
     expect(isRetryableFailure("Rate limit reached")).toBe(true);
+    expect(isRetryableFailure("network error")).toBe(true);
+    expect(isRetryableFailure("TypeError: Failed to fetch")).toBe(true);
+    expect(isRetryableFailure("read ECONNRESET")).toBe(true);
     expect(isRetryableFailure("401 unauthorized")).toBe(false);
     expect(isRetryableFailure(undefined)).toBe(false);
   });

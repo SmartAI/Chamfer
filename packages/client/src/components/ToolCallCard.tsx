@@ -4,6 +4,8 @@ import type { Gate, Measurements } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import { cn } from "@/lib/utils";
 import { CadCodeBlock } from "./CadCodeBlock";
+import { AttachmentImage } from "./AttachmentImage";
+import type { AttachmentReferenceBlock } from "@chamfer/shared";
 
 /** Shape of a run_build123d/lookup_docs tool-result as rendered by the card.
  * Exported so MessageList can reuse it instead of duplicating the type. */
@@ -16,6 +18,8 @@ export interface ToolCallCardResult {
 interface ToolCallCardProps {
   call: { id: string; name: string; arguments: Record<string, unknown> };
   result?: ToolCallCardResult;
+  /** The assistant response ended in failure before this tool produced a result. */
+  interrupted?: boolean;
   resultMessageId?: string;
   /** Whether the CAD code body is rendered. Off by default (CHAMFER_SHOW_CAD_CODE
    * gates it); hidden mode keeps the label-and-actions row so Copy/Render 3D
@@ -36,6 +40,43 @@ function inlineImage(content: unknown): string | undefined {
   return image ? `data:${image.mimeType};base64,${image.data}` : undefined;
 }
 
+function attachmentReference(content: unknown): AttachmentReferenceBlock | undefined {
+  if (!Array.isArray(content)) return undefined;
+  return content.find(
+    (block): block is AttachmentReferenceBlock =>
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "attachment-reference" &&
+      (block as { kind?: unknown }).kind === "view-sheet" &&
+      typeof (block as { attachmentId?: unknown }).attachmentId === "string" &&
+      typeof (block as { mimeType?: unknown }).mimeType === "string",
+  );
+}
+
+type InspectionEvidenceBlock =
+  | { type: "inline"; url: string }
+  | { type: "reference"; reference: AttachmentReferenceBlock };
+
+function inspectionEvidenceBlocks(content: unknown): InspectionEvidenceBlock[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block): InspectionEvidenceBlock[] => {
+    if (typeof block !== "object" || block === null) return [];
+    const candidate = block as Record<string, unknown>;
+    if (candidate.type === "image" && typeof candidate.data === "string" && typeof candidate.mimeType === "string") {
+      return [{ type: "inline", url: `data:${candidate.mimeType};base64,${candidate.data}` }];
+    }
+    if (
+      candidate.type === "attachment-reference" &&
+      typeof candidate.attachmentId === "string" &&
+      typeof candidate.mimeType === "string" &&
+      (candidate.kind === "user-image" || candidate.kind === "view-sheet")
+    ) {
+      return [{ type: "reference", reference: candidate as unknown as AttachmentReferenceBlock }];
+    }
+    return [];
+  });
+}
+
 function errorText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "Tool call failed";
@@ -52,14 +93,16 @@ function errorText(content: unknown): string {
   return text || "Tool call failed";
 }
 
-export function ToolCallCard({ call, result, resultMessageId, showCadCode = false }: ToolCallCardProps) {
+export function ToolCallCard({ call, result, interrupted = false, resultMessageId, showCadCode = false }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [sheetUrl, setSheetUrl] = useState<string | undefined>(() => inlineImage(result?.content));
+  const sheetReference = attachmentReference(result?.content);
+  const inspectedEvidence = call.name === "inspect_evidence" ? inspectionEvidenceBlocks(result?.content) : [];
 
   useEffect(() => {
     const fallback = inlineImage(result?.content);
     setSheetUrl(fallback);
-    if (!resultMessageId) return;
+    if (sheetReference || !resultMessageId) return;
     let cancelled = false;
     void rest
       .listAttachments(resultMessageId)
@@ -72,7 +115,7 @@ export function ToolCallCard({ call, result, resultMessageId, showCadCode = fals
     return () => {
       cancelled = true;
     };
-  }, [result?.content, resultMessageId]);
+  }, [result?.content, resultMessageId, sheetReference]);
 
   const code = typeof call.arguments.code === "string" ? call.arguments.code : "";
   const measurements = result?.details?.measurements;
@@ -86,10 +129,10 @@ export function ToolCallCard({ call, result, resultMessageId, showCadCode = fals
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium hover:bg-accent"
       >
-        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !expanded && "-rotate-90")} />
-        <span className="font-mono">{call.name}</span>
-        <span className={cn("ml-auto", result?.isError ? "text-destructive" : "text-muted-foreground")}>
-          {result ? (result.isError ? "Failed" : "Complete") : "Running"}
+        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !expanded && "-rotate-90")} />
+        <span title={call.name} className="min-w-0 flex-1 truncate whitespace-nowrap font-mono">{call.name}</span>
+        <span className={cn("shrink-0", result?.isError || interrupted ? "text-destructive" : "text-muted-foreground")}>
+          {result ? (result.isError ? "Failed" : "Complete") : interrupted ? "Failed" : "Running"}
         </span>
       </button>
       {expanded && (
@@ -182,7 +225,38 @@ export function ToolCallCard({ call, result, resultMessageId, showCadCode = fals
               )}
             </div>
           )}
-          {sheetUrl && <img src={sheetUrl} alt="Multi-view CAD inspection sheet" className="h-auto w-full border" />}
+          {inspectedEvidence.length > 0 ? (
+            <div data-testid="inspection-evidence-list" className="grid grid-cols-1 gap-2">
+              {inspectedEvidence.map((evidence, index) =>
+                evidence.type === "reference" ? (
+                  <AttachmentImage
+                    key={`${evidence.reference.attachmentId}-${index}`}
+                    reference={evidence.reference}
+                    testId="inspection-evidence-image"
+                    alt={`Inspected evidence ${index + 1}`}
+                    className="h-auto max-h-80 w-full object-contain border"
+                  />
+                ) : (
+                  <img
+                    key={`inline-${index}`}
+                    data-testid="inspection-evidence-image"
+                    src={evidence.url}
+                    alt={`Inspected evidence ${index + 1}`}
+                    className="h-auto max-h-80 w-full object-contain border"
+                  />
+                ),
+              )}
+            </div>
+          ) : sheetReference ? (
+            <AttachmentImage
+              reference={sheetReference}
+              testId="view-sheet-image"
+              alt="Multi-view CAD inspection sheet"
+              className="h-auto w-full border"
+            />
+          ) : sheetUrl ? (
+            <img data-testid="view-sheet-image" src={sheetUrl} alt="Multi-view CAD inspection sheet" className="h-auto w-full border" />
+          ) : null}
         </div>
       )}
     </div>

@@ -3,24 +3,23 @@ import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 
 /**
- * Transparent 429/529 retry for a pi StreamFn: rate-limit failures that arrive before
- * any content has streamed are retried with backoff instead of erroring the turn. The
- * agent loop never sees the failed attempts - only the events of the attempt that
- * produced content (or the final failure once the budget is exhausted).
+ * Transparent transient-failure retry for a pi StreamFn. Rate-limit, overload, and
+ * transport failures are retried with backoff instead of erroring the turn.
  *
- * Once any content event has been forwarded, retrying would duplicate output, so
- * mid-stream failures pass through unchanged; pi-ai's own SDK-level retries and the
- * session error banner cover that case.
+ * A retry after content has streamed suppresses the new attempt's `start` event. Every
+ * later content event carries that attempt's complete partial message, so pi-agent-core
+ * replaces the interrupted partial in place and still persists only the final attempt.
  */
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_BASE_DELAY_MS = 2_000;
 const DEFAULT_MAX_DELAY_MS = 60_000;
 
-// Deliberately narrower than session.ts's RATE_LIMIT_PATTERN family: only failures
-// that are transient by definition (rate limit / overloaded) are worth an automatic
-// retry; auth and request-shape errors would fail identically five times.
-const RETRYABLE_PATTERN = /\b429\b|\b529\b|rate[ _-]?limit|too many requests|overloaded/i;
+// Deliberately narrower than session.ts's error classification: only failures that are
+// transient by definition are worth retrying. Auth and request-shape errors would fail
+// identically on every attempt.
+const RETRYABLE_PATTERN =
+  /\b429\b|\b529\b|rate[ _-]?limit|too many requests|overloaded|network (?:error|failure)|failed to fetch|fetch failed|\b(?:econnreset|econnrefused|etimedout|epipe)\b|socket hang up|connection (?:reset|closed|terminated)|stream (?:ended|terminated|disconnected)/i;
 
 export interface RetryWaitInfo {
   attempt: number;
@@ -90,11 +89,11 @@ export function withStreamRetry(base: StreamFn, retryOptions: StreamRetryOptions
   return (model, context, options) => {
     const out = createAssistantMessageEventStream();
     void (async () => {
+      let streamStarted = false;
       for (let attempt = 1; ; attempt += 1) {
-        // The "start" event is held back until real content arrives so a pre-content
-        // failure can be retried without the agent loop ever seeing the attempt.
+        // Hold each attempt's start until real content arrives. The first productive
+        // attempt starts the assistant message; later attempts update that same partial.
         let heldStart: AssistantMessageEvent | undefined;
-        let forwarded = false;
         let terminal: AssistantMessageEvent | undefined;
 
         const inner = await base(model, context, options);
@@ -103,12 +102,12 @@ export function withStreamRetry(base: StreamFn, retryOptions: StreamRetryOptions
             terminal = event;
             break;
           }
-          if (event.type === "start" && !forwarded) {
+          if (event.type === "start") {
             heldStart = event;
             continue;
           }
-          if (!forwarded) {
-            forwarded = true;
+          if (!streamStarted) {
+            streamStarted = true;
             if (heldStart) out.push(heldStart);
           }
           out.push(event);
@@ -118,7 +117,6 @@ export function withStreamRetry(base: StreamFn, retryOptions: StreamRetryOptions
           terminal?.type === "error" && terminal.reason === "error" ? terminal.error : undefined;
         if (
           failure &&
-          !forwarded &&
           attempt < maxAttempts &&
           isRetryableFailure(failure.errorMessage) &&
           !options?.signal?.aborted
@@ -131,7 +129,7 @@ export function withStreamRetry(base: StreamFn, retryOptions: StreamRetryOptions
           // Aborted mid-wait: give up and surface the original failure below.
         }
 
-        if (!forwarded && heldStart) out.push(heldStart);
+        if (!streamStarted && heldStart) out.push(heldStart);
         out.push(terminal ?? syntheticFailure("stream ended without a terminal event", false));
         return;
       }

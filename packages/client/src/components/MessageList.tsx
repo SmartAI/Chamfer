@@ -13,8 +13,10 @@ import { Streamdown, type Components, type CustomRendererProps } from "streamdow
 import { ArrowDown, Check, CheckCircle2, FoldVertical, ListChecks, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
-import { getMessagePersistenceId, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
+import { getMessagePersistenceId, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER, VISUAL_NUDGE_MARKER } from "@/agent/session";
 import { CadCodeBlock } from "./CadCodeBlock";
+import { AttachmentImage } from "./AttachmentImage";
+import type { AttachmentReferenceBlock } from "@chamfer/shared";
 
 /** Whether CAD code bodies render in chat (CHAMFER_SHOW_CAD_CODE). A module-local
  * context, not a prop, because the fence renderer sits behind Streamdown's static
@@ -178,6 +180,49 @@ function isImageBlock(value: unknown): value is ImageBlock {
     typeof (value as { data?: unknown }).data === "string" &&
     typeof (value as { mimeType?: unknown }).mimeType === "string"
   );
+}
+
+function isAttachmentReference(value: unknown): value is AttachmentReferenceBlock {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "attachment-reference" &&
+    typeof (value as { attachmentId?: unknown }).attachmentId === "string" &&
+    typeof (value as { mimeType?: unknown }).mimeType === "string" &&
+    ((value as { kind?: unknown }).kind === "user-image" ||
+      (value as { kind?: unknown }).kind === "view-sheet")
+  );
+}
+
+function renderUserContent(content: unknown): ReactNode {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  return content.map((block, index) => {
+    if (isTextBlock(block)) return <span key={index}>{block.text}</span>;
+    if (isImageBlock(block)) {
+      return (
+        <img
+          key={index}
+          data-testid="message-user-image"
+          src={`data:${block.mimeType};base64,${block.data}`}
+          alt="attached reference"
+          className="my-1.5 max-h-32 max-w-full rounded-md object-contain"
+        />
+      );
+    }
+    if (isAttachmentReference(block)) {
+      return (
+        <AttachmentImage
+          key={block.attachmentId}
+          reference={block}
+          testId="message-user-image"
+          alt="attached reference"
+          className="my-1.5 max-h-32 max-w-full rounded-md object-contain"
+        />
+      );
+    }
+    return null;
+  });
 }
 
 function isTextBlock(value: unknown): value is TextBlock {
@@ -365,29 +410,25 @@ export function MessageList({
             </div>
           );
         }
+        if (isUser && text.startsWith(VISUAL_NUDGE_MARKER)) {
+          return (
+            <div key={index} className="flex justify-center">
+              <span
+                data-testid="visual-nudge-chip"
+                className="flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-[11px] text-amber-800"
+              >
+                <ListChecks className="h-3 w-3" aria-hidden="true" />
+                Visual check: current reference evidence is incomplete or needs revision
+              </span>
+            </div>
+          );
+        }
         const toolCalls = Array.isArray(message.content) ? message.content.filter(isToolCallBlock) : [];
-        // User image blocks are persisted verbatim in contentJson (base64 included), so
-        // replayed messages render straight from the content blocks; no attachment fetch.
-        const images = isUser && Array.isArray(message.content) ? message.content.filter(isImageBlock) : [];
-
         return (
           <div key={index} className={cn("flex min-w-0", isUser ? "justify-end" : "justify-start")}>
             {isUser ? (
               <div className="max-w-[80%] whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
-                {images.length > 0 && (
-                  <div className="mb-1.5 flex flex-wrap gap-1.5">
-                    {images.map((image, imageIndex) => (
-                      <img
-                        key={imageIndex}
-                        data-testid="message-user-image"
-                        src={`data:${image.mimeType};base64,${image.data}`}
-                        alt="attached reference"
-                        className="max-h-32 max-w-full rounded-md object-contain"
-                      />
-                    ))}
-                  </div>
-                )}
-                {text}
+                {renderUserContent(message.content)}
               </div>
             ) : (
               <div className="max-w-[80%] min-w-0 break-words [overflow-wrap:anywhere] rounded-lg bg-muted px-3 py-2 text-sm">
@@ -405,6 +446,7 @@ export function MessageList({
                       key={call.id}
                       call={call}
                       result={result as ToolCallCardResult | undefined}
+                      interrupted={generationFailed && isLast && !result}
                       resultMessageId={getMessagePersistenceId(result)}
                       showCadCode={showCadCode}
                     />

@@ -1,6 +1,15 @@
 import { Agent, streamProxy, type AgentEvent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
-import type { Model, Api, ImageContent } from "@earendil-works/pi-ai";
-import { PROXY_AUTH_TOKEN } from "@chamfer/shared";
+import type { Model, Api, ImageContent, Message } from "@earendil-works/pi-ai";
+import {
+  PROXY_AUTH_TOKEN,
+  type AttachmentReferenceBlock,
+  type ReferenceClassificationDto,
+  type ReferenceRecordDto,
+  type InspectionLeaseDto,
+  type VisualVerificationRecordDto,
+  type VisualVerificationBatchRecordDto,
+  type RecordVisualVerificationBatchInput,
+} from "@chamfer/shared";
 import * as rest from "../api/rest";
 import { transformLlmContext } from "./contextPolicy";
 import { runCompaction } from "./compaction";
@@ -18,6 +27,14 @@ import { createUpdatePlanTool } from "./tools/updatePlan";
 import { createLoadSkillTool } from "./tools/loadSkill";
 import { skillNudgeBlock } from "./skillNudge";
 import { DEFAULT_SKILL_MODE, type Build123dSkillMode } from "./build123dSkill";
+import { withInspectionSheetEvidence } from "./inspectionSheetLifecycle";
+import { pendingReferenceIds, projectClassifiedReferences } from "./referenceClassification";
+import { createClassifyReferenceTool } from "./tools/classifyReference";
+import { createInspectEvidenceTool, createRecordInspectionObservationTool } from "./tools/inspectionEvidence";
+import { projectInspectionLeases } from "./inspectionLeaseProjection";
+import { createRecordVisualVerificationBatchTool } from "./tools/recordVisualVerificationBatch";
+import { currentVisualEvidence, validateVisualFinalization } from "./visualVerification";
+import { planVisualVerificationBatches, preferQueuedVisualBatchPlan, projectVisualVerificationBatch, reconcileVisualVerificationBatches, validateProjectedVisualBatchInput, type VisualVerificationBatchPlan } from "./visualVerificationBatching";
 
 export interface ChatSession {
   conversationId: string;
@@ -46,6 +63,8 @@ export type SessionNotice =
 export interface SessionState {
   /** pi AgentMessages: persisted history plus the live streaming partial, if any. */
   messages: unknown[];
+  /** Current durable reference classifications used by visual-status surfaces. */
+  referenceRecords?: ReferenceRecordDto[];
   streaming: boolean;
   error?: SessionError;
   notice?: SessionNotice;
@@ -78,6 +97,14 @@ export interface CreateSessionOptions {
   skillMode?: Build123dSkillMode;
   /** Replayed from REST: parsed AgentMessage history for this conversation. */
   priorMessages: unknown[];
+  /** Durable current reference state and append-only history loaded with the conversation. */
+  referenceRecords?: ReferenceRecordDto[];
+  /** Durable leases that were still open when the conversation was loaded. */
+  openInspectionLeases?: InspectionLeaseDto[];
+  /** Durable visual verdict history loaded with the conversation. */
+  visualVerifications?: VisualVerificationRecordDto[];
+  /** Durable partial visual batch ledger loaded with the conversation. */
+  visualVerificationBatches?: VisualVerificationBatchRecordDto[];
   /** Max run_build123d executions per turn before the turn is aborted;
    * defaults to DEFAULT_MAX_CAD_RUNS. Configurable via settings/env. */
   maxCadRuns?: number;
@@ -91,6 +118,14 @@ export interface CreateSessionOptions {
    * callers must not set this; the session always installs its own onWait/onResume callbacks.
    */
   __retryOptions?: Pick<StreamRetryOptions, "sleep" | "maxAttempts" | "baseDelayMs" | "maxDelayMs">;
+  /** Test/evidence hook recording the images selected at each model boundary. */
+  __onImageExposure?: (trace: ImageExposureTrace) => void;
+}
+
+export interface ImageExposureTrace {
+  totalImages: number;
+  currentSheetImages: number;
+  currentSheetAttachmentIds: string[];
 }
 
 function buildStreamFn(conversationId: string): StreamFn {
@@ -115,6 +150,7 @@ export const SELF_CHECK_PROMPT = `${SELF_CHECK_MARKER} The verify gate passed fo
 /** Prefix identifying the deterministic plan stop-gate nudge (planned turns replace
  * the prose self-check with this; the UI renders it as a system chip). */
 export const PLAN_NUDGE_MARKER = "[Chamfer plan check]";
+export const VISUAL_NUDGE_MARKER = "[Chamfer visual check]";
 
 /** With an active plan, the per-turn ceiling is this multiple of maxCadRuns; each
  * component bucket individually stays within maxCadRuns. */
@@ -122,6 +158,10 @@ export const PLAN_BUDGET_CEILING_FACTOR = 3;
 
 export const IMAGE_PLAN_GATE_ERROR =
   "run_build123d is blocked for this image-triggered design request. Call update_plan first with a valid plan. The plan must include the goal, components with acceptance checks, interfaces, and a spec sheet in your own words that enumerates every readable dimension, feature, and spec-table row from the image. Each spec-sheet row must use non-empty check_refs that resolve to component checks, or a non-empty unverifiable_reason.";
+
+export function referenceClassificationGateError(referenceIds: readonly string[]): string {
+  return `run_build123d is blocked because reference images are unclassified: ${referenceIds.join(", ")}. Call classify_reference for each ID with status, purpose, relationships, rationale, and specificationLinks or noSpecificationReason.`;
+}
 
 export function buildPlanNudgePrompt(incomplete: readonly { id: string; status: string }[]): string {
   const list = incomplete.map((c) => `"${c.id}" (${c.status})`).join(", ");
@@ -141,11 +181,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function base64ToBytes(data: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(data);
-  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
+async function retryPersistenceOnce<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch {
+    await delay(PERSIST_RETRY_DELAY_MS);
+    return operation();
+  }
 }
 
 /**
@@ -167,24 +209,141 @@ function fileToImageContent(file: File): Promise<ImageContent> {
   });
 }
 
+function isAttachmentReference(block: unknown): block is AttachmentReferenceBlock {
+  if (typeof block !== "object" || block === null) return false;
+  const candidate = block as Partial<AttachmentReferenceBlock>;
+  return (
+    candidate.type === "attachment-reference" &&
+    typeof candidate.attachmentId === "string" &&
+    typeof candidate.mimeType === "string" &&
+    (candidate.kind === "user-image" || candidate.kind === "view-sheet")
+  );
+}
+
+/** Inspection pixels are never durable message content, even if tool details are malformed. */
+export function normalizeInspectionEvidenceMessage(message: AgentMessage): AgentMessage {
+  if (message.role !== "toolResult" || message.toolName !== "inspect_evidence" || !Array.isArray(message.content)) {
+    return message;
+  }
+  const details = message.details as Partial<InspectionLeaseDto> | undefined;
+  const evidence = Array.isArray(details?.evidence) ? details.evidence : [];
+  let imageIndex = 0;
+  const content = message.content.map((block) => {
+    if (block.type !== "image") return block;
+    const selected = evidence[imageIndex++];
+    if (selected && typeof selected.attachmentId === "string" &&
+        (selected.kind === "user-image" || selected.kind === "view-sheet") && typeof selected.mime === "string") {
+      return {
+        type: "attachment-reference",
+        attachmentId: selected.attachmentId,
+        kind: selected.kind,
+        mimeType: selected.mime,
+      } satisfies AttachmentReferenceBlock;
+    }
+    return { type: "text" as const, text: "[Inspection image omitted because durable lease metadata was unavailable.]" };
+  });
+  return { ...message, content } as AgentMessage;
+}
+
+/** Clone the model projection and replace only selected durable references with pi images. */
+export async function materializeAttachmentReferences(
+  messages: AgentMessage[],
+  onExposure?: (trace: ImageExposureTrace) => void,
+): Promise<Message[]> {
+  const projectedReferences = messages.flatMap((message) => {
+    const content = (message as { content?: unknown }).content;
+    return Array.isArray(content) ? content.filter(isAttachmentReference) : [];
+  });
+  const strictVisualBatch = projectedReferences.some((reference) => reference.kind === "view-sheet") &&
+    projectedReferences.some((reference) => reference.kind === "user-image");
+  const currentSheetAttachmentIds = messages.flatMap((message) => {
+    const content = (message as { content?: unknown }).content;
+    return Array.isArray(content)
+      ? content.flatMap((block: unknown) => {
+          const reference = block as unknown;
+          return isAttachmentReference(reference) && reference.kind === "view-sheet"
+            ? [reference.attachmentId]
+            : [];
+        })
+      : [];
+  });
+  const materialized = await Promise.all(
+    messages.map(async (message) => {
+      if ((message.role !== "user" && message.role !== "toolResult") || !Array.isArray(message.content)) {
+        return message as Message;
+      }
+      const content = await Promise.all(
+        message.content.map(async (block) => {
+          const reference = block as unknown;
+          if (!isAttachmentReference(reference)) return block;
+          try {
+            return await rest.downloadAttachment(reference.attachmentId, reference.mimeType);
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            if (strictVisualBatch) {
+              throw new Error(`Visual verification batch image unavailable: ${reference.attachmentId} (${reason})`);
+            }
+            return { type: "text" as const, text: `[Attachment unavailable: ${reference.attachmentId} (${reason})]` };
+          }
+        }),
+      );
+      return { ...message, content } as Message;
+    }),
+  );
+  onExposure?.({
+    totalImages: materialized.reduce(
+      (count, message) =>
+        count + (Array.isArray(message.content) ? message.content.filter((block) => block.type === "image").length : 0),
+      0,
+    ),
+    currentSheetImages: materialized.reduce((count, message) => {
+      if (message.role !== "toolResult" || message.toolName !== "run_build123d") return count;
+      return count + message.content.filter((block) => block.type === "image").length;
+    }, 0),
+    currentSheetAttachmentIds,
+  });
+  return materialized;
+}
+
 /** Builds a SessionState snapshot from current agent state, including the live streaming partial. */
-function snapshotState(agent: Agent, error: SessionError | undefined, notice: SessionNotice | undefined): SessionState {
+function snapshotState(
+  agent: Agent,
+  referenceRecords: readonly ReferenceRecordDto[],
+  error: SessionError | undefined,
+  notice: SessionNotice | undefined,
+): SessionState {
   const messages: unknown[] = agent.state.messages.slice();
   if (agent.state.isStreaming && agent.state.streamingMessage) {
     messages.push(agent.state.streamingMessage);
   }
-  return { messages, streaming: agent.state.isStreaming, error, notice };
+  return { messages, referenceRecords: [...referenceRecords], streaming: agent.state.isStreaming, error, notice };
 }
 
 export function createSession(opts: CreateSessionOptions): ChatSession {
   const model = JSON.parse(opts.modelJson) as Model<Api>;
   const priorMessages = opts.priorMessages as AgentMessage[];
+  let referenceRecords = [...(opts.referenceRecords ?? [])];
+  let openInspectionLeases = [...(opts.openInspectionLeases ?? [])];
+  let latestVisualVerification = opts.visualVerifications?.at(-1);
+  let visualVerificationBatches = [...(opts.visualVerificationBatches ?? [])];
+  let projectedVisualBatchPlan: VisualVerificationBatchPlan | undefined;
+  const pendingThisTurn = new Set<string>();
+  const imageReferenceIds = new WeakMap<object, string>();
+  let persistQueue: Promise<void> = Promise.resolve();
 
-  let lastError: SessionError | undefined;
+  const terminalPriorMessage = priorMessages.at(-1) as
+    | { role?: string; stopReason?: string; errorMessage?: string }
+    | undefined;
+  let lastError =
+    terminalPriorMessage?.role === "assistant" &&
+    terminalPriorMessage.stopReason === "error" &&
+    terminalPriorMessage.errorMessage
+      ? classifySessionError(terminalPriorMessage.errorMessage)
+      : undefined;
   let notice: SessionNotice | undefined;
   const listeners = new Set<(state: SessionState) => void>();
 
-  // Pre-content 429/529 failures are retried inside the stream function, invisibly to
+  // Transient provider failures are retried inside the stream function, invisibly to
   // the agent loop; the notice keeps the user informed while the session waits.
   const streamFn = withStreamRetry(opts.__streamFn ?? buildStreamFn(opts.conversationId), {
     ...opts.__retryOptions,
@@ -222,14 +381,98 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       ? [createLoadSkillTool({ getMessages: () => agentForPlanTool?.state.messages ?? [] }) as unknown as AgentTool]
       : [];
 
+  function acceptClassification(classification: ReferenceClassificationDto): void {
+    pendingThisTurn.delete(classification.referenceId);
+    const existing = referenceRecords.find((record) => record.referenceId === classification.referenceId);
+    const next: ReferenceRecordDto = {
+      referenceId: classification.referenceId,
+      conversationId: classification.conversationId,
+      attachmentAvailable: existing?.attachmentAvailable ?? true,
+      status: classification.status,
+      purpose: classification.purpose,
+      relationships: classification.relationships,
+      rationale: classification.rationale,
+      specificationLinks: classification.specificationLinks,
+      noSpecificationReason: classification.noSpecificationReason,
+      actor: classification.actor,
+      timestamp: classification.timestamp,
+      history: [...(existing?.history ?? []).filter((item) => item.id !== classification.id), classification],
+    };
+    referenceRecords = existing
+      ? referenceRecords.map((record) => record.referenceId === classification.referenceId ? next : record)
+      : [...referenceRecords, next];
+  }
+
+  const classificationTool = createClassifyReferenceTool({
+    persistPending: () => persistQueue,
+    classify: (input, key) => rest.classifyReference(opts.conversationId, input, key),
+    onAccepted: acceptClassification,
+  }) as unknown as AgentTool;
+
+  const inspectEvidenceTool = createInspectEvidenceTool({
+    persistPending: () => persistQueue,
+    openLease: (input, key) => rest.openInspectionLease(opts.conversationId, input, key),
+    download: rest.downloadAttachment,
+    onOpened: (lease) => {
+      openInspectionLeases = [...openInspectionLeases.filter((candidate) => candidate.id !== lease.id), lease];
+    },
+  }) as unknown as AgentTool;
+  const recordObservationTool = createRecordInspectionObservationTool({
+    persistPending: () => persistQueue,
+    record: (leaseId, input, key) => rest.recordInspectionObservation(opts.conversationId, leaseId, input, key),
+    onClosed: (lease) => {
+      openInspectionLeases = openInspectionLeases.filter((candidate) => candidate.id !== lease.id);
+    },
+  }) as unknown as AgentTool;
+  const visualVerificationBatchTool = createRecordVisualVerificationBatchTool({
+    persistPending: () => persistQueue,
+    record: (input, key) => rest.recordVisualVerificationBatch(opts.conversationId, input, key),
+    onAccepted: (record) => {
+      visualVerificationBatches = [...visualVerificationBatches.filter((item) => item.id !== record.id), record];
+      if (record.finalVerification) latestVisualVerification = record.finalVerification;
+      visualNudgedWithoutProgress = false;
+    },
+  }) as unknown as AgentTool;
+
   const agent = new Agent({
     initialState: {
       systemPrompt: opts.systemPrompt,
       model,
-      tools: [...((opts.tools ?? []) as AgentTool[]), planTool, ...skillTools],
+      tools: [
+        ...((opts.tools ?? []) as AgentTool[]),
+        classificationTool,
+        inspectEvidenceTool,
+        recordObservationTool,
+        visualVerificationBatchTool,
+        planTool,
+        ...skillTools,
+      ],
     },
     streamFn,
-    beforeToolCall: async ({ toolCall }) => {
+    beforeToolCall: async ({ toolCall, args }) => {
+      if (openInspectionLeases.length > 0 && toolCall.name !== "record_inspection_observation") {
+        return {
+          block: true,
+          reason: `Tool ${toolCall.name} is blocked while inspection lease${openInspectionLeases.length === 1 ? "" : "s"} ${openInspectionLeases.map((lease) => lease.id).join(", ")} remain open. Record structured observations for every open lease before any other tool action.`,
+        };
+      }
+      if (toolCall.name === "record_visual_verification_batch") {
+        const evidence = currentVisualEvidence(opts.conversationId, agentForPlanTool?.state.messages ?? priorMessages, referenceRecords);
+        if (!evidence) return { block: true, reason: "no current visual evidence is available for batching" };
+        const plan = planVisualVerificationBatches(evidence, model as Model<Api> & { maxInputImages?: number }, referenceRecords);
+        const progress = reconcileVisualVerificationBatches(plan, visualVerificationBatches);
+        const reason = validateProjectedVisualBatchInput(plan, progress, args as RecordVisualVerificationBatchInput);
+        if (reason) return { block: true, reason };
+      }
+      if (toolCall.name === "run_build123d") {
+        const unclassified = new Set([
+          ...pendingReferenceIds(agentForPlanTool?.state.messages ?? priorMessages, referenceRecords),
+          ...pendingThisTurn,
+        ]);
+        if (unclassified.size > 0) {
+          return { block: true, reason: referenceClassificationGateError([...unclassified]) };
+        }
+      }
       if (toolCall.name === "run_build123d" && imagePlanRequiredThisTurn && !imagePlanAcceptedThisTurn) {
         return { block: true, reason: IMAGE_PLAN_GATE_ERROR };
       }
@@ -266,7 +509,30 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     },
     // The persisted transcript is the source of truth; what the model sees is the
     // policy-transformed view (stale view sheets stubbed, compacted history windowed).
-    transformContext: async (messages) => transformLlmContext(messages),
+    transformContext: async (messages) => {
+      const projected = projectInspectionLeases(
+        projectClassifiedReferences(
+          transformLlmContext(messages),
+          referenceRecords,
+          (image) => imageReferenceIds.get(image),
+        ),
+        openInspectionLeases,
+      );
+      const evidence = currentVisualEvidence(opts.conversationId, messages, referenceRecords);
+      const limits = model as Model<Api> & { maxInputImages?: number };
+      const currentBatchPlan = evidence?.activeReferenceIds.length
+        ? planVisualVerificationBatches(evidence, limits, referenceRecords)
+        : undefined;
+      const batchPlan = preferQueuedVisualBatchPlan(currentBatchPlan, projectedVisualBatchPlan);
+      if (!batchPlan) return projected;
+      return projectVisualVerificationBatch(
+        projected,
+        messages,
+        batchPlan,
+        reconcileVisualVerificationBatches(batchPlan, visualVerificationBatches),
+      );
+    },
+    convertToLlm: (messages) => materializeAttachmentReferences(messages, opts.__onImageExposure),
   });
   agentForPlanTool = agent;
   agent.state.messages = priorMessages;
@@ -274,7 +540,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   let nextSeq = priorMessages.length;
 
   function notify(): void {
-    const state = snapshotState(agent, lastError, notice);
+    const state = snapshotState(agent, referenceRecords, lastError, notice);
     for (const listener of listeners) listener(state);
   }
 
@@ -285,40 +551,71 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   // keeps persistence ordered without ever letting a failure surface to the caller: each
   // message gets one retry, and a final failure records state.error but still consumes its
   // seq slot (the gap is documented via the error, not left dangling).
-  let persistQueue: Promise<void> = Promise.resolve();
-
   /**
-   * Uploads binary attachments for a persisted message: the view sheet for run_build123d
-   * tool results, and user-image attachments for image blocks in user messages. The image
-   * base64 also lives verbatim in the persisted contentJson (replay renders from there);
-   * the attachment rows exist so the raw bytes stay addressable via REST.
+   * Replaces native image blocks with ordered durable references and retains the binary
+   * upload work needed to make each reference resolvable through REST.
    */
-  async function uploadMessageAttachments(messageId: string, message: AgentMessage): Promise<void> {
-    if (message.role === "toolResult" && message.toolName === "run_build123d") {
-      const image = message.content.find((block) => block.type === "image");
-      if (!image) return;
-      await rest.uploadAttachment(messageId, "view-sheet", image.mimeType, base64ToBytes(image.data));
-      return;
+  function normalizeMessageAttachments(message: AgentMessage): {
+    durable: AgentMessage;
+    uploads: Array<{ id: string; kind: AttachmentReferenceBlock["kind"]; image: ImageContent }>;
+  } {
+    if ((message.role !== "user" && message.role !== "toolResult") || !Array.isArray(message.content)) {
+      return { durable: message, uploads: [] };
     }
-    if (message.role === "user" && Array.isArray(message.content)) {
-      for (const block of message.content) {
-        if (block.type === "image") {
-          await rest.uploadAttachment(messageId, "user-image", block.mimeType, base64ToBytes(block.data));
-        }
-      }
+    if (message.role === "toolResult" && message.toolName === "inspect_evidence") {
+      return { durable: normalizeInspectionEvidenceMessage(message), uploads: [] };
     }
+    const kind = message.role === "user" ? "user-image" : message.toolName === "run_build123d" ? "view-sheet" : undefined;
+    if (!kind) return { durable: message, uploads: [] };
+    const uploads: Array<{ id: string; kind: AttachmentReferenceBlock["kind"]; image: ImageContent }> = [];
+    const content = message.content.map((block) => {
+      if (block.type !== "image") return block;
+      const id = imageReferenceIds.get(block) ?? crypto.randomUUID();
+      uploads.push({ id, kind, image: block });
+      return { type: "attachment-reference", attachmentId: id, kind, mimeType: block.mimeType } satisfies AttachmentReferenceBlock;
+    });
+    const durable = { ...message, content } as AgentMessage;
+    const sheet = uploads.find((upload) => upload.kind === "view-sheet");
+    return {
+      durable: sheet ? withInspectionSheetEvidence(durable, sheet.id) : durable,
+      uploads,
+    };
   }
 
   function queuePersist(seq: number, message: AgentMessage): void {
     const messageId = crypto.randomUUID();
     registerMessagePersistenceId(message, messageId);
+    const normalized = normalizeMessageAttachments(message);
+    registerMessagePersistenceId(normalized.durable, messageId);
     persistQueue = persistQueue.then(async () => {
       const payload = {
         id: messageId,
         seq,
         role: message.role,
-        contentJson: JSON.stringify(message),
+        contentJson: JSON.stringify(normalized.durable),
       };
+      if (normalized.uploads.length > 0) {
+        try {
+          await retryPersistenceOnce(() => rest.postMessageWithAttachments(
+            opts.conversationId,
+            payload,
+            normalized.uploads.map((upload) => ({
+              id: upload.id,
+              kind: upload.kind,
+              mime: upload.image.mimeType,
+              data: upload.image.data,
+            })),
+          ));
+          agent.state.messages = agent.state.messages.map((candidate) =>
+            candidate === message ? normalized.durable : candidate,
+          );
+        } catch (attachmentError) {
+          const reason = attachmentError instanceof Error ? attachmentError.message : String(attachmentError);
+          lastError = { kind: "generic", message: `attachment-persist-failed: ${reason}` };
+          notify();
+        }
+        return;
+      }
       let persisted = false;
       try {
         await rest.postMessage(opts.conversationId, payload);
@@ -336,14 +633,10 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
           notify();
         }
       }
-      if (persisted) {
-        try {
-          await uploadMessageAttachments(payload.id, message);
-        } catch (attachmentError) {
-          const reason = attachmentError instanceof Error ? attachmentError.message : String(attachmentError);
-          lastError = { kind: "generic", message: `attachment-persist-failed: ${reason}` };
-          notify();
-        }
+      if (persisted && normalized.durable !== message) {
+        agent.state.messages = agent.state.messages.map((candidate) =>
+          candidate === message ? normalized.durable : candidate,
+        );
       }
     });
   }
@@ -365,8 +658,9 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   // without an intervening run_build123d call.
   const cadRunsByBucket = new Map<string, number>();
   let planNudgedWithoutRun = false;
+  let visualNudgedWithoutProgress = false;
 
-  agent.subscribe((event: AgentEvent) => {
+  agent.subscribe(async (event: AgentEvent) => {
     if (
       event.type === "tool_execution_end" &&
       event.toolName === "run_build123d" &&
@@ -384,6 +678,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       !event.message.content.some((block) => (block as { type?: string })?.type === "toolCall") &&
       !agent.hasQueuedMessages()
     ) {
+      await persistQueue;
       // The agent would stop here. Inject at most one follow-up (pi drains the
       // follow-up queue only when the agent would otherwise end the run).
       const activePlan = latestPlan(agent.state.messages);
@@ -392,6 +687,17 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
         activePlan !== undefined &&
         incomplete.length === 0 &&
         !hasAssemblyEvidence(activePlan, agent.state.messages);
+      const activeReferences = referenceRecords.filter((record) => record.status === "active" || record.status === "complementary");
+      const evidence = currentVisualEvidence(opts.conversationId, agent.state.messages, referenceRecords);
+      const visualResult = evidence
+        ? validateVisualFinalization(evidence, latestVisualVerification)
+        : activeReferences.length > 0
+          ? { ok: false as const, reason: "missing-verification" as const, nudge: `Visual finalization is blocked. No current gate-passed artifact and inspection sheet cover active references: ${activeReferences.map((record) => record.referenceId).join(", ")}.` }
+          : { ok: true as const };
+      const batchPlan = evidence ? planVisualVerificationBatches(evidence, model as Model<Api> & { maxInputImages?: number }, referenceRecords) : undefined;
+      const batchProgress = batchPlan && batchPlan.batches.length > 0
+        ? reconcileVisualVerificationBatches(batchPlan, visualVerificationBatches)
+        : undefined;
       if ((incomplete.length > 0 || missingAssembly) && !planNudgedWithoutRun) {
         // Deterministic stop-gate: the plan of record says work remains - either
         // unfinished components, or interfaces nobody has measured because no
@@ -413,6 +719,23 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
           message:
             "Stopped with unfinished plan work after the agent ignored the plan check. Continue the conversation to resume the build.",
         };
+      } else if (!visualResult.ok && batchPlan?.unsupportedReason) {
+        lastError = { kind: "generic", message: `Visual finalization cannot be batched safely: ${batchPlan.unsupportedReason}` };
+      } else if (!visualResult.ok && batchProgress?.status === "invalid") {
+        lastError = { kind: "generic", message: `Visual verification batch ledger is invalid: ${batchProgress.reason}` };
+      } else if (!visualResult.ok && !visualNudgedWithoutProgress) {
+        visualNudgedWithoutProgress = true;
+        if (batchProgress?.status === "pending" && batchPlan) projectedVisualBatchPlan = batchPlan;
+        const batchNudge = batchProgress?.status === "pending" && batchPlan
+          ? `Complete deterministic visual verification batch ${batchProgress.nextBatchIndex + 1}/${batchPlan.batches.length} for artifact ${batchPlan.artifactId} version ${batchPlan.artifactVersion} and sheet ${batchPlan.inspectionSheetId}. The next model request contains the exact shared sheet, reference subset, full active-set record, and carried observations.`
+          : visualResult.nudge;
+        agent.followUp({
+          role: "user",
+          content: [{ type: "text", text: `${VISUAL_NUDGE_MARKER} ${batchNudge}` }],
+          timestamp: Date.now(),
+        } as AgentMessage);
+      } else if (!visualResult.ok) {
+        lastError = { kind: "generic", message: "Stopped without satisfying the visual finalization check. Continue to inspect or revise the current evidence." };
       } else if (incomplete.length === 0 && !missingAssembly && selfCheckArmed && gatePassedThisTurn) {
         selfCheckArmed = false;
         agent.followUp({
@@ -446,6 +769,8 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     if (event.type === "tool_execution_start" && event.toolName === "run_build123d") {
       cadRunsThisTurn += 1;
       planNudgedWithoutRun = false;
+      visualNudgedWithoutProgress = false;
+      projectedVisualBatchPlan = undefined;
       const activePlan = latestPlan(agent.state.messages);
       if (activePlan) {
         // Per-component budget under a global ceiling. Probe runs are diagnostics:
@@ -489,6 +814,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       selfCheckArmed = true;
       cadRunsByBucket.clear();
       planNudgedWithoutRun = false;
+      visualNudgedWithoutProgress = false;
       imagePlanRequiredThisTurn = Boolean(images?.length);
       imagePlanAcceptedThisTurn = false;
       // Compaction runs between turns, before the prompt: when the LLM-visible context
@@ -517,12 +843,17 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
         notify();
       }
       try {
-        // agent.prompt(text, imageBlocks) builds the user message with the text block
-        // first, then the image blocks; message_end then persists it verbatim (base64
-        // included) and uploadMessageAttachments mirrors the images to the REST store.
-        const imageBlocks =
-          images && images.length > 0 ? await Promise.all(images.map(fileToImageContent)) : undefined;
-        await agent.prompt(text, imageBlocks);
+        // pi receives native image blocks for the live request. The message_end
+        // persistence path stores ordered attachment references instead.
+        const imageBlocks = images && images.length > 0
+          ? await Promise.all(images.map(fileToImageContent))
+          : [];
+        imageBlocks.forEach((block) => {
+          const id = crypto.randomUUID();
+          imageReferenceIds.set(block, id);
+          pendingThisTurn.add(id);
+        });
+        await agent.prompt(text, imageBlocks.length > 0 ? imageBlocks : undefined);
       } catch (error) {
         // agent.prompt() can throw synchronously (e.g. "Agent is already processing a
         // prompt" when a send() overlaps an in-flight one) or reject. Either way this must
@@ -547,7 +878,7 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     },
     subscribe(listener: (state: SessionState) => void): () => void {
       listeners.add(listener);
-      listener(snapshotState(agent, lastError, notice));
+      listener(snapshotState(agent, referenceRecords, lastError, notice));
       return () => listeners.delete(listener);
     },
   };

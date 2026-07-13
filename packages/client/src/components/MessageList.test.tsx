@@ -1,6 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageList } from "./MessageList";
+import * as rest from "../api/rest";
+
+vi.mock("../api/rest", () => ({
+  downloadAttachment: vi.fn(),
+  listAttachments: vi.fn(async () => []),
+  attachmentUrl: (id: string) => `/api/attachments/${id}`,
+}));
 
 function userMessage(text: string) {
   return { role: "user", content: text };
@@ -28,6 +35,13 @@ describe("MessageList scroll anchoring", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("renders a visual recovery nudge as transcript metadata without exposing raw evidence IDs", () => {
+    render(<MessageList messages={[userMessage("[Chamfer visual check] uncovered references: private-ref-id")]} streaming={false} />);
+
+    expect(screen.getByTestId("visual-nudge-chip").textContent).toContain("Visual check");
+    expect(screen.queryByText(/private-ref-id/)).toBeNull();
   });
 
   it("autoscrolls to the bottom while the user is pinned there", () => {
@@ -188,6 +202,30 @@ describe("MessageList CAD code visibility", () => {
     expect(screen.getByText(/result = Box\(3, 3, 3\)/)).toBeTruthy();
   });
 
+  it("marks a result-less tool call failed when its assistant generation failed", () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "I'll classify the reference." },
+              { type: "toolCall", id: "classify-1", name: "classify_reference", arguments: {} },
+            ],
+            stopReason: "error",
+            errorMessage: "network error",
+          },
+        ]}
+        streaming={false}
+        generationFailed
+      />,
+    );
+
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.queryByText("Done")).toBeNull();
+  });
+
   it("leaves non-python fences untouched when hidden", () => {
     render(
       <MessageList
@@ -197,6 +235,62 @@ describe("MessageList CAD code visibility", () => {
     );
 
     expect(screen.getByText(/"bodies": 1/)).toBeTruthy();
+  });
+});
+
+describe("MessageList attachment replay", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  it("renders a durable user attachment in its original content position", async () => {
+    vi.mocked(rest.downloadAttachment).mockResolvedValue({
+      type: "image",
+      data: "pixels",
+      mimeType: "image/png",
+    });
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "before" },
+              { type: "attachment-reference", attachmentId: "image-1", kind: "user-image", mimeType: "image/png" },
+              { type: "text", text: "after" },
+            ],
+          },
+        ]}
+        streaming={false}
+      />,
+    );
+
+    const image = await screen.findByTestId("message-user-image");
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,pixels");
+    expect(screen.getByText("before").compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(image.compareDocumentPosition(screen.getByText("after")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    ["missing", "Attachment missing"],
+    ["corrupt", "Attachment corrupt"],
+    ["unsupported-media", "Unsupported attachment"],
+  ])("renders an explicit %s attachment state", async (reason, label) => {
+    vi.mocked(rest.downloadAttachment).mockRejectedValue(new Error(reason));
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "user",
+            content: [
+              { type: "attachment-reference", attachmentId: `broken-${reason}`, kind: "user-image", mimeType: "image/png" },
+            ],
+          },
+        ]}
+        streaming={false}
+      />,
+    );
+
+    expect(screen.getByTestId("attachment-loading")).toBeTruthy();
+    expect(await screen.findByText(label)).toBeTruthy();
   });
 });
 

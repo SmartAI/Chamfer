@@ -9,6 +9,7 @@ import { VerificationChip } from "./VerificationChip";
 import { PlanCard } from "./PlanCard";
 import { latestGateSummary } from "@/agent/gateSummary";
 import { latestPlan } from "@/agent/plan";
+import { currentVisualVerification } from "@/agent/visualVerification";
 import { PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
 import { useChatState } from "@/state/chatState";
 
@@ -188,10 +189,11 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div data-testid="chat-header" className="flex min-h-12 shrink-0 items-center gap-2 border-b py-2 pl-12 pr-4">
-        <span className="min-w-0 truncate text-sm font-medium">{conversationTitle}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{conversationTitle}</span>
         <VerificationChip
           streaming={sessionState.streaming}
           summary={latestGateSummary(sessionState.messages)}
+          visual={currentVisualVerification(sessionState.messages, sessionState.referenceRecords ?? [])}
         />
       </div>
       {plan && <PlanCard plan={plan} />}
@@ -269,7 +271,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
             <>
               <span aria-hidden="true">·</span>
               <span data-testid="retry-notice" className="text-amber-600 dark:text-amber-400">
-                rate-limited, retrying in {sessionState.notice.delaySeconds}s (attempt{" "}
+                request interrupted, retrying in {sessionState.notice.delaySeconds}s (attempt{" "}
                 {sessionState.notice.attempt} of {sessionState.notice.maxAttempts})
               </span>
             </>

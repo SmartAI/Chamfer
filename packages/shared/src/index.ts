@@ -35,6 +35,138 @@ export interface AttachmentDto {
   messageId: string;
   kind: "user-image" | "view-sheet";
   mime: string;
+  contentHash: string;
+  byteSize: number;
+  displayOrder: number;
+}
+
+/** Durable message content block. Pixels are resolved only at UI/model projection boundaries. */
+export interface AttachmentReferenceBlock {
+  type: "attachment-reference";
+  attachmentId: string;
+  kind: AttachmentDto["kind"];
+  mimeType: string;
+}
+
+export type ReferenceClassificationStatus = "active" | "complementary" | "superseded";
+export type ReferenceRelationshipType = "complements" | "superseded-by";
+
+export interface ReferenceRelationship {
+  type: ReferenceRelationshipType;
+  referenceId: string;
+}
+
+export interface ClassifyReferenceInput {
+  referenceId: string;
+  status: ReferenceClassificationStatus;
+  purpose: string;
+  relationships: ReferenceRelationship[];
+  rationale: string;
+  specificationLinks: string[];
+  noSpecificationReason?: string;
+}
+
+export interface ReferenceClassificationDto extends ClassifyReferenceInput {
+  id: string;
+  conversationId: string;
+  actor: "agent";
+  timestamp: number;
+}
+
+export interface ReferenceRecordDto {
+  referenceId: string;
+  conversationId: string;
+  attachmentAvailable: boolean;
+  status: "unclassified" | ReferenceClassificationStatus;
+  purpose?: string;
+  relationships: ReferenceRelationship[];
+  rationale?: string;
+  specificationLinks: string[];
+  noSpecificationReason?: string;
+  actor?: ReferenceClassificationDto["actor"];
+  timestamp?: number;
+  history: ReferenceClassificationDto[];
+}
+
+export interface InspectEvidenceInput {
+  evidenceIds: string[];
+  purpose: string;
+}
+
+export interface InspectionLeaseEvidenceDto {
+  attachmentId: string;
+  kind: AttachmentDto["kind"];
+  mime: string;
+}
+
+export interface InspectionObservationInput {
+  relevantViews: string[];
+  facts: string[];
+  affectedSpecifications: string[];
+  affectedComponents: string[];
+  noAffectedEntityReason?: string;
+}
+
+export interface InspectionObservationDto extends InspectionObservationInput {
+  id: string;
+  leaseId: string;
+  recordedAt: number;
+}
+
+export interface InspectionLeaseDto {
+  id: string;
+  conversationId: string;
+  purpose: string;
+  status: "open" | "closed";
+  evidence: InspectionLeaseEvidenceDto[];
+  openedAt: number;
+  closedAt?: number;
+  observation?: InspectionObservationDto;
+}
+
+export type VisualVerificationVerdict = "match" | "needs-revision";
+
+export interface VisualVerificationObservation {
+  referenceId: string;
+  relevantViews: string[];
+  findings: string[];
+  affectedComponents: string[];
+}
+
+export interface RecordVisualVerificationInput {
+  artifactId: string;
+  artifactVersion: number;
+  inspectionSheetId: string;
+  coveredReferenceIds: string[];
+  verdict: VisualVerificationVerdict;
+  observations: VisualVerificationObservation[];
+}
+
+export interface VisualVerificationRecordDto extends RecordVisualVerificationInput {
+  id: string;
+  conversationId: string;
+  recordedAt: number;
+}
+
+export interface RecordVisualVerificationBatchInput {
+  artifactId: string;
+  artifactVersion: number;
+  inspectionSheetId: string;
+  imageLimit: number;
+  activeReferenceIds: string[];
+  batchIndex: number;
+  batchCount: number;
+  coveredReferenceIds: string[];
+  observations: VisualVerificationObservation[];
+  finalVerdict?: VisualVerificationVerdict;
+  synthesis?: string;
+}
+
+export interface VisualVerificationBatchRecordDto extends RecordVisualVerificationBatchInput {
+  id: string;
+  conversationId: string;
+  recordedAt: number;
+  finalVerification?: VisualVerificationRecordDto;
 }
 
 export interface ArtifactDto {

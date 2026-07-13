@@ -26,7 +26,7 @@ describe("run_build123d tool", () => {
     } as unknown as CadClient;
     const sheetPng = new Blob(["png-data"], { type: "image/png" });
     vi.mocked(renderViewSheet).mockResolvedValue(sheetPng);
-    const onSuccess = vi.fn().mockResolvedValue(undefined);
+    const onSuccess = vi.fn().mockResolvedValue({ artifactId: "artifact-1", artifactVersion: 3 });
     const tool = createRunBuild123dTool({ cad, onSuccess });
 
     const result = await tool.execute("call-1", { code: "result = Box(10, 20, 30)" });
@@ -44,7 +44,14 @@ describe("run_build123d tool", () => {
       data: expect.any(String),
       mimeType: "image/png",
     });
-    expect(result.details).toEqual({ measurements });
+    expect(result.details).toEqual({
+      measurements,
+      code: {
+        toolCallId: "call-1",
+        artifactId: "artifact-1",
+        artifactVersion: 3,
+      },
+    });
   });
 
   async function textForGate(gate: Gate | undefined): Promise<string> {
