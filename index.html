@@ -12,9 +12,7 @@
     --ink: #1a1d21;
     --muted: #5b6470;
     --accent: #ea580c;
-    --accent-soft: #fff7ed;
     --line: #e4e7ec;
-    --shadow: 0 1px 3px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
@@ -25,9 +23,7 @@
       --ink: #e8eaed;
       --muted: #9aa3ad;
       --accent: #fb923c;
-      --accent-soft: #251a10;
       --line: #262a30;
-      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
     }
   }
   * { box-sizing: border-box; }
@@ -48,9 +44,6 @@
   .btn.primary { background: var(--accent); color: #fff; }
   .btn.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--panel); }
   .btn:hover { text-decoration: none; opacity: .92; }
-  figure { margin: 40px 0; text-align: center; }
-  figure img { max-width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow); }
-  figcaption { color: var(--muted); font-size: 13px; margin-top: 10px; }
   section { padding: 32px 0; border-top: 1px solid var(--line); }
   h2 { font-size: 24px; margin: 8px 0 16px; }
   p.lead { color: var(--muted); font-size: 15px; margin: 0 0 8px; }
@@ -63,17 +56,8 @@
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; }
   .card h3 { margin: 0 0 6px; font-size: 16px; }
   .card p { margin: 0; color: var(--muted); font-size: 14px; }
-  .video-placeholder { background: var(--panel); border: 1px dashed var(--line); border-radius: 14px;
-        padding: 56px 24px; text-align: center; margin: 24px 0; }
-  .video-placeholder .play { width: 64px; height: 64px; border-radius: 50%; background: var(--accent-soft);
-        border: 1px solid var(--accent); display: inline-flex; align-items: center; justify-content: center;
-        margin-bottom: 14px; }
-  .video-placeholder .play span { display: inline-block; width: 0; height: 0; margin-left: 5px;
-        border-top: 11px solid transparent; border-bottom: 11px solid transparent;
-        border-left: 18px solid var(--accent); }
-  .video-placeholder p { margin: 4px 0; }
-  .video-placeholder .big { font-weight: 700; font-size: 18px; }
-  .video-placeholder .small { color: var(--muted); font-size: 14px; }
+  .video-embed { position: relative; height: 0; padding-bottom: 56.25%; overflow: hidden; border-radius: 8px; margin: 8px 0 24px; }
+  .video-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   footer { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0 60px; }
   footer p { margin: 6px 0; }
   @media (max-width: 600px) {
@@ -95,35 +79,17 @@
     </div>
   </header>
 
-  <figure>
-    <img src="media/hero.png" alt="The Chamfer workspace: the agent has just built a swept drawer handle, with its generated Python, measurements, and 7-view inspection sheet in the chat, and the finished part with parametric sliders in the 3D viewer" />
-    <figcaption>One real run: the hard preset (a swept drawer handle) built, self-inspected, and live in the 3D viewer with parametric sliders.</figcaption>
-  </figure>
-
   <section>
     <h2>Watch the demos</h2>
-    <p class="lead">Latest: Chamfer builds an espresso machine from a product image.</p>
-    <div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:8px;">
+    <p class="lead">Espresso machine from a product image</p>
+    <div class="video-embed">
       <iframe src="https://www.youtube.com/embed/rvVmGJ5AsDQ" title="Chamfer builds an espresso machine from a product image"
-        style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowfullscreen></iframe>
     </div>
-    <figure style="margin-top:16px;">
-      <img src="media/plane-rotating.gif" alt="A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer" />
-      <figcaption>The result of an image-to-3D run: a stylized amphibious aircraft, live in the viewer.</figcaption>
-    </figure>
-    <p class="lead">Text to CAD: a full run from prompt to exported part.</p>
-    <div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;">
-      <iframe src="https://www.youtube.com/embed/QUC5HnAoHCI" title="Chamfer demo video"
-        style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowfullscreen></iframe>
-    </div>
-    <p class="lead" style="margin-top:22px;">Image to 3D: building a part from a single 2D picture.</p>
-    <div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;">
-      <iframe src="https://www.youtube.com/embed/n72PvB1WUfw" title="Chamfer image-to-3D demo video"
-        style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
+    <p class="lead">A Text/Image to 3D CAD AI Agent</p>
+    <div class="video-embed">
+      <iframe src="https://www.youtube.com/embed/QUC5HnAoHCI" title="A Text/Image to 3D CAD AI Agent"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowfullscreen></iframe>
     </div>
@@ -132,30 +98,6 @@
   <section>
     <h2>Plan, build, verify</h2>
     <p class="lead">For complex requests, Chamfer creates a persistent, evidence-backed plan before building. Successful CAD runs produce measured multi-view inspection evidence, and image-driven work must verify the current model against every active reference before finalizing.</p>
-    <figure>
-      <img src="media/viewsheet.png" alt="An expanded tool-call card showing the generated build123d script, bounds, volume, and area measurements, and the 7-view inspection sheet" />
-      <figcaption>The expanded tool-call card: script, measurements, and the 7-view sheet the agent inspected.</figcaption>
-    </figure>
-  </section>
-
-  <section>
-    <h2>From empty chat to finished part in one click</h2>
-    <p class="lead">Three verified preset prompts, from a simple turned spacer to a swept multi-feature drawer handle,
-      start a generation immediately.</p>
-    <figure>
-      <img src="media/presets.png" alt="The empty chat state with three preset prompt cards: cylindrical spacer, mounting plate, and drawer handle" />
-      <figcaption>The fresh workspace: pick a preset or just describe the part you want.</figcaption>
-    </figure>
-  </section>
-
-  <section>
-    <h2>Parametric sliders, local re-execution</h2>
-    <p class="lead">The script's parameter block becomes live sliders.
-      Drag one and the part re-executes in the browser, with no new chat turn and no API call.</p>
-    <figure>
-      <img src="media/params.png" alt="The right panel after dragging the arc length slider to its minimum: the drawer handle is visibly shorter" />
-      <figcaption>arc_length dragged from 110 down to 60: the handle re-builds instantly, entirely client-side.</figcaption>
-    </figure>
   </section>
 
   <section>
@@ -194,10 +136,6 @@
         <p>Use Anthropic, OpenAI, or Google while CAD execution stays local.</p>
       </div>
     </div>
-    <figure>
-      <img src="media/settings.png" alt="The settings modal with provider, model, masked API key, and base URL fields" />
-      <figcaption>Bring-your-own-key settings: pick a provider and model, paste a key, done.</figcaption>
-    </figure>
   </section>
 
   <section id="quick-start">
