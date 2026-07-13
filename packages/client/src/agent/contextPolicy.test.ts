@@ -105,6 +105,18 @@ describe("applySheetStubs", () => {
   });
 });
 
+describe("failed tool results", () => {
+  it("sends only text content to the LLM without rewriting the persisted result", () => {
+    const failedSheet = { ...sheet(1), isError: true } as AgentMessage;
+
+    const context = transformLlmContext([failedSheet]);
+    const visible = context[0] as { content: Array<{ type: string }> };
+
+    expect(visible.content.every((block) => block.type === "text")).toBe(true);
+    expect(imageOf(failedSheet)).toBe("png-1");
+  });
+});
+
 describe("compaction boundary", () => {
   const row: CompactionMessage = {
     role: "compaction",
