@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://smartai.github.io/Chamfer/"><b>Project page</b></a> ·
+  <a href="https://youtu.be/rvVmGJ5AsDQ">Latest demo</a> ·
   <a href="https://youtu.be/QUC5HnAoHCI">Text-to-CAD demo</a> ·
   <a href="https://youtu.be/n72PvB1WUfw">Image-to-3D demo</a>
 </p>
@@ -19,14 +20,19 @@
 
 ## What is Chamfer
 
-Chamfer is an AI CAD designer that runs entirely in your browser.
-Describe the part you want in plain words, or show it a photo, and it builds a real 3D model while you watch, checking its own work from every angle and fixing its mistakes until the part matches what you asked for.
-Fine-tune dimensions with live sliders, then export STEP, STL, or 3MF for 3D printing and manufacturing.
-Everything stays on your computer.
+Chamfer is an AI CAD designer that turns text and reference images into verified, parametric 3D models.
+For complex requests, it creates an evidence-backed plan, executes it over multiple steps, retrieves build123d guidance as needed, and checks both geometry and visual fidelity before finishing.
+CAD executes locally in your browser; fine-tune dimensions with live sliders, then export STEP, STL, 3MF, or Python.
+Prompts and attached images are sent to the model provider you configure.
+CAD execution, geometry, conversations, and settings stay local.
 
 **The finished part, live in the viewer:**
 
 ![A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer](docs/media/plane-rotating.gif)
+
+**Latest demo, building an espresso machine from a product image:**
+
+[![Watch the latest Chamfer demo](https://img.youtube.com/vi/rvVmGJ5AsDQ/maxresdefault.jpg)](https://youtu.be/rvVmGJ5AsDQ)
 
 **Text to CAD:**
 
@@ -38,10 +44,13 @@ Everything stays on your computer.
 
 ## Features
 
-- AI generation from text or an image
-- Real-time 3D preview with live sliders to review and adjust
-- Multiple export formats: STEP, STL, 3MF, and the Python script
-- Runs locally: your key and your designs never leave your machine
+- Text and image prompts for reference-guided CAD
+- Plan-first execution for long, multi-component builds
+- Retrieval-backed build123d docs and progressive skill loading
+- Context compaction for reliable long-running sessions
+- Multi-view visual self-verification against reference images
+- Browser-local build123d execution with kernel-enforced checks
+- Live parametric sliders and STEP, STL, 3MF, or Python export
 
 ## How to use it
 

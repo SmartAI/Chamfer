@@ -195,8 +195,9 @@ function* planFlowStep(transcript: string, lastMessage: string): Generator<Assis
 }
 
 // --- image-plan-gate scenario (triggered by "image-plan-gate") ---
-// Exercises both deterministic rejection paths before completing a one-part image plan:
-// premature CAD run -> plan without spec sheet -> valid plan -> verified run -> done plan.
+// Classifies the image, then exercises both deterministic rejection paths before
+// completing a one-part image plan: premature CAD run -> plan without spec sheet
+// -> valid plan -> verified run -> done plan.
 const IMAGE_PLAN_CHECKS = [
   { id: "envelope", kind: "bbox", size_mm: [10, 10, 10], target: "spacer" },
   { id: "volume", kind: "volume", range_mm3: [900, 1100], target: "spacer" },
@@ -262,6 +263,17 @@ function* imagePlanGateStep(transcript: string, lastMessage: string): Generator<
   const runs = transcript.split('"name":"run_build123d"').length - 1;
   if (lastMessage.includes("[Chamfer self-check]")) {
     yield* streamText("The spacer and both image-derived specifications are accounted for.");
+    return;
+  }
+  if (!transcript.includes('"toolCallId":"image-plan-classify"')) {
+    yield* streamToolCall("image-plan-classify", "classify_reference", {
+      referenceId: referenceIdsIn(transcript)[0],
+      status: "active",
+      purpose: "Primary dimensioned spacer drawing",
+      relationships: [],
+      rationale: "The drawing establishes the spacer dimensions, form, and finish requirements.",
+      specificationLinks: ["overall-size", "surface-finish"],
+    });
     return;
   }
   if (runs === 0) {

@@ -9,7 +9,7 @@ test("renders a 1400 by 700 inspection sheet for a CAD result", async ({ page })
   await expect(page.getByTestId("measurements")).toContainText("6000", { timeout: 600_000 });
 
   await page.getByTestId("script-viewsheet").click();
-  const sheet = page.getByTestId("view-sheet-image");
+  const sheet = page.getByTestId("right-panel").getByTestId("view-sheet-image");
   await expect(sheet).toBeVisible();
   await expect
     .poll(() => sheet.evaluate((image: HTMLImageElement) => [image.naturalWidth, image.naturalHeight]))

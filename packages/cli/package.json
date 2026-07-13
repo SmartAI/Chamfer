@@ -1,7 +1,7 @@
 {
   "name": "chamfer",
-  "version": "2.0.0",
-  "description": "AI CAD designer that runs entirely in your browser — describe a part in plain words and export STEP, STL, or 3MF.",
+  "version": "2.1.0",
+  "description": "AI CAD designer that turns text and reference images into verified, parametric 3D models.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": { "chamfer": "bin/chamfer.js" },
