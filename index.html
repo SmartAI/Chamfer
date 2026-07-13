@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Chamfer: Describe it. Watch it take shape.</title>
-<meta name="description" content="Describe a part in plain words or with a photo, and an AI designer builds a real 3D model right in your browser, checks its own work, and fixes its mistakes. Tune dimensions with sliders and export for 3D printing or manufacturing. Everything stays on your computer." />
+<meta name="description" content="Turn text and reference images into verified parametric CAD. Chamfer plans complex builds, retrieves build123d guidance, executes locally in your browser, and checks geometry and visual fidelity before export." />
 <style>
   :root {
     --bg: #ffffff;
@@ -36,14 +36,15 @@
   a:hover { text-decoration: underline; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
   header { padding: 72px 0 40px; text-align: center; }
-  .logo { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: .18em;
+  .logo { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: 0;
           text-transform: uppercase; color: var(--muted); }
-  h1 { font-size: clamp(32px, 6vw, 56px); line-height: 1.08; margin: 18px 0 10px; letter-spacing: -.02em; }
+  h1 { font-size: 56px; line-height: 1.08; margin: 18px 0 10px; }
   h1 .g { background: linear-gradient(90deg, var(--accent), #f59e0b); -webkit-background-clip: text;
           background-clip: text; color: transparent; }
-  .sub { color: var(--muted); font-size: clamp(16px, 2.4vw, 20px); max-width: 700px; margin: 0 auto; }
+  .tagline { color: var(--ink); font-size: 22px; font-weight: 650; margin: 0 0 12px; }
+  .sub { color: var(--muted); font-size: 20px; max-width: 700px; margin: 0 auto; }
   .cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-  .btn { display: inline-block; padding: 11px 20px; border-radius: 10px; font-weight: 600; font-size: 15px; }
+  .btn { display: inline-block; padding: 11px 20px; border-radius: 8px; font-weight: 600; font-size: 15px; }
   .btn.primary { background: var(--accent); color: #fff; }
   .btn.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--panel); }
   .btn:hover { text-decoration: none; opacity: .92; }
@@ -51,7 +52,7 @@
   figure img { max-width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow); }
   figcaption { color: var(--muted); font-size: 13px; margin-top: 10px; }
   section { padding: 32px 0; border-top: 1px solid var(--line); }
-  h2 { font-size: 24px; margin: 8px 0 16px; letter-spacing: -.01em; }
+  h2 { font-size: 24px; margin: 8px 0 16px; }
   p.lead { color: var(--muted); font-size: 15px; margin: 0 0 8px; }
   pre { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
         padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 14px; color: var(--ink); }
@@ -59,7 +60,7 @@
          font-family: var(--mono); font-size: .92em; }
   pre code { background: none; border: 0; padding: 0; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 20px 0; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; }
   .card h3 { margin: 0 0 6px; font-size: 16px; }
   .card p { margin: 0; color: var(--muted); font-size: 14px; }
   .video-placeholder { background: var(--panel); border: 1px dashed var(--line); border-radius: 14px;
@@ -75,18 +76,19 @@
   .video-placeholder .small { color: var(--muted); font-size: 14px; }
   footer { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0 60px; }
   footer p { margin: 6px 0; }
+  @media (max-width: 600px) {
+    h1 { font-size: 40px; }
+    .sub { font-size: 17px; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">chamfer</div>
-    <h1>Describe it.<br /><span class="g">Watch it take shape.</span></h1>
-    <p class="sub">Tell it what you want to make, in plain words or with a photo.
-      An AI designer builds a real 3D part right in your browser, checks its own work from every
-      angle, and fixes its mistakes until the part matches what you asked for.
-      Fine-tune dimensions with sliders, then export a file ready for 3D printing or manufacturing.
-      Everything stays on your computer.</p>
+    <div class="logo">AI CAD designer</div>
+    <h1><span class="g">Chamfer</span></h1>
+    <p class="tagline">Describe it. Watch it take shape.</p>
+    <p class="sub">Start with text or reference images. Chamfer plans complex builds, retrieves the modeling knowledge it needs, executes build123d locally in your browser, and verifies geometry and visual fidelity before it finishes. Fine-tune dimensions with sliders, then export for printing or manufacturing. Prompts and attached images are sent to the model provider you configure; CAD execution, geometry, conversations, and settings stay local.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/SmartAI/Chamfer">View on GitHub</a>
       <a class="btn ghost" href="#quick-start">Quick start</a>
@@ -100,6 +102,13 @@
 
   <section>
     <h2>Watch the demos</h2>
+    <p class="lead">Latest: Chamfer builds an espresso machine from a product image.</p>
+    <div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:8px;">
+      <iframe src="https://www.youtube.com/embed/rvVmGJ5AsDQ" title="Chamfer builds an espresso machine from a product image"
+        style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen></iframe>
+    </div>
     <figure style="margin-top:16px;">
       <img src="media/plane-rotating.gif" alt="A stylized amphibious aircraft modeled by Chamfer from a single concept image, rotating in the 3D viewer" />
       <figcaption>The result of an image-to-3D run: a stylized amphibious aircraft, live in the viewer.</figcaption>
@@ -121,10 +130,8 @@
   </section>
 
   <section>
-    <h2>An agent that checks its own geometry</h2>
-    <p class="lead">Every run renders a 7-view inspection sheet (isometric, front, back, left, right, top, bottom, plus measured
-      dimensions) that the agent reads back before it answers, so mistakes get caught and rebuilt inside the loop.
-      The generated Python, the kernel measurements, and the full sheet stay visible in the tool-call card.</p>
+    <h2>Plan, build, verify</h2>
+    <p class="lead">For complex requests, Chamfer creates a persistent, evidence-backed plan before building. Successful CAD runs produce measured multi-view inspection evidence, and image-driven work must verify the current model against every active reference before finalizing.</p>
     <figure>
       <img src="media/viewsheet.png" alt="An expanded tool-call card showing the generated build123d script, bounds, volume, and area measurements, and the 7-view inspection sheet" />
       <figcaption>The expanded tool-call card: script, measurements, and the 7-view sheet the agent inspected.</figcaption>
@@ -152,23 +159,39 @@
   </section>
 
   <section>
-    <h2>Everything else you need</h2>
+    <h2>Built for long-running CAD work</h2>
     <div class="grid">
       <div class="card">
-        <h3>Export anything</h3>
-        <p>STEP, STL, 3MF, or the raw build123d <code>.py</code> script, so the design stays editable outside Chamfer.</p>
+        <h3>Plan-first execution</h3>
+        <p>Evidence-backed plans keep long, multi-component builds aligned with the request.</p>
+      </div>
+      <div class="card">
+        <h3>Retrieval-backed docs</h3>
+        <p>Client-side search retrieves focused build123d guidance when the agent needs it.</p>
+      </div>
+      <div class="card">
+        <h3>Progressive skills</h3>
+        <p>Nine modeling and recovery skills load only when the current task calls for them.</p>
+      </div>
+      <div class="card">
+        <h3>Long-session memory</h3>
+        <p>Domain-aware compaction preserves requirements, plans, and verification state.</p>
       </div>
       <div class="card">
         <h3>Reference images</h3>
-        <p>Paste or attach sketches and photos in chat to guide the model toward the shape you have in mind.</p>
+        <p>Paste or attach sketches and photos for retrieval and visual comparison throughout the run.</p>
+      </div>
+      <div class="card">
+        <h3>Kernel-enforced checks</h3>
+        <p>Deterministic geometry checks prevent weakened verification from passing.</p>
+      </div>
+      <div class="card">
+        <h3>Export anything</h3>
+        <p>Export STEP, STL, 3MF, or the raw build123d <code>.py</code> script.</p>
       </div>
       <div class="card">
         <h3>Bring your own key</h3>
-        <p>Anthropic, OpenAI, or Google. Keys are stored locally and only ever shown masked.</p>
-      </div>
-      <div class="card">
-        <h3>Local persistence</h3>
-        <p>Conversations, scripts, and view sheets persist in local SQLite; every session replays after a reload.</p>
+        <p>Use Anthropic, OpenAI, or Google while CAD execution stays local.</p>
       </div>
     </div>
     <figure>
