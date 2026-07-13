@@ -1,0 +1,35 @@
+diff --git a/node_modules/@earendil-works/pi-agent-core/dist/proxy.d.ts b/node_modules/@earendil-works/pi-agent-core/dist/proxy.d.ts
+index 8c3ab2a..21b9d89 100644
+--- a/node_modules/@earendil-works/pi-agent-core/dist/proxy.d.ts
++++ b/node_modules/@earendil-works/pi-agent-core/dist/proxy.d.ts
+@@ -2,7 +2,7 @@
+  * Proxy stream function for apps that route LLM calls through a server.
+  * The server manages auth and proxies requests to LLM providers.
+  */
+-import { type AssistantMessage, type AssistantMessageEvent, type Context, EventStream, type Model, type SimpleStreamOptions, type StopReason } from "@earendil-works/pi-ai";
++import { type AssistantMessage, type AssistantMessageEvent, type Context, EventStream, type Model, type SimpleStreamOptions, type StopReason, type ToolCall } from "@earendil-works/pi-ai";
+ declare class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+     constructor();
+ }
+@@ -45,6 +45,7 @@ export type ProxyAssistantMessageEvent = {
+ } | {
+     type: "toolcall_end";
+     contentIndex: number;
++    toolCall?: ToolCall;
+ } | {
+     type: "done";
+     reason: Extract<StopReason, "stop" | "length" | "toolUse">;
+diff --git a/node_modules/@earendil-works/pi-agent-core/dist/proxy.js b/node_modules/@earendil-works/pi-agent-core/dist/proxy.js
+index a521ab2..af9da8f 100644
+--- a/node_modules/@earendil-works/pi-agent-core/dist/proxy.js
++++ b/node_modules/@earendil-works/pi-agent-core/dist/proxy.js
+@@ -247,6 +247,9 @@ function processProxyEvent(proxyEvent, partial) {
+             throw new Error("Received toolcall_delta for non-toolCall content");
+         }
+         case "toolcall_end": {
++            if (proxyEvent.toolCall) {
++                partial.content[proxyEvent.contentIndex] = { ...proxyEvent.toolCall };
++            }
+             const content = partial.content[proxyEvent.contentIndex];
+             if (content?.type === "toolCall") {
+                 delete content.partialJson;
