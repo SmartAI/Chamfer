@@ -29,6 +29,9 @@ export const KEEP_SHEETS = 3;
 export const SHEET_STUB_TEXT =
   "[Inspection sheet image removed: superseded by newer CAD runs. The measurements and gate verdict in this result are still valid; run run_build123d again if fresh views are needed.]";
 
+const FAILED_TOOL_NON_TEXT_STUB = "[Non-text tool result content omitted because the tool failed.]";
+const EMPTY_FAILED_TOOL_STUB = "Tool failed without a text error message.";
+
 /**
  * Persisted marker row for a compaction event. Appended to the end of the transcript
  * at the moment compaction runs (seq order stays monotonic); `keptTail` counts the
@@ -152,6 +155,22 @@ function stubSheet(message: AgentMessage): AgentMessage {
   } as AgentMessage;
 }
 
+function textOnlyFailedToolResults(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map((message) => {
+    const result = message as unknown as { role?: unknown; isError?: unknown; content?: unknown };
+    if (result.role !== "toolResult" || result.isError !== true) return message;
+
+    const content = Array.isArray(result.content) ? result.content : [];
+    const textContent = content.map((block: ContentBlock) =>
+      block?.type === "text" ? block : { type: "text", text: FAILED_TOOL_NON_TEXT_STUB },
+    );
+    return {
+      ...(message as object),
+      content: textContent.length > 0 ? textContent : [{ type: "text", text: EMPTY_FAILED_TOOL_STUB }],
+    } as AgentMessage;
+  });
+}
+
 /**
  * Threshold + batch sheet stubbing with hysteresis, replayed deterministically over
  * the message order: walking the transcript from the start, whenever the number of
@@ -196,7 +215,7 @@ export function transformLlmContext(messages: AgentMessage[]): AgentMessage[] {
     } else {
       context = messages.filter((message) => !isCompactionMessage(message));
     }
-    return applySheetStubs(context);
+    return applySheetStubs(textOnlyFailedToolResults(context));
   } catch {
     return messages;
   }
