@@ -54,3 +54,92 @@ def test_set_params_roundtrip_executes():
     out = harness.set_params(SRC, {"overall_width": 120})
     m = harness.run_script(out)["measurements"]
     assert abs(m["bboxMm"][0] - 120) < 1e-6
+
+
+def test_run_script_rejects_a_visible_param_that_does_not_change_geometry():
+    source = """# --- params ---
+width = 10  # [5, 100] Overall width in mm
+# --- end params ---
+from build123d import *
+result = Box(10, 20, 30)
+"""
+
+    out = harness.run_script(source)
+
+    failed = [check for check in out["gate"]["checks"] if not check["passed"]]
+    assert any(
+        check["name"] == "parameter_width"
+        and "does not change the executed geometry" in check["detail"]
+        and "Use `width`" in check["detail"]
+        for check in failed
+    )
+
+
+def parameter_check(source, name):
+    checks = harness.run_script(source)["gate"]["checks"]
+    return next(check for check in checks if check["name"] == f"parameter_{name}")
+
+
+def test_run_script_accepts_a_parameter_that_changes_executed_geometry():
+    check = parameter_check(SRC, "overall_width")
+
+    assert check["passed"] is True
+    assert "changes the executed geometry" in check["detail"]
+
+
+def test_run_script_rejects_a_param_without_an_adjustable_range():
+    source = """# --- params ---
+width = 10  # [10, 10] Overall width in mm
+# --- end params ---
+from build123d import *
+result = Box(width, 20, 30)
+"""
+
+    check = parameter_check(source, "width")
+
+    assert check["passed"] is False
+    assert "valid adjustable range" in check["detail"]
+
+
+def test_run_script_probes_a_one_step_integer_range():
+    source = """# --- params ---
+count = 1  # [1, 2] Number of adjacent boxes
+# --- end params ---
+from build123d import *
+result = Box(count * 10, 20, 30)
+"""
+
+    check = parameter_check(source, "count")
+
+    assert check["passed"] is True
+    assert "probe value 2" in check["detail"]
+
+
+def test_run_script_tries_another_probe_when_one_in_range_value_errors():
+    source = """# --- params ---
+width = 10  # [5, 15] Overall width in mm
+# --- end params ---
+from build123d import *
+if width <= 8:
+    raise ValueError("width is too small for this feature")
+result = Box(width, 20, 30)
+"""
+
+    check = parameter_check(source, "width")
+
+    assert check["passed"] is True
+    assert "probe value 15" in check["detail"]
+
+
+def test_sub_tolerance_numeric_noise_does_not_make_a_parameter_responsive():
+    source = """# --- params ---
+jitter = 0  # [0, 1] Numerical jitter
+# --- end params ---
+from build123d import *
+result = Box(10 + jitter * 1e-10, 20, 30)
+"""
+
+    check = parameter_check(source, "jitter")
+
+    assert check["passed"] is False
+    assert "does not change the executed geometry" in check["detail"]

@@ -114,10 +114,10 @@ describe("ParamsPanel", () => {
     expect(screen.queryByTestId("param-overall_width")).toBeNull();
   });
 
-  it("shows a Python error inline and keeps the controls usable", async () => {
+  it("shows an artifact persistence error inline and keeps the controls usable", async () => {
     const onChange = vi
       .fn<(values: Record<string, number>) => Promise<void>>()
-      .mockRejectedValueOnce(new Error("NameError: name 'Bax' is not defined"))
+      .mockRejectedValueOnce(new Error("artifact store unavailable"))
       .mockResolvedValue(undefined);
     renderExpanded(<ParamsPanel params={[WIDTH_SPEC]} onChange={onChange} />);
 
@@ -127,7 +127,7 @@ describe("ParamsPanel", () => {
     await flushDebounce();
 
     const error = screen.getByTestId("param-error");
-    expect(error.textContent).toContain("NameError");
+    expect(error.textContent).toContain("artifact store unavailable");
 
     // The controls stay usable: a follow-up commit goes through and clears
     // the inline error.

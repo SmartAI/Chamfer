@@ -5,6 +5,7 @@ Runs identically under desktop CPython (tests) and Pyodide (production).
 import ast
 import contextlib
 import io
+import math
 import re
 import traceback
 
@@ -16,6 +17,8 @@ EXPECT_END = "# --- end expect ---"
 _EXPECT_REQUIRED_KEYS = ("bodies", "bbox_mm")
 _EXPECT_ALLOWED_KEYS = frozenset({"bodies", "bbox_mm", "bbox_tol", "volume_mm3"})
 DEFAULT_BBOX_TOL = 0.5
+PARAMETER_GEOMETRY_REL_TOL = 1e-7
+PARAMETER_GEOMETRY_ABS_TOL = 1e-7
 
 CHECKS_START = "# --- checks ---"
 CHECKS_END = "# --- end checks ---"
@@ -175,6 +178,139 @@ def set_params(source: str, values: dict[str, float]) -> str:
         line = lines[i]
         lines[i] = line[: value_node.col_offset] + repr(new_value) + line[value_node.end_col_offset :]
     return "\n".join(lines)
+
+
+def _parameter_probe_values(value, lo, hi):
+    """Return deterministic interior probe values for one visible parameter."""
+    if not all(_is_number(number) and math.isfinite(number) for number in (value, lo, hi)):
+        return []
+    if lo >= hi or value < lo or value > hi:
+        return []
+
+    integral = all(isinstance(number, int) for number in (value, lo, hi))
+    span = hi - lo
+    raw_candidates = (lo + span * 0.25, lo + span * 0.75)
+    if integral:
+        candidates = [int(round(candidate)) for candidate in raw_candidates]
+        candidates.extend((lo, hi))
+    else:
+        candidates = list(raw_candidates)
+
+    unique = []
+    for candidate in candidates:
+        if candidate != value and candidate not in unique and lo <= candidate <= hi:
+            unique.append(candidate)
+    return sorted(unique, key=lambda candidate: (-abs(candidate - value), candidate))
+
+
+def _geometry_signature(shape):
+    """Executed geometry evidence used to compare a parameter probe with its baseline."""
+    bb = shape.bounding_box()
+    center = shape.center()
+    vertices, _triangles = shape.tessellate(tolerance=0.1)
+    points = sorted((float(v.X), float(v.Y), float(v.Z)) for v in vertices)
+    return {
+        "bbox": (
+            float(bb.min.X), float(bb.min.Y), float(bb.min.Z),
+            float(bb.max.X), float(bb.max.Y), float(bb.max.Z),
+        ),
+        "center": (float(center.X), float(center.Y), float(center.Z)),
+        "volume": float(shape.volume),
+        "area": float(shape.area),
+        "points": points,
+    }
+
+
+def _numbers_close(left, right, scale=1.0):
+    return math.isclose(
+        left,
+        right,
+        rel_tol=PARAMETER_GEOMETRY_REL_TOL,
+        abs_tol=max(PARAMETER_GEOMETRY_ABS_TOL, abs(scale) * PARAMETER_GEOMETRY_REL_TOL),
+    )
+
+
+def _same_executed_geometry(left, right):
+    scale = max(
+        (abs(value) for value in left["bbox"] + right["bbox"]),
+        default=1.0,
+    )
+    if len(left["points"]) != len(right["points"]):
+        return False
+    if not all(
+        _numbers_close(a, b, scale)
+        for a, b in zip(left["bbox"] + left["center"], right["bbox"] + right["center"])
+    ):
+        return False
+    if not _numbers_close(left["volume"], right["volume"], max(abs(left["volume"]), abs(right["volume"]), 1.0)):
+        return False
+    if not _numbers_close(left["area"], right["area"], max(abs(left["area"]), abs(right["area"]), 1.0)):
+        return False
+    return all(
+        _numbers_close(a, b, scale)
+        for left_point, right_point in zip(left["points"], right["points"])
+        for a, b in zip(left_point, right_point)
+    )
+
+
+def _parameter_responsiveness_checks(source, shape):
+    baseline = _geometry_signature(shape)
+    checks = []
+    for spec in parse_params(source):
+        name = spec["name"]
+        probes = _parameter_probe_values(spec["value"], spec["min"], spec["max"])
+        if not probes:
+            checks.append(
+                _gate_check(
+                    f"parameter_{name}",
+                    False,
+                    f"Parameter `{name}` needs a valid adjustable range containing its current value; "
+                    f"found value {spec['value']} with range [{spec['min']}, {spec['max']}].",
+                )
+            )
+            continue
+
+        probe_errors = []
+        responsive_at = None
+        for probe in probes:
+            try:
+                probe_source = set_params(source, {name: probe})
+                probe_result, _stdout = _execute(probe_source)
+                probe_shape = _to_shape(probe_result)
+                if not _same_executed_geometry(baseline, _geometry_signature(probe_shape)):
+                    responsive_at = probe
+                    break
+            except Exception as error:
+                probe_errors.append(f"{probe}: {error}")
+
+        if responsive_at is not None:
+            checks.append(
+                _gate_check(
+                    f"parameter_{name}",
+                    True,
+                    f"Parameter `{name}` changes the executed geometry at probe value {responsive_at}.",
+                )
+            )
+        elif probe_errors and len(probe_errors) == len(probes):
+            checks.append(
+                _gate_check(
+                    f"parameter_{name}",
+                    False,
+                    f"Parameter `{name}` could not be verified because every in-range probe failed: "
+                    + "; ".join(probe_errors),
+                )
+            )
+        else:
+            checks.append(
+                _gate_check(
+                    f"parameter_{name}",
+                    False,
+                    f"Parameter `{name}` does not change the executed geometry at deterministic "
+                    f"in-range probes {probes}. Use `{name}` to derive a dimension, feature, or placement "
+                    "of `result`, or remove it from the params block.",
+                )
+            )
+    return checks
 
 
 def _is_number(value):
@@ -909,6 +1045,7 @@ def _run_gate_checks(source, shape):
         _gate_check("valid", shape.is_valid, "B-rep validity (is_valid)"),
         _gate_check("nondegenerate", volume > 0, f"total volume {volume:.6g} mm^3 must be > 0"),
     ]
+    checks.extend(_parameter_responsiveness_checks(source, shape))
     try:
         parse_component(source)
     except ValueError as e:

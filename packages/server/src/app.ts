@@ -14,6 +14,7 @@ import { AttachmentStore, type AttachmentStoreOptions } from "./attachmentStore"
 import { inspectionLeaseRoutes } from "./routes/inspectionLeases";
 import { visualVerificationRoutes } from "./routes/visualVerifications";
 import { imageDiagnosticsRoutes } from "./routes/imageDiagnostics";
+import { fakeLlmTestControlRoutes } from "./routes/fakeLlmTestControls";
 
 export interface AppOptions extends AttachmentStoreOptions {
   dataDir?: string;
@@ -31,7 +32,8 @@ export function createApp(db: DatabaseSync, llm: LlmStreamer = realLlm(), option
   app.route("/", referenceRoutes(db, attachmentStore));
   app.route("/", inspectionLeaseRoutes(db, attachmentStore));
   app.route("/", visualVerificationRoutes(db));
-  app.route("/", imageDiagnosticsRoutes(db, llm, attachmentStore));
+  app.route("/", imageDiagnosticsRoutes(db, attachmentStore));
+  app.route("/", fakeLlmTestControlRoutes(db, llm));
   app.route("/", artifactsRoutes(db));
   return app;
 }

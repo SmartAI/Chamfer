@@ -1,11 +1,24 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import type { CadBootStatus, ExportFormat, Measurements, MeshPayload, ParamSpec } from "@chamfer/shared";
+import type {
+  CadBootStatus,
+  ExportFormat,
+  Gate,
+  Measurements,
+  MeshPayload,
+  ParamSpec,
+} from "@chamfer/shared";
 import { CadClient } from "@/cad/cadClient";
 
 // First script run can include installing build123d + OCP.wasm wheels into
 // the Pyodide filesystem, which is slow on a cold cache. Give it generous
 // headroom so the run does not time out mid-install.
 const RUN_TIMEOUT_MS = 600_000;
+
+function parameterResponsivenessFailure(gate: Gate | undefined): string | undefined {
+  return gate?.checks.find(
+    (check) => check.name.startsWith("parameter_") && !check.passed,
+  )?.detail;
+}
 
 export interface AppState {
   bootStatus: CadBootStatus;
@@ -30,12 +43,15 @@ export interface AppState {
   /** Params parsed from currentScript; empty when there is no params block. */
   params: ParamSpec[];
   /**
-   * Splices new param values into currentScript, runs the result, and (on
-   * success) publishes mesh/measurements and promotes the new code to
-   * currentScript. Returns the new code so callers can persist it. Throws on
-   * Python errors without touching the current state.
+   * Splices new param values into currentScript and verifies the result. The
+   * optional persistence hook runs before mesh, measurements, and code are
+   * published, so a durable-write failure leaves the last valid version intact.
+   * Without a hook, verified edits publish directly (the no-conversation flow).
    */
-  applyParams: (values: Record<string, number>) => Promise<string>;
+  applyParams: (
+    values: Record<string, number>,
+    persistBeforePublish?: (code: string) => Promise<void>,
+  ) => Promise<string>;
   exportModel: (format: ExportFormat) => Promise<{ data: Uint8Array; filename: string }>;
 }
 
@@ -118,11 +134,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function applyParams(values: Record<string, number>): Promise<string> {
+  async function applyParams(
+    values: Record<string, number>,
+    persistBeforePublish?: (code: string) => Promise<void>,
+  ): Promise<string> {
     if (!client) throw new Error("CAD worker is not initialized yet");
     if (currentScript === null) throw new Error("No script has been run yet");
     const newCode = await client.setParams(currentScript, values);
     const result = await client.run(newCode, RUN_TIMEOUT_MS);
+    const responsivenessFailure = parameterResponsivenessFailure(result.gate);
+    if (responsivenessFailure) throw new Error(responsivenessFailure);
+    await persistBeforePublish?.(newCode);
     setMesh(result.mesh);
     setMeasurements(result.measurements);
     setCurrentScript(newCode);
