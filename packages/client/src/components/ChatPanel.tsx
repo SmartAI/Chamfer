@@ -179,7 +179,7 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
     );
   }
 
-  // Streaming no longer disables the composer: sends during a turn join the queue.
+  // Streaming no longer disables the composer: sends during a turn steer the active run.
   const disabled = !settingsPresent || !session;
   const disabledHint = !settingsPresent ? SETTINGS_HINT : undefined;
 

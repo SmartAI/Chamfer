@@ -66,6 +66,7 @@ export function ParamsPanel({ params, onChange }: ParamsPanelProps) {
     valuesRef.current = next;
     committedRef.current = next;
     setValues(next);
+    setError(null);
   }, [params]);
 
   useEffect(
@@ -86,7 +87,10 @@ export function ParamsPanel({ params, onChange }: ParamsPanelProps) {
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       const snapshot = { ...valuesRef.current };
-      if (sameValues(snapshot, committedRef.current)) return;
+      if (sameValues(snapshot, committedRef.current)) {
+        setError(null);
+        return;
+      }
       setError(null);
       onChangeRef.current(snapshot).then(
         () => {
@@ -213,13 +217,17 @@ export function ConnectedParamsPanel() {
   const { activeConversationId } = useChatState();
 
   async function handleChange(values: Record<string, number>): Promise<void> {
-    const code = await applyParams(values);
-    if (activeConversationId) {
-      await rest.postArtifact(activeConversationId, {
-        pySource: code,
-        paramsJson: JSON.stringify(values),
-      });
-    }
+    await applyParams(
+      values,
+      activeConversationId
+        ? async (code) => {
+            await rest.postArtifact(activeConversationId, {
+              pySource: code,
+              paramsJson: JSON.stringify(values),
+            });
+          }
+        : undefined,
+    );
   }
 
   return <ParamsPanel params={params} onChange={handleChange} />;

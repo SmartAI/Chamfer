@@ -3,8 +3,10 @@ import type { LlmStreamer } from "./llm";
 import { TITLE_SYSTEM_PROMPT } from "./titles";
 import { sanitizeModelRequest, type ModelRequestDiagnostic } from "./imageContextDiagnostics";
 
-export interface FakeLlmRequestDiagnostics extends LlmStreamer {
+export interface FakeLlmTestController extends LlmStreamer {
   getRequestDiagnostics(conversationId: string): ModelRequestDiagnostic[];
+  isRequestHeld(conversationId: string): boolean;
+  releaseHeldRequest(conversationId: string): boolean;
 }
 
 export const FAKE_MODEL = {
@@ -754,11 +756,22 @@ function* retrievableEvidenceWorkflowStep(
   yield* streamText("CAD revision rendered; attempting to finish before visual verification.");
 }
 
-export function fakeLlm(): FakeLlmRequestDiagnostics {
+export function fakeLlm(): FakeLlmTestController {
   const diagnostics = new Map<string, ModelRequestDiagnostic[]>();
+  const heldRequests = new Map<string, () => void>();
   return {
     getRequestDiagnostics(conversationId) {
       return [...(diagnostics.get(conversationId) ?? [])];
+    },
+    isRequestHeld(conversationId) {
+      return heldRequests.has(conversationId);
+    },
+    releaseHeldRequest(conversationId) {
+      const release = heldRequests.get(conversationId);
+      if (!release) return false;
+      heldRequests.delete(conversationId);
+      release();
+      return true;
     },
     async *stream(_model, context, options): AsyncIterable<AssistantMessageEvent> {
       const { messages = [], systemPrompt } = context as {
@@ -784,6 +797,20 @@ export function fakeLlm(): FakeLlmRequestDiagnostics {
         if (!Array.isArray(content)) return count;
         return count + content.filter((block) => (block as { type?: unknown })?.type === "image").length;
       }, 0);
+      if (transcript.includes("follow-up-steering-hold")) {
+        const lastMessage = JSON.stringify(messages.at(-1));
+        if (lastMessage.includes("change the width to 40 mm")) {
+          yield* streamText("Correction consumed by the active run before it completed.");
+          return;
+        }
+        // The browser test releases this request only after it has observed the
+        // correction in the pending UI, making the active-run boundary deterministic.
+        await new Promise<void>((resolve) => {
+          heldRequests.set(conversationId, resolve);
+        });
+        yield* streamText("Initial response finished; checking for steering.");
+        return;
+      }
       if (transcript.includes("attachment-replay")) {
         yield* streamText(`Received ${imageCount} native image block${imageCount === 1 ? "" : "s"}.`);
         return;

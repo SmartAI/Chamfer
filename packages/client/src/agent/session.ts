@@ -44,6 +44,13 @@ export interface ChatSession {
    * tied to the persisted user message.
    */
   send(text: string, images?: File[]): Promise<void>;
+  /**
+   * Queues a user correction into the active pi run. The promise settles after pi
+   * consumes and persists that exact message at the next turn boundary.
+   */
+  steer(id: string, text: string, images?: File[]): Promise<"consumed" | "cancelled">;
+  cancelSteering(id: string): void;
+  prioritizeSteering(id: string): void;
   abort(): void;
   subscribe(listener: (state: SessionState) => void): () => void;
 }
@@ -329,6 +336,17 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   let projectedVisualBatchPlan: VisualVerificationBatchPlan | undefined;
   const pendingThisTurn = new Set<string>();
   const imageReferenceIds = new WeakMap<object, string>();
+  type SteeringEntry = {
+    message?: AgentMessage;
+    status: "preparing" | "ready" | "offered" | "consuming";
+    attachmentIds: string[];
+    ready: Promise<void>;
+    resolveReady: () => void;
+    resolve: (outcome: "consumed" | "cancelled") => void;
+    promise: Promise<"consumed" | "cancelled">;
+  };
+  const steeringEntries = new Map<string, SteeringEntry>();
+  const steeringIds = new WeakMap<object, string>();
   let persistQueue: Promise<void> = Promise.resolve();
 
   const terminalPriorMessage = priorMessages.at(-1) as
@@ -359,6 +377,8 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
 
   let imagePlanRequiredThisTurn = false;
   let imagePlanAcceptedThisTurn = false;
+  let imagePlanRequiredAtSend = false;
+  let consumedSteeringImagePlanRequired = false;
 
   // update_plan and load_skill validate against the live transcript (latest plan +
   // gate evidence; already-loaded skill payloads), so they are session-owned: the
@@ -544,6 +564,52 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     for (const listener of listeners) listener(state);
   }
 
+  function rebuildOfferedSteeringQueue(): void {
+    agent.clearSteeringQueue();
+    for (const entry of steeringEntries.values()) {
+      if (entry.status === "offered" && entry.message) agent.steer(entry.message);
+    }
+  }
+
+  function recomputeImagePlanRequirement(): void {
+    imagePlanRequiredThisTurn = imagePlanRequiredAtSend || consumedSteeringImagePlanRequired ||
+      [...steeringEntries.values()].some((entry) =>
+        entry.status === "consuming" && entry.attachmentIds.length > 0,
+      );
+  }
+
+  function removeSteeringGateState(entry: SteeringEntry): void {
+    for (const attachmentId of entry.attachmentIds) pendingThisTurn.delete(attachmentId);
+    recomputeImagePlanRequirement();
+  }
+
+  function cancelPendingSteering(): void {
+    agent.clearSteeringQueue();
+    const pending = [...steeringEntries.values()];
+    steeringEntries.clear();
+    for (const entry of pending) {
+      removeSteeringGateState(entry);
+      entry.resolveReady();
+      entry.resolve("cancelled");
+    }
+  }
+
+  async function offerReadySteeringAtTurnBoundary(): Promise<void> {
+    while (true) {
+      const preparing = [...steeringEntries.values()]
+        .filter((entry) => entry.status === "preparing")
+        .map((entry) => entry.ready);
+      if (preparing.length === 0) break;
+      await Promise.all(preparing);
+    }
+    for (const entry of steeringEntries.values()) {
+      if (entry.status === "preparing") break;
+      if (entry.status !== "ready" || !entry.message) continue;
+      entry.status = "offered";
+      agent.steer(entry.message);
+    }
+  }
+
   // Persistence must never throw back into the agent loop: a rejection escaping this
   // listener is caught by pi's runWithLifecycle and routed into handleRunFailure, which
   // fabricates a synthetic error assistant message and persists that instead of (or after)
@@ -661,6 +727,26 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
   let visualNudgedWithoutProgress = false;
 
   agent.subscribe(async (event: AgentEvent) => {
+    if (event.type === "message_start") {
+      const steeringId = steeringIds.get(event.message);
+      const entry = steeringId ? steeringEntries.get(steeringId) : undefined;
+      if (entry) {
+        entry.status = "consuming";
+        if (entry.attachmentIds.length > 0) {
+          for (const attachmentId of entry.attachmentIds) pendingThisTurn.add(attachmentId);
+          consumedSteeringImagePlanRequired = true;
+          imagePlanRequiredThisTurn = true;
+        }
+      }
+    }
+    if (
+      event.type === "turn_end" &&
+      event.message.role === "assistant" &&
+      event.message.stopReason !== "error" &&
+      event.message.stopReason !== "aborted"
+    ) {
+      await offerReadySteeringAtTurnBoundary();
+    }
     if (
       event.type === "tool_execution_end" &&
       event.toolName === "run_build123d" &&
@@ -749,6 +835,13 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       const seq = nextSeq;
       nextSeq += 1;
       queuePersist(seq, event.message);
+      const steeringId = steeringIds.get(event.message);
+      const steeringEntry = steeringId ? steeringEntries.get(steeringId) : undefined;
+      if (steeringId && steeringEntry) {
+        await persistQueue;
+        steeringEntries.delete(steeringId);
+        steeringEntry.resolve("consumed");
+      }
     }
     if (
       event.type === "turn_end" &&
@@ -765,6 +858,12 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
     }
     if (event.type === "agent_start") {
       lastError = undefined;
+    }
+    if (event.type === "agent_end") {
+      // A provider error or a final steering-poll race can end the run with pi
+      // queue entries still present. They belong to this run and must never leak
+      // into a later prompt; callers retain cancelled entries for explicit replay.
+      cancelPendingSteering();
     }
     if (event.type === "tool_execution_start" && event.toolName === "run_build123d") {
       cadRunsThisTurn += 1;
@@ -816,6 +915,8 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
       planNudgedWithoutRun = false;
       visualNudgedWithoutProgress = false;
       imagePlanRequiredThisTurn = Boolean(images?.length);
+      imagePlanRequiredAtSend = imagePlanRequiredThisTurn;
+      consumedSteeringImagePlanRequired = false;
       imagePlanAcceptedThisTurn = false;
       // Compaction runs between turns, before the prompt: when the LLM-visible context
       // is near the window, older history is summarized into a persisted compaction
@@ -873,7 +974,84 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
         notify();
       }
     },
+    steer(id: string, text: string, images?: File[]): Promise<"consumed" | "cancelled"> {
+      const existing = steeringEntries.get(id);
+      if (existing) return existing.promise;
+      let resolveEntry!: (outcome: "consumed" | "cancelled") => void;
+      let resolveReady!: () => void;
+      const promise = new Promise<"consumed" | "cancelled">((resolve) => {
+        resolveEntry = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      });
+      const entry: SteeringEntry = {
+        status: "preparing",
+        attachmentIds: [],
+        ready,
+        resolveReady,
+        resolve: resolveEntry,
+        promise,
+      };
+      steeringEntries.set(id, entry);
+      void (async () => {
+        try {
+          const imageBlocks = images && images.length > 0
+            ? await Promise.all(images.map(fileToImageContent))
+            : [];
+          if (steeringEntries.get(id) !== entry || !agent.state.isStreaming) {
+            if (steeringEntries.delete(id)) {
+              entry.resolveReady();
+              entry.resolve("cancelled");
+            }
+            return;
+          }
+          entry.attachmentIds = imageBlocks.map((block) => {
+            const attachmentId = crypto.randomUUID();
+            imageReferenceIds.set(block, attachmentId);
+            return attachmentId;
+          });
+          entry.message = {
+            role: "user",
+            content: [{ type: "text", text }, ...imageBlocks],
+            timestamp: Date.now(),
+          } as AgentMessage;
+          steeringIds.set(entry.message, id);
+          entry.status = "ready";
+          entry.resolveReady();
+        } catch {
+          if (steeringEntries.delete(id)) {
+            entry.resolveReady();
+            entry.resolve("cancelled");
+          }
+        }
+      })();
+      return promise;
+    },
+    cancelSteering(id: string): void {
+      const entry = steeringEntries.get(id);
+      if (!entry || entry.status === "consuming") return;
+      steeringEntries.delete(id);
+      removeSteeringGateState(entry);
+      entry.resolveReady();
+      entry.resolve("cancelled");
+      if (entry.status === "offered") rebuildOfferedSteeringQueue();
+    },
+    prioritizeSteering(id: string): void {
+      const chosen = steeringEntries.get(id);
+      if (!chosen || chosen.status === "consuming") return;
+      steeringEntries.delete(id);
+      const ordered = [[id, chosen] as const, ...steeringEntries.entries()];
+      steeringEntries.clear();
+      for (const [entryId, entry] of ordered) steeringEntries.set(entryId, entry);
+      if (chosen.status === "offered") rebuildOfferedSteeringQueue();
+    },
     abort(): void {
+      // Stop invalidates both user steering and autonomous plan/visual/self-check
+      // continuations associated with this run. ChatState retains cancelled user
+      // entries in its explicit paused queue.
+      agent.clearAllQueues();
+      cancelPendingSteering();
       agent.abort();
     },
     subscribe(listener: (state: SessionState) => void): () => void {

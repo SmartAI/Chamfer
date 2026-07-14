@@ -192,6 +192,383 @@ describe("createSession", () => {
     expect(finalState?.messages).toHaveLength(2);
   });
 
+  it("consumes a user correction in the active pi run before the original send settles", async () => {
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let finishFirstTurn: (() => void) | undefined;
+    const streamFn = vi.fn((_model: unknown, context: { messages: unknown[] }) => {
+      turnContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: turnContexts.length === 1 ? "Working on the first request." : "Applied the correction." }],
+        api: FAKE_MODEL.api,
+        provider: FAKE_MODEL.provider,
+        model: FAKE_MODEL.id,
+        usage: ZERO_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      const finish = () => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: "stop", message: response });
+        stream.end(response);
+      };
+      if (turnContexts.length === 1) finishFirstTurn = finish;
+      else queueMicrotask(finish);
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let originalSettled = false;
+    const originalSend = session.send("Make a 10 mm wide box").then(() => {
+      originalSettled = true;
+    });
+    await vi.waitUntil(() => finishFirstTurn !== undefined);
+
+    const correction = session.steer("correction-1", "Change the width to 40 mm", []);
+    expect(originalSettled).toBe(false);
+    finishFirstTurn?.();
+    await Promise.all([originalSend, correction]);
+
+    expect(turnContexts).toHaveLength(2);
+    expect(JSON.stringify(turnContexts[1]?.messages)).toContain("Change the width to 40 mm");
+    const persistedUsers = vi.mocked(rest.postMessage).mock.calls
+      .map((call) => JSON.parse(call[1].contentJson) as { role?: string; content?: unknown })
+      .filter((message) => message.role === "user");
+    expect(persistedUsers).toHaveLength(2);
+    expect(JSON.stringify(persistedUsers[1])).toContain("Change the width to 40 mm");
+  });
+
+  it("consumes multiple corrections one at a time in send order", async () => {
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let finishFirstTurn: (() => void) | undefined;
+    const streamFn = vi.fn((_model: unknown, context: { messages: unknown[] }) => {
+      turnContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: `response ${turnContexts.length}` }],
+        api: FAKE_MODEL.api,
+        provider: FAKE_MODEL.provider,
+        model: FAKE_MODEL.id,
+        usage: ZERO_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      const finish = () => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: "stop", message: response });
+        stream.end(response);
+      };
+      if (turnContexts.length === 1) finishFirstTurn = finish;
+      else queueMicrotask(finish);
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    const original = session.send("Start");
+    await vi.waitUntil(() => finishFirstTurn !== undefined);
+    const first = session.steer("correction-1", "First correction", []);
+    const second = session.steer("correction-2", "Second correction", []);
+    finishFirstTurn?.();
+    await Promise.all([original, first, second]);
+
+    expect(turnContexts).toHaveLength(3);
+    expect(JSON.stringify(turnContexts[1]?.messages)).toContain("First correction");
+    expect(JSON.stringify(turnContexts[1]?.messages)).not.toContain("Second correction");
+    expect(JSON.stringify(turnContexts[2]?.messages)).toContain("Second correction");
+    const persistedUserText = vi.mocked(rest.postMessage).mock.calls
+      .map((call) => JSON.stringify(JSON.parse(call[1].contentJson)))
+      .filter((serialized) => serialized.includes('"role":"user"'));
+    expect(persistedUserText).toEqual([
+      expect.stringContaining("Start"),
+      expect.stringContaining("First correction"),
+      expect.stringContaining("Second correction"),
+    ]);
+  });
+
+  it("keeps a delayed image correction ahead of a later text correction at the turn boundary", async () => {
+    let releaseImage: (() => void) | undefined;
+    const readSpy = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader, file) {
+      releaseImage = () => {
+        Object.defineProperty(this, "result", { configurable: true, value: "data:image/png;base64,AQID" });
+        this.onload?.(new ProgressEvent("load") as ProgressEvent<FileReader>);
+      };
+      void file;
+    });
+    try {
+      const turnContexts: Array<{ messages: unknown[] }> = [];
+      let finishFirstTurn: (() => void) | undefined;
+      const streamFn = vi.fn((_model: unknown, context: { messages: unknown[] }) => {
+        turnContexts.push(context);
+        const stream = createAssistantMessageEventStream();
+        const response: AssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: `response ${turnContexts.length}` }],
+          api: FAKE_MODEL.api,
+          provider: FAKE_MODEL.provider,
+          model: FAKE_MODEL.id,
+          usage: ZERO_USAGE,
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+        const finish = () => {
+          stream.push({ type: "start", partial: response });
+          stream.push({ type: "done", reason: "stop", message: response });
+          stream.end(response);
+        };
+        if (turnContexts.length === 1) finishFirstTurn = finish;
+        else queueMicrotask(finish);
+        return stream;
+      });
+      const session = createSession({
+        conversationId: "conv-1",
+        modelJson: JSON.stringify(FAKE_MODEL),
+        systemPrompt,
+        priorMessages: [],
+        __streamFn: streamFn,
+      } as unknown as Parameters<typeof createSession>[0]);
+      const image = new File([new Uint8Array([1, 2, 3])], "slow.png", { type: "image/png" });
+
+      const original = session.send("Start");
+      await vi.waitUntil(() => finishFirstTurn !== undefined);
+      const imageCorrection = session.steer("slow-image", "Use this image first", [image]);
+      const textCorrection = session.steer("later-text", "Then make it wider", []);
+      await vi.waitUntil(() => releaseImage !== undefined);
+      finishFirstTurn?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(turnContexts).toHaveLength(1);
+      releaseImage?.();
+      await Promise.all([original, imageCorrection, textCorrection]);
+
+      expect(turnContexts).toHaveLength(3);
+      expect(JSON.stringify(turnContexts[1]?.messages.at(-1))).toContain("Use this image first");
+      expect(JSON.stringify(turnContexts[2]?.messages.at(-1))).toContain("Then make it wider");
+      const persistedUsers = [
+        ...vi.mocked(rest.postMessage).mock.calls.map((call) => call[1]),
+        ...vi.mocked(rest.postMessageWithAttachments).mock.calls.map((call) => call[1]),
+      ]
+        .filter((row) => row.role === "user")
+        .sort((left, right) => left.seq - right.seq)
+        .map((row) => row.contentJson);
+      expect(persistedUsers).toEqual([
+        expect.stringContaining("Start"),
+        expect.stringContaining("Use this image first"),
+        expect.stringContaining("Then make it wider"),
+      ]);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("activates each queued image reference only when pi consumes that steering message", async () => {
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let finishFirstTurn: (() => void) | undefined;
+    const streamFn = vi.fn((_model: unknown, context: { messages: unknown[] }) => {
+      turnContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: `response ${turnContexts.length}` }],
+        api: FAKE_MODEL.api,
+        provider: FAKE_MODEL.provider,
+        model: FAKE_MODEL.id,
+        usage: ZERO_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      const finish = () => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: "stop", message: response });
+        stream.end(response);
+      };
+      if (turnContexts.length === 1) finishFirstTurn = finish;
+      else queueMicrotask(finish);
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+    const firstImage = new File([new Uint8Array([1])], "first.png", { type: "image/png" });
+    const secondImage = new File([new Uint8Array([2])], "second.png", { type: "image/png" });
+    const waitForRead = (file: File) => new Promise<void>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve();
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+    const original = session.send("Start");
+    await vi.waitUntil(() => finishFirstTurn !== undefined);
+    const first = session.steer("image-1", "First image", [firstImage]);
+    const second = session.steer("image-2", "Second image", [secondImage]);
+    await Promise.all([waitForRead(firstImage), waitForRead(secondImage)]);
+    await Promise.resolve();
+    finishFirstTurn?.();
+    await Promise.all([original, first, second]);
+
+    const pendingIds = (context: { messages: unknown[] }) => {
+      const ids = new Set<string>();
+      for (const match of JSON.stringify(context.messages).matchAll(/Pending reference images: ([^.\]]+)/g)) {
+        for (const id of (match[1] ?? "").split(",")) ids.add(id.trim());
+      }
+      return ids;
+    };
+    const secondRequestIds = pendingIds(turnContexts[1]!);
+    const thirdRequestIds = pendingIds(turnContexts[2]!);
+    expect(secondRequestIds.size).toBe(1);
+    expect(thirdRequestIds.size).toBe(2);
+    expect([...secondRequestIds].every((id) => thirdRequestIds.has(id))).toBe(true);
+    expect(vi.mocked(rest.postMessageWithAttachments).mock.calls.map((call) => call[1].seq)).toEqual([2, 4]);
+  });
+
+  it("cancelling a prepared image correction leaves no reference gate in the next run", async () => {
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let finishFirstTurn: (() => void) | undefined;
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ran" }], details: {} }));
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute,
+    };
+    const streamFn = vi.fn((_model: unknown, context: { messages: unknown[] }) => {
+      turnContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = turnContexts.length === 2
+        ? {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "clean-run", name: "run_build123d", arguments: { code: "result = Box(1, 1, 1)" } }],
+            api: FAKE_MODEL.api,
+            provider: FAKE_MODEL.provider,
+            model: FAKE_MODEL.id,
+            usage: ZERO_USAGE,
+            stopReason: "toolUse",
+            timestamp: Date.now(),
+          }
+        : {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            api: FAKE_MODEL.api,
+            provider: FAKE_MODEL.provider,
+            model: FAKE_MODEL.id,
+            usage: ZERO_USAGE,
+            stopReason: "stop",
+            timestamp: Date.now(),
+          };
+      const finish = () => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: response.stopReason === "toolUse" ? "toolUse" : "stop", message: response });
+        stream.end(response);
+      };
+      if (turnContexts.length === 1) finishFirstTurn = finish;
+      else queueMicrotask(finish);
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+    const image = new File([new Uint8Array([1, 2, 3])], "cancel.png", { type: "image/png" });
+
+    const original = session.send("Start");
+    await vi.waitUntil(() => finishFirstTurn !== undefined);
+    const correction = session.steer("cancel-image", "Ignore this image", [image]);
+    await new Promise<void>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve();
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(image);
+    });
+    await Promise.resolve();
+    session.cancelSteering("cancel-image");
+    await expect(correction).resolves.toBe("cancelled");
+    finishFirstTurn?.();
+    await original;
+
+    await session.send("Start a clean run");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves image content and atomic attachment persistence for a steered correction", async () => {
+    const turnContexts: Array<{ messages: Array<{ content?: Array<{ type?: string; data?: string }> }> }> = [];
+    let finishFirstTurn: (() => void) | undefined;
+    const streamFn = vi.fn((_model: unknown, context: { messages: Array<{ content?: Array<{ type?: string; data?: string }> }> }) => {
+      turnContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: FAKE_MODEL.api,
+        provider: FAKE_MODEL.provider,
+        model: FAKE_MODEL.id,
+        usage: ZERO_USAGE,
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      const finish = () => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: "stop", message: response });
+        stream.end(response);
+      };
+      if (turnContexts.length === 1) finishFirstTurn = finish;
+      else queueMicrotask(finish);
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+    const image = new File([new Uint8Array([1, 2, 3])], "correction.png", { type: "image/png" });
+
+    const original = session.send("Start");
+    await vi.waitUntil(() => finishFirstTurn !== undefined);
+    const correction = session.steer("image-correction", "Use this reference instead", [image]);
+    await new Promise<void>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve();
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(image);
+    });
+    await Promise.resolve();
+    finishFirstTurn?.();
+    await Promise.all([original, correction]);
+
+    const secondRequestImages = turnContexts[1]?.messages.flatMap((message) => message.content ?? [])
+      .filter((block) => block.type === "image");
+    expect(secondRequestImages).toEqual([expect.objectContaining({ type: "image", data: "AQID" })]);
+    const atomicCalls = vi.mocked(rest.postMessageWithAttachments).mock.calls;
+    expect(atomicCalls).toHaveLength(1);
+    const durable = JSON.parse(atomicCalls[0]![1].contentJson);
+    expect(durable.content.map((block: { type: string }) => block.type)).toEqual(["text", "attachment-reference"]);
+    expect(atomicCalls[0]![2]).toEqual([expect.objectContaining({ kind: "user-image", data: "AQID" })]);
+  });
+
   it("recovers after a mid-stream network error without persisting the interrupted assistant response", async () => {
     pinResolvingPostMessage();
     const successfulAttempt = makeFakeStreamFn() as StreamFn;
@@ -356,6 +733,144 @@ describe("createSession", () => {
 
     expect(latest?.streaming).toBe(false);
     expect(latest?.error).toBeUndefined();
+  });
+
+  it("abort cancels pending steering so it cannot leak into a later run", async () => {
+    const laterStream = makeFakeStreamFn() as StreamFn;
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let firstRunStarted = false;
+    const streamFn = vi.fn(
+      (_model: unknown, context: { messages: unknown[] }, options?: { signal?: AbortSignal }) => {
+        turnContexts.push(context);
+        if (turnContexts.length > 1) return laterStream(_model as never, context as never, options as never);
+        firstRunStarted = true;
+        return new Promise((_resolve, reject) => {
+          const fail = () => reject(options?.signal?.reason ?? new Error("aborted"));
+          if (options?.signal?.aborted) fail();
+          else options?.signal?.addEventListener("abort", fail);
+        });
+      },
+    );
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    const activeSend = session.send("Start the first run");
+    await vi.waitUntil(() => firstRunStarted);
+    const steering = session.steer("stopped-correction", "This correction belongs only to the stopped run", []);
+    session.abort();
+    await activeSend;
+
+    expect(await Promise.race([steering, Promise.resolve("still-pending")])).toBe("cancelled");
+    await session.send("Start a clean run");
+    expect(JSON.stringify(turnContexts.at(-1)?.messages)).not.toContain("This correction belongs only to the stopped run");
+  });
+
+  it("provider termination cancels unconsumed steering so a later run cannot inherit it", async () => {
+    const laterStream = makeFakeStreamFn() as StreamFn;
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let rejectFirst: ((error: Error) => void) | undefined;
+    const streamFn = vi.fn(
+      (_model: unknown, context: { messages: unknown[] }, options?: { signal?: AbortSignal }) => {
+        turnContexts.push(context);
+        if (turnContexts.length > 1) return laterStream(_model as never, context as never, options as never);
+        return new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      },
+    );
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    const failedSend = session.send("Start the failing run");
+    await vi.waitUntil(() => rejectFirst !== undefined);
+    const steering = session.steer("failed-correction", "Do not leak this correction", []);
+    rejectFirst?.(new Error("invalid request shape"));
+
+    await failedSend;
+    await expect(steering).resolves.toBe("cancelled");
+    await session.send("Start a clean run");
+    expect(JSON.stringify(turnContexts.at(-1)?.messages)).not.toContain("Do not leak this correction");
+  });
+
+  it("gives user steering the next model turn before an autonomous self-check", async () => {
+    const turnContexts: Array<{ messages: unknown[] }> = [];
+    let resolveTool: (() => void) | undefined;
+    const execute = vi.fn(
+      () =>
+        new Promise<{ content: [{ type: "text"; text: string }]; details: { gate: { status: "passed"; checks: [] } } }>((resolve) => {
+          resolveTool = () => resolve({
+            content: [{ type: "text", text: "ran" }],
+            details: { gate: { status: "passed", checks: [] } },
+          });
+        }),
+    );
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute,
+    };
+    const streamFn = vi.fn((_model: unknown, context: { messages: unknown[] }) => {
+      turnContexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = turnContexts.length === 1
+        ? {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "run-1", name: "run_build123d", arguments: { code: "result = Box(1, 1, 1)" } }],
+            api: FAKE_MODEL.api,
+            provider: FAKE_MODEL.provider,
+            model: FAKE_MODEL.id,
+            usage: ZERO_USAGE,
+            stopReason: "toolUse",
+            timestamp: Date.now(),
+          }
+        : {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            api: FAKE_MODEL.api,
+            provider: FAKE_MODEL.provider,
+            model: FAKE_MODEL.id,
+            usage: ZERO_USAGE,
+            stopReason: "stop",
+            timestamp: Date.now(),
+          };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: response.stopReason === "toolUse" ? "toolUse" : "stop", message: response });
+        stream.end(response);
+      });
+      return stream;
+    });
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [],
+      __streamFn: streamFn,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    const original = session.send("Build a box");
+    await vi.waitUntil(() => resolveTool !== undefined);
+    const steering = session.steer("priority-correction", "Make the box 40 mm wide", []);
+    resolveTool?.();
+    await Promise.all([original, steering]);
+
+    expect(turnContexts).toHaveLength(3);
+    expect(JSON.stringify(turnContexts[1]?.messages.at(-1))).toContain("Make the box 40 mm wide");
+    expect(JSON.stringify(turnContexts[1]?.messages)).not.toContain(SELF_CHECK_MARKER);
+    expect(JSON.stringify(turnContexts[2]?.messages.at(-1))).toContain(SELF_CHECK_MARKER);
   });
 
   it("recovers from a transient postMessage failure: retries once, persists both messages in order with contiguous seq, and never persists a synthetic error message", async () => {

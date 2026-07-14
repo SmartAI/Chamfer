@@ -47,6 +47,9 @@ function makeFakeSession(conversationId = "conv-1") {
         for (const listener of listeners) listener(state);
       }
     }),
+    steer: vi.fn(async () => "consumed" as const),
+    cancelSteering: vi.fn(),
+    prioritizeSteering: vi.fn(),
     abort: vi.fn(),
     subscribe: vi.fn((listener: (s: SessionState) => void) => {
       listeners.add(listener);

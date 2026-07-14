@@ -25,6 +25,9 @@ function makeFakeSession(conversationId: string): ChatSession {
   return {
     conversationId,
     send: vi.fn(async () => {}),
+    steer: vi.fn(async () => "consumed" as const),
+    cancelSteering: vi.fn(),
+    prioritizeSteering: vi.fn(),
     abort: vi.fn(),
     subscribe: vi.fn((listener: (state: SessionState) => void) => {
       listeners.add(listener);
@@ -252,6 +255,7 @@ describe("ChatProvider message queue", () => {
   function makeQueueSession(conversationId: string) {
     const listeners = new Set<(state: SessionState) => void>();
     const pendingResolvers: Array<() => void> = [];
+    const steeringResolvers = new Map<string, (outcome: "consumed" | "cancelled") => void>();
     const session: ChatSession = {
       conversationId,
       send: vi.fn(
@@ -260,7 +264,21 @@ describe("ChatProvider message queue", () => {
             pendingResolvers.push(resolve);
           }),
       ),
-      abort: vi.fn(),
+      steer: vi.fn(
+        (id: string) =>
+          new Promise<"consumed" | "cancelled">((resolve) => {
+            steeringResolvers.set(id, resolve);
+          }),
+      ),
+      cancelSteering: vi.fn((id: string) => {
+        steeringResolvers.get(id)?.("cancelled");
+        steeringResolvers.delete(id);
+      }),
+      prioritizeSteering: vi.fn(),
+      abort: vi.fn(() => {
+        for (const resolve of steeringResolvers.values()) resolve("cancelled");
+        steeringResolvers.clear();
+      }),
       subscribe: (listener: (state: SessionState) => void) => {
         listeners.add(listener);
         listener({ messages: [], streaming: false });
@@ -273,7 +291,13 @@ describe("ChatProvider message queue", () => {
         for (const listener of listeners) listener(state);
       },
       finishTurn: () => {
+        for (const resolve of steeringResolvers.values()) resolve("cancelled");
+        steeringResolvers.clear();
         pendingResolvers.shift()?.();
+      },
+      finishSteering: (id: string, outcome: "consumed" | "cancelled" = "consumed") => {
+        steeringResolvers.get(id)?.(outcome);
+        steeringResolvers.delete(id);
       },
     };
   }
@@ -326,6 +350,31 @@ describe("ChatProvider message queue", () => {
     expect(fakeA.session.send).toHaveBeenCalledTimes(2);
     expect(fakeA.session.send).toHaveBeenLastCalledWith("second", []);
     expect(getLatest()?.queuedMessages.map((m) => m.text)).toEqual(["third"]);
+  });
+
+  it("steers a busy session and keeps the correction pending until pi consumes it", async () => {
+    const { fakeA, getLatest } = await renderQueueHarness();
+
+    act(() => getLatest()?.sendMessage("first", []));
+    act(() => fakeA.emit({ messages: [], streaming: true }));
+    act(() => {
+      getLatest()?.sendMessage("make it 40 mm wide", []);
+      expect(fakeA.session.steer).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => expect(fakeA.session.steer).toHaveBeenCalledTimes(1));
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
+    const pending = getLatest()?.queuedMessages[0];
+    expect(pending?.text).toBe("make it 40 mm wide");
+    expect(fakeA.session.steer).toHaveBeenCalledWith(pending?.id, "make it 40 mm wide", []);
+
+    await act(async () => {
+      fakeA.finishSteering(pending!.id);
+      await Promise.resolve();
+    });
+
+    expect(getLatest()?.queuedMessages).toHaveLength(0);
+    expect(fakeA.session.send).toHaveBeenCalledTimes(1);
   });
 
   it("stopAgent aborts the session and pauses draining, keeping queued items", async () => {
@@ -438,6 +487,9 @@ describe("ChatProvider auto-titling", () => {
       session: {
         conversationId,
         send: vi.fn(async () => {}),
+        steer: vi.fn(async () => "consumed" as const),
+        cancelSteering: vi.fn(),
+        prioritizeSteering: vi.fn(),
         abort: vi.fn(),
         subscribe: (listener: (state: SessionState) => void) => {
           listeners.add(listener);

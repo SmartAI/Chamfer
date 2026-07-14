@@ -57,12 +57,12 @@ export interface ChatContextValue {
   /** Re-fetches /api/settings (e.g. after saving in SettingsModal) so settings-gated UI
    * such as the preset prompt cards enables without a reload. */
   refreshSettings: () => Promise<void>;
-  /** Messages waiting for the agent to become idle, in send order. */
+  /** Messages pending pi consumption or waiting for an idle recovery send, in send order. */
   queuedMessages: QueuedMessage[];
   /** True after stopAgent(): queued messages stay put until the user resumes
    * (by sending anything, or sendQueuedNow on a specific item). */
   queuePaused: boolean;
-  /** Sends now when the agent is idle; enqueues when a turn is streaming. */
+  /** Sends a new run when idle and steers the active pi run when streaming. */
   sendMessage: (text: string, images: File[]) => void;
   /** Aborts the in-flight turn and pauses queue draining. */
   stopAgent: () => void;
@@ -144,6 +144,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   // only when the whole agent turn is done). Guards the drain effect against firing a
   // second send into a turn whose streaming flag has not propagated yet.
   const sendInFlightRef = useRef(false);
+  const steeringInFlightRef = useRef(new Set<string>());
   // Bumped when a send settles, so the drain effect re-runs even though a promise
   // resolution alone triggers no render.
   const [drainTick, setDrainTick] = useState(0);
@@ -211,6 +212,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     // previous visit gets another attempt now that the user opened it again.
     if (id) titleAttemptedRef.current.delete(id);
     sessionRef.current = null;
+    steeringInFlightRef.current.clear();
     setSession(null);
     setSessionState(EMPTY_SESSION_STATE);
     // The queue is conversation-scoped: messages typed for one conversation must
@@ -398,6 +400,22 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     });
   }, []);
 
+  const dispatchSteering = useCallback((message: QueuedMessage) => {
+    const live = sessionRef.current;
+    if (!live || steeringInFlightRef.current.has(message.id)) return;
+    steeringInFlightRef.current.add(message.id);
+    void live.steer(message.id, message.text, message.images).then((outcome) => {
+      steeringInFlightRef.current.delete(message.id);
+      if (outcome === "consumed") {
+        setQueuedMessages((prev) => prev.filter((candidate) => candidate.id !== message.id));
+      }
+      setDrainTick((tick) => tick + 1);
+    }).catch(() => {
+      steeringInFlightRef.current.delete(message.id);
+      setDrainTick((tick) => tick + 1);
+    });
+  }, []);
+
   const sendMessage = useCallback(
     (text: string, images: File[]) => {
       if (!sessionRef.current) return;
@@ -405,12 +423,14 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       // Stop-induced pause ends here.
       setQueuePaused(false);
       if (sessionState.streaming || sendInFlightRef.current) {
-        setQueuedMessages((prev) => [...prev, { id: crypto.randomUUID(), text, images }]);
+        const message = { id: crypto.randomUUID(), text, images };
+        setQueuedMessages((prev) => [...prev, message]);
+        if (sessionState.streaming) dispatchSteering(message);
         return;
       }
       dispatchSend(text, images);
     },
-    [dispatchSend, sessionState.streaming],
+    [dispatchSend, dispatchSteering, sessionState.streaming],
   );
 
   const stopAgent = useCallback(() => {
@@ -421,6 +441,8 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   }, []);
 
   const removeQueued = useCallback((id: string) => {
+    sessionRef.current?.cancelSteering(id);
+    steeringInFlightRef.current.delete(id);
     setQueuedMessages((prev) => prev.filter((message) => message.id !== id));
   }, []);
 
@@ -432,8 +454,16 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       if (!chosen) return prev;
       return [chosen, ...prev.filter((message) => message.id !== id)];
     });
+    sessionRef.current?.prioritizeSteering(id);
     setQueuePaused(false);
   }, []);
+
+  // Busy-session delivery uses pi steering. Messages remain in queuedMessages so
+  // pending controls stay visible until the session reports consumption.
+  useEffect(() => {
+    if (!sessionState.streaming || queuePaused || sessionState.error) return;
+    for (const message of queuedMessages) dispatchSteering(message);
+  }, [dispatchSteering, queuePaused, queuedMessages, sessionState.error, sessionState.streaming]);
 
   // Queue drain: whenever the agent is idle, nothing is paused or errored, and a
   // message is waiting, send exactly one. Each drained turn re-triggers this effect
@@ -444,6 +474,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     if (queuePaused || sessionState.error) return;
     const next = queuedMessages[0];
     if (!next || !sessionRef.current) return;
+    if (steeringInFlightRef.current.has(next.id)) return;
     setQueuedMessages((prev) => prev.slice(1));
     dispatchSend(next.text, next.images);
   }, [dispatchSend, drainTick, queuePaused, queuedMessages, sessionState]);
