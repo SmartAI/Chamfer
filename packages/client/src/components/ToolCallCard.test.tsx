@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ToolCallCard } from "./ToolCallCard";
 import * as rest from "@/api/rest";
@@ -16,6 +16,47 @@ const call = {
 };
 
 describe("ToolCallCard status", () => {
+  it("shows a friendly label instead of the raw build123d tool name, keeping the raw name in the tooltip", () => {
+    render(<ToolCallCard call={call} />);
+
+    expect(screen.getByText("Executing code")).toBeTruthy();
+    expect(screen.queryByText("run_build123d")).toBeNull();
+    // The raw name stays reachable for debugging via the row's title tooltip.
+    expect(screen.getByTitle("run_build123d")).toBeTruthy();
+  });
+
+  it("summarizes a payload-less tool as a flat row with no empty expander", () => {
+    render(
+      <ToolCallCard
+        call={{ id: "skill-1", name: "load_skill", arguments: { name: "gears" } }}
+        result={{ content: [{ type: "text", text: "full skill body for the model" }], isError: false, details: { skill: "gears", loaded: true } }}
+      />,
+    );
+
+    // The header carries the whole story; there is nothing to expand into.
+    expect(screen.getByText('Loaded skill “gears”')).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+    // The model-facing skill body is not dumped into the chat.
+    expect(screen.queryByText("full skill body for the model")).toBeNull();
+  });
+
+  it("expands a doc lookup to reveal its result text", () => {
+    render(
+      <ToolCallCard
+        call={{ id: "docs-1", name: "search_docs", arguments: { query: "fillet edge" } }}
+        result={{ content: [{ type: "text", text: "1. fillet(objects, radius)" }], isError: false }}
+      />,
+    );
+
+    expect(screen.getByText('Searched docs “fillet edge”')).toBeTruthy();
+    // Doc lookups start collapsed to keep the chat tidy.
+    expect(screen.queryByTestId("tool-doc-text")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(screen.getByTestId("tool-doc-text").textContent).toContain("fillet(objects, radius)");
+  });
+
   it("renders every ordered inspect_evidence reference regardless of attachment kind", async () => {
     vi.mocked(rest.downloadAttachment).mockImplementation(async (id) => ({
       type: "image",
