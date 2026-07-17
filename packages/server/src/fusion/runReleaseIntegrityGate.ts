@@ -264,7 +264,7 @@ async function main() {
       connector: { version: identityVersion, sha256: await hashPaths(["packages/server/src/fusion"], (path) => !path.includes(".test.") && !path.endsWith("runReleaseIntegrityGate.ts")) },
       policy: { version: identityVersion, sha256: await hashPaths(["packages/server/src/fusion/actionPolicy.ts"]) },
       skills: { version: identityVersion, sha256: await hashPaths(["packages/client/src/agent/fusionPrompt.ts", "packages/client/src/agent/fusion-skills"]) },
-      fixtures: { version: identityVersion, sha256: await hashPaths(["packages/fusion-fixtures/src", ".scratch/fusion-connector/fixtures/FUS-IMAGE-001-reference.png"], (path) => !path.includes(".test.")) },
+      fixtures: { version: identityVersion, sha256: await hashPaths(["packages/fusion-fixtures/src", "evaluation/fusion/v1/fixtures/FUS-IMAGE-001-reference.png"], (path) => !path.includes(".test.")) },
     },
     fake: { status: fakePassed ? "passed" : "failed", runner: "playwright", startedAt: fakeStartedAt, finishedAt: fakeFinishedAt, tests: fakeTests, fixtures: [...FUSION_INTEGRITY_FIXTURES] },
     live: {

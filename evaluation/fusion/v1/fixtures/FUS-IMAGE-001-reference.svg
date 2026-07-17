@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <rect width="1400" height="900" fill="#ffffff"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#111827">
+    <text x="70" y="60" font-size="34" font-weight="700">RIGHT-ANGLE MOUNTING BRACKET</text>
+    <text x="70" y="94" font-size="20">ALL DIMENSIONS IN MILLIMETERS</text>
+  </g>
+  <g stroke="#111827" stroke-width="5" fill="none">
+    <rect x="100" y="180" width="500" height="300"/>
+    <rect x="100" y="480" width="500" height="40" fill="#e5e7eb"/>
+    <circle cx="225" cy="305" r="25"/>
+    <circle cx="475" cy="305" r="25"/>
+    <line x1="205" y1="305" x2="245" y2="305" stroke-width="2"/>
+    <line x1="225" y1="285" x2="225" y2="325" stroke-width="2"/>
+    <line x1="455" y1="305" x2="495" y2="305" stroke-width="2"/>
+    <line x1="475" y1="285" x2="475" y2="325" stroke-width="2"/>
+    <rect x="100" y="650" width="500" height="150"/>
+    <rect x="100" y="780" width="500" height="20" fill="#e5e7eb"/>
+    <circle cx="200" cy="700" r="17.5"/>
+    <circle cx="500" cy="700" r="17.5"/>
+    <line x1="182" y1="700" x2="218" y2="700" stroke-width="2"/>
+    <line x1="200" y1="682" x2="200" y2="718" stroke-width="2"/>
+    <line x1="482" y1="700" x2="518" y2="700" stroke-width="2"/>
+    <line x1="500" y1="682" x2="500" y2="718" stroke-width="2"/>
+    <path d="M900 520 L1200 520 L1200 180 L1160 180 L1160 480 L900 480 Z" fill="#f3f4f6"/>
+    <path d="M1160 480 Q1160 450 1130 450" stroke-width="4"/>
+  </g>
+  <g stroke="#2563eb" stroke-width="2.5" fill="none">
+    <line x1="100" y1="145" x2="600" y2="145"/>
+    <line x1="100" y1="132" x2="100" y2="158"/>
+    <line x1="600" y1="132" x2="600" y2="158"/>
+    <line x1="65" y1="180" x2="65" y2="520"/>
+    <line x1="52" y1="180" x2="78" y2="180"/>
+    <line x1="52" y1="520" x2="78" y2="520"/>
+    <line x1="625" y1="180" x2="625" y2="480"/>
+    <line x1="612" y1="180" x2="638" y2="180"/>
+    <line x1="612" y1="480" x2="638" y2="480"/>
+    <line x1="100" y1="830" x2="600" y2="830"/>
+    <line x1="100" y1="817" x2="100" y2="843"/>
+    <line x1="600" y1="817" x2="600" y2="843"/>
+    <line x1="65" y1="650" x2="65" y2="800"/>
+    <line x1="52" y1="650" x2="78" y2="650"/>
+    <line x1="52" y1="800" x2="78" y2="800"/>
+    <line x1="900" y1="555" x2="1200" y2="555"/>
+    <line x1="900" y1="542" x2="900" y2="568"/>
+    <line x1="1200" y1="542" x2="1200" y2="568"/>
+    <line x1="1240" y1="180" x2="1240" y2="520"/>
+    <line x1="1227" y1="180" x2="1253" y2="180"/>
+    <line x1="1227" y1="520" x2="1253" y2="520"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#111827">
+    <text x="285" y="125" fill="#2563eb" font-weight="700">100</text>
+    <text x="15" y="360" fill="#2563eb" font-weight="700">68</text>
+    <text x="645" y="340" fill="#2563eb" font-weight="700">60 ABOVE BASE</text>
+    <text x="625" y="510" fill="#2563eb" font-weight="700">8 BASE</text>
+    <text x="170" y="270">2X Ø10 THRU</text>
+    <text x="165" y="355">CENTERS: X 25, 75</text>
+    <text x="165" y="385">Z 35 ABOVE BASE TOP</text>
+    <text x="270" y="625" font-size="25" font-weight="700">TOP VIEW</text>
+    <text x="285" y="870" fill="#2563eb" font-weight="700">100</text>
+    <text x="15" y="735" fill="#2563eb" font-weight="700">60</text>
+    <text x="210" y="745">2X Ø7 THRU</text>
+    <text x="210" y="770">CENTERS: X 20, 80; Y 20</text>
+    <text x="260" y="555" font-size="25" font-weight="700">FRONT VIEW</text>
+    <text x="980" y="145" font-size="25" font-weight="700">RIGHT VIEW</text>
+    <text x="1030" y="590" fill="#2563eb" font-weight="700">60</text>
+    <text x="1260" y="360" fill="#2563eb" font-weight="700">68</text>
+    <text x="975" y="430">INSIDE FILLET R6</text>
+    <text x="915" y="620">UPRIGHT THICKNESS 8</text>
+    <text x="915" y="650">OUTSIDE CHAMFER C1.5</text>
+    <text x="915" y="690">MATERIAL: ABS PLASTIC</text>
+    <text x="915" y="720">APPEARANCE: ORANGE</text>
+    <text x="915" y="750">RGB 240, 100, 20</text>
+  </g>
+</svg>

@@ -7,12 +7,12 @@
     {
       "path": "evaluation/fusion/v1/corpus.json",
       "version": "fusion-tracers-v1",
-      "sha256": "99e127e860672b4e42443a8de94abf8762cd919f8215b1fa165d49aec7f8347a"
+      "sha256": "75d5cff04299bb03526866c839b5ae971cc3df8f33ff65015eb03c0d2e30d18f"
     },
     {
       "path": "evaluation/fusion/v1/foundational.json",
       "version": "fusion-foundational-v1",
-      "sha256": "b33f365017becf4049bee327d16592a2bbd147c7dbf4b152bd928c48267e6093"
+      "sha256": "4e4fa83e324d33b5b5174381832b92bf66012d39c0bc459be84a128abda36369"
     },
     {
       "path": "evaluation/fusion/v1/multimodal-manual.json",

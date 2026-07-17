@@ -11,7 +11,7 @@
         { "kind": "text", "text": "FUS-TEXT-001: Create a single-solid 120 by 80 by 12 mm CNC mounting plate with four native 8.5 mm through holes 12 mm from adjacent edges, a centered native 40 mm pocket 4 mm deep, 4 mm vertical-corner fillets, 1.5 mm outer-perimeter chamfers, Aluminum 6061 engineering material, and a separate blue anodized RGB 30/90/180 appearance. Keep every dimension and feature editable in Fusion history." }
       ],
       "assets": [
-        { "id": "fixture-contract", "path": ".scratch/fusion-connector/fixtures/FUS-TEXT-001.md", "mimeType": "text/markdown", "sha256": "7355802851f86d9115d90cbbdd2388ea5103f40669200c6e524664dd4656b3f0" }
+        { "id": "fixture-contract", "path": "evaluation/fusion/v1/fixtures/FUS-TEXT-001.md", "mimeType": "text/markdown", "sha256": "7355802851f86d9115d90cbbdd2388ea5103f40669200c6e524664dd4656b3f0" }
       ],
       "documentSetup": { "kind": "fresh-parametric-part", "designHistory": true, "units": "mm", "setupVersion": "fusion-empty-part-v1" },
       "expectedOutcome": "completed",
@@ -32,8 +32,8 @@
         { "kind": "image", "assetId": "drawing" }
       ],
       "assets": [
-        { "id": "fixture-contract", "path": ".scratch/fusion-connector/fixtures/FUS-IMAGE-001.md", "mimeType": "text/markdown", "sha256": "050def73d4ac6365d4d758e9f58e3a9079fcf23e09f89e2d1ef8898b54c8cb15" },
-        { "id": "drawing", "path": ".scratch/fusion-connector/fixtures/FUS-IMAGE-001-reference.png", "mimeType": "image/png", "sha256": "80bc33c78bcd890486f7b48ed1845491422384d6445428a9575e74f6ec4ab86c" }
+        { "id": "fixture-contract", "path": "evaluation/fusion/v1/fixtures/FUS-IMAGE-001.md", "mimeType": "text/markdown", "sha256": "050def73d4ac6365d4d758e9f58e3a9079fcf23e09f89e2d1ef8898b54c8cb15" },
+        { "id": "drawing", "path": "evaluation/fusion/v1/fixtures/FUS-IMAGE-001-reference.png", "mimeType": "image/png", "sha256": "80bc33c78bcd890486f7b48ed1845491422384d6445428a9575e74f6ec4ab86c" }
       ],
       "documentSetup": { "kind": "fresh-parametric-part", "designHistory": true, "units": "mm", "setupVersion": "fusion-empty-part-v1" },
       "expectedOutcome": "completed",
@@ -53,7 +53,7 @@
         { "kind": "text", "text": "FUS-TEXT-002: Create the single-solid parametric industrial conveyor bearing support housing exactly as specified: a centered 180 x 110 x 16 mm base; a 24 mm thick, 110 mm wide upright with a semicircular R55 crown and bearing axis at X0/Z76; a named 52 mm nominal through bearing seat; a one-sided 62 x 5 mm retaining recess from datum B; four 11 mm through holes with 18 x 8 mm top counterbores at X +/-70 and Y +/-35; four 12 mm triangular gussets rising 45 mm; and a vertical native M6 x 1 threaded grease passage into the seat. Preserve named datum A/B/C construction planes, native structural fillets and all specified chamfers, one connected body, EN-GJS-500-7 ductile iron (or recorded canonical equivalent), and separate RGB 65/72/78 machine-gray appearance." }
       ],
       "assets": [
-        { "id": "fixture-contract", "path": ".scratch/fusion-connector/fixtures/FUS-TEXT-002.md", "mimeType": "text/markdown", "sha256": "e8dda0e5100755996efcb7ec02c788d159bb8ff001094c77c786afa28a0615b9" }
+        { "id": "fixture-contract", "path": "evaluation/fusion/v1/fixtures/FUS-TEXT-002.md", "mimeType": "text/markdown", "sha256": "e8dda0e5100755996efcb7ec02c788d159bb8ff001094c77c786afa28a0615b9" }
       ],
       "documentSetup": { "kind": "fresh-parametric-part", "designHistory": true, "units": "mm", "setupVersion": "fusion-empty-part-v1" },
       "expectedOutcome": "completed",

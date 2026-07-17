@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { FUS_IMAGE_001 } from "@chamfer/fusion-fixtures";
 import { clearConversations } from "./helpers";
 
-const REFERENCE = readFileSync(".scratch/fusion-connector/fixtures/FUS-IMAGE-001-reference.png");
+const REFERENCE = readFileSync("evaluation/fusion/v1/fixtures/FUS-IMAGE-001-reference.png");
 const FUSION_FAKE = `http://127.0.0.1:${process.env.FUSION_FAKE_PORT ?? "8997"}`;
 
 async function startFusionFixture(page: import("@playwright/test").Page): Promise<{ id: string }> {

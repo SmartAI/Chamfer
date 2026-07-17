@@ -92,7 +92,7 @@ describe("Fusion evaluation contract", () => {
         { kind: "manual-edit", operation: "set-parameter", fixture: "width=35 mm" },
         { kind: "ownership-transfer", fixture: "transfer from fixture owner" },
       ],
-      assets: [{ id: "drawing", path: ".scratch/fusion-connector/fixtures/FUS-IMAGE-001-reference.png", mimeType: "image/png", sha256: "9".repeat(64) }],
+      assets: [{ id: "drawing", path: "evaluation/fusion/v1/fixtures/FUS-IMAGE-001-reference.png", mimeType: "image/png", sha256: "9".repeat(64) }],
       expectedOutcome: "escalated",
     });
     expect(parsed.inputs.map((input) => input.kind)).toEqual(["text", "image", "turn", "manual-edit", "ownership-transfer"]);
@@ -193,7 +193,7 @@ describe("Fusion evaluation contract", () => {
     const cases = ["FUS-TEXT-001", "FUS-IMAGE-001", "FUS-TEXT-002"].map((id, index) => ({
       ...evaluationCase, id, version: 1, title: id,
       inputs: index === 1 ? [{ kind: "text" as const, text: "Use the drawing." }, { kind: "image" as const, assetId: "drawing" }] : evaluationCase.inputs,
-      assets: index === 1 ? [{ id: "drawing", path: ".scratch/fusion-connector/fixtures/FUS-IMAGE-001-reference.png", mimeType: "image/png" as const, sha256: "9".repeat(64) }] : [],
+      assets: index === 1 ? [{ id: "drawing", path: "evaluation/fusion/v1/fixtures/FUS-IMAGE-001-reference.png", mimeType: "image/png" as const, sha256: "9".repeat(64) }] : [],
       deterministicChecks: [{ evaluator: "fusion-typed-effects" as const, version: "1", fixtureId: id }],
     }));
     expect(validateFusionEvaluationCorpus({ schemaVersion: 1, version: "fusion-tracers-v1", cases }).cases).toHaveLength(3);
