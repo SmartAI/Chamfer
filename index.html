@@ -41,7 +41,14 @@
   .sub { color: var(--muted); font-size: 20px; max-width: 700px; margin: 0 auto; }
   .cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
   .btn { display: inline-block; padding: 11px 20px; border-radius: 8px; font-weight: 600; font-size: 15px; }
-  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary { background: var(--accent); color: #fff; padding: 14px 28px; font-size: 17px; }
+  .try-cmd { margin-top: 18px; display: inline-flex; align-items: center; gap: 10px;
+             background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .try-cmd code { background: none; border: 0; padding: 0; font-size: 16px; }
+  .try-cmd code::before { content: "$ "; color: var(--muted); }
+  .try-cmd button { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 6px;
+                    padding: 4px 10px; font-size: 12px; font-family: var(--sans); cursor: pointer; }
+  .try-cmd button:hover { color: var(--ink); }
   .btn.ghost { border: 1px solid var(--line); color: var(--ink); background: var(--panel); }
   .btn:hover { text-decoration: none; opacity: .92; }
   section { padding: 32px 0; border-top: 1px solid var(--line); }
@@ -74,8 +81,12 @@
     <p class="tagline">Describe it. Watch it take shape.</p>
     <p class="sub">Start with text or reference images. Chamfer plans complex builds, retrieves the modeling knowledge it needs, executes build123d locally in your browser, and verifies geometry and visual fidelity before it finishes. Fine-tune dimensions with sliders, then export for printing or manufacturing. Prompts and attached images are sent to the model provider you configure; CAD execution, geometry, conversations, and settings stay local.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/SmartAI/Chamfer">View on GitHub</a>
-      <a class="btn ghost" href="#quick-start">Quick start</a>
+      <a class="btn primary" href="#quick-start">Try it now</a>
+      <a class="btn ghost" href="https://github.com/SmartAI/Chamfer">View on GitHub</a>
+    </div>
+    <div class="try-cmd">
+      <code id="try-cmd-text">npx chamfer</code>
+      <button type="button" id="try-cmd-copy" aria-label="Copy npx chamfer to clipboard">Copy</button>
     </div>
   </header>
 
@@ -156,7 +167,17 @@
   <footer>
     <p><a href="https://github.com/SmartAI/Chamfer">github.com/SmartAI/Chamfer</a> · Apache-2.0</p>
     <p>Geometry never leaves your machine.</p>
+    <p>&copy; 2026 <a href="https://maxmliu.com/">Min Liu</a> · <a href="https://www.linkedin.com/in/smartailm/">LinkedIn</a> · <a href="https://github.com/SmartAI">GitHub</a></p>
   </footer>
 </div>
+<script>
+  document.getElementById('try-cmd-copy').addEventListener('click', function () {
+    var btn = this;
+    navigator.clipboard.writeText('npx chamfer').then(function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    });
+  });
+</script>
 </body>
 </html>
