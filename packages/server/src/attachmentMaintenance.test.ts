@@ -30,7 +30,7 @@ async function addAttachment(app: ReturnType<typeof createApp>, title: string, a
   const conversation = await (await app.request("/api/conversations", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, cadEnvironment: "build123d" }),
   })).json() as ConversationDto;
   const message = await (await app.request(`/api/conversations/${conversation.id}/messages`, {
     method: "POST",

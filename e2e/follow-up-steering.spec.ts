@@ -1,13 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 test("a follow-up steers the active agent run before it completes", async ({ page }) => {
   await page.goto("/");
-  const [newChatResponse] = await Promise.all([
-    page.waitForResponse((response) =>
-      response.request().method() === "POST" && new URL(response.url()).pathname === "/api/conversations",
-    ),
-    page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click(),
-  ]);
+  const newChatResponse = await startBuild123dConversation(page);
   expect(newChatResponse.ok()).toBe(true);
   const { id: conversationId } = await newChatResponse.json() as { id: string };
 

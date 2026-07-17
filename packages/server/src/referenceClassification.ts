@@ -8,6 +8,7 @@ import type {
 } from "@chamfer/shared";
 import { AttachmentStore } from "./attachmentStore";
 import { getAttachment } from "./conversationStore";
+import { listSourceSpecifications } from "./sourceSpecifications";
 
 interface ReferenceRow {
   reference_id: string;
@@ -18,6 +19,8 @@ interface ReferenceRow {
   relationships_json: string | null;
   rationale: string | null;
   specification_links_json: string | null;
+  specification_ids_json: string | null;
+  legacy_specification_links_json: string | null;
   no_specification_reason: string | null;
   actor: string | null;
   created_at: number | null;
@@ -48,6 +51,8 @@ function toClassification(row: ReferenceRow): ReferenceClassificationDto | undef
   if (!row.classification_id || !row.status || !row.purpose || !row.rationale || !row.actor || row.created_at === null) {
     return undefined;
   }
+  const specificationIds = parseJsonArray<string>(row.specification_ids_json ?? row.specification_links_json);
+  const legacySpecificationLinks = parseJsonArray<string>(row.legacy_specification_links_json);
   return {
     id: row.classification_id,
     conversationId: row.conversation_id,
@@ -56,7 +61,9 @@ function toClassification(row: ReferenceRow): ReferenceClassificationDto | undef
     purpose: row.purpose,
     relationships: parseJsonArray<ReferenceRelationship>(row.relationships_json),
     rationale: row.rationale,
-    specificationLinks: parseJsonArray<string>(row.specification_links_json),
+    specificationIds,
+    specificationLinks: specificationIds,
+    ...(legacySpecificationLinks.length > 0 ? { legacySpecificationLinks } : {}),
     ...(row.no_specification_reason ? { noSpecificationReason: row.no_specification_reason } : {}),
     actor: row.actor as "agent",
     timestamp: row.created_at,
@@ -66,7 +73,8 @@ function toClassification(row: ReferenceRow): ReferenceClassificationDto | undef
 function historyFor(db: DatabaseSync, conversationId: string, referenceId: string): ReferenceClassificationDto[] {
   const rows = db.prepare(`
     SELECT reference_id, conversation_id, id AS classification_id, status, purpose,
-      relationships_json, rationale, specification_links_json, no_specification_reason,
+      relationships_json, rationale, specification_links_json, specification_ids_json,
+      legacy_specification_links_json, no_specification_reason,
       actor, created_at
     FROM reference_classifications
     WHERE conversation_id = ? AND reference_id = ?
@@ -82,7 +90,8 @@ export function listReferenceRecords(db: DatabaseSync, conversationId: string): 
   const rows = db.prepare(`
     SELECT a.id AS reference_id, m.conversation_id,
       rc.id AS classification_id, rc.status, rc.purpose, rc.relationships_json,
-      rc.rationale, rc.specification_links_json, rc.no_specification_reason,
+      rc.rationale, rc.specification_links_json, rc.specification_ids_json,
+      rc.legacy_specification_links_json, rc.no_specification_reason,
       rc.actor, rc.created_at
     FROM attachments a
     JOIN messages m ON m.id = a.message_id
@@ -104,7 +113,9 @@ export function listReferenceRecords(db: DatabaseSync, conversationId: string): 
       purpose: current?.purpose,
       relationships: current?.relationships ?? [],
       rationale: current?.rationale,
+      specificationIds: current?.specificationIds ?? [],
       specificationLinks: current?.specificationLinks ?? [],
+      legacySpecificationLinks: current?.legacySpecificationLinks,
       noSpecificationReason: current?.noSpecificationReason,
       actor: current?.actor,
       timestamp: current?.timestamp,
@@ -134,6 +145,9 @@ export async function listReferenceRecordsWithAvailability(
 }
 
 function validateInput(input: ClassifyReferenceInput): void {
+  if (!input || typeof input !== "object") {
+    throw new ReferenceClassificationError("reference classification is required");
+  }
   if (!STATUSES.has(input.status)) throw new ReferenceClassificationError("invalid reference status");
   if (!nonEmpty(input.purpose)) throw new ReferenceClassificationError("purpose is required");
   if (!nonEmpty(input.rationale)) throw new ReferenceClassificationError("rationale is required");
@@ -143,13 +157,23 @@ function validateInput(input: ClassifyReferenceInput): void {
     !RELATIONSHIP_TYPES.has(relationship.type) || !nonEmpty(relationship.referenceId))) {
     throw new ReferenceClassificationError("invalid reference relationship");
   }
-  if (!Array.isArray(input.specificationLinks)) {
-    throw new ReferenceClassificationError("specificationLinks must be an array");
+  if (input.specificationIds !== undefined && input.specificationLinks !== undefined) {
+    throw new ReferenceClassificationError("provide specificationIds, not both specificationIds and legacy specificationLinks");
   }
-  const links = input.specificationLinks.filter(nonEmpty);
+  const provided = input.specificationIds ?? input.specificationLinks;
+  if (!Array.isArray(provided)) {
+    throw new ReferenceClassificationError("specificationIds must be an array");
+  }
+  if (provided.some((id) => !nonEmpty(id))) {
+    throw new ReferenceClassificationError("specificationIds must contain non-empty identities");
+  }
+  const links = provided.filter(nonEmpty);
+  if (new Set(links.map((link) => link.trim())).size !== links.length) {
+    throw new ReferenceClassificationError("specificationIds must be unique");
+  }
   const reason = input.noSpecificationReason?.trim();
   if ((links.length === 0) === !reason) {
-    throw new ReferenceClassificationError("provide specificationLinks or noSpecificationReason, but not both");
+    throw new ReferenceClassificationError("provide specificationIds or noSpecificationReason, but not both");
   }
   const supersededBy = input.relationships.filter((relationship) => relationship.type === "superseded-by");
   if (input.status === "superseded" && supersededBy.length === 0) {
@@ -157,6 +181,35 @@ function validateInput(input: ClassifyReferenceInput): void {
   }
   if (input.status !== "superseded" && supersededBy.length > 0) {
     throw new ReferenceClassificationError("only superseded references may use superseded-by relationships");
+  }
+}
+
+/** Links prefixed `plan.spec_sheet.` name rows of the accepted design plan's
+ * spec sheet rather than durable source specifications. Fusion image flows use
+ * them (the Fusion environment records requirements in the plan spec sheet and
+ * exposes no source-specification tool), and the plan validator - not this
+ * store - owns spec-sheet row identity. */
+const PLAN_SPEC_SHEET_LINK_PREFIX = "plan.spec_sheet.";
+
+function assertSpecificationOwnership(
+  db: DatabaseSync,
+  conversationId: string,
+  linkedIds: readonly string[],
+): void {
+  const specificationIds = linkedIds.filter((id) => !id.startsWith(PLAN_SPEC_SHEET_LINK_PREFIX));
+  const specifications = new Map(listSourceSpecifications(db, conversationId)
+    .map((specification) => [specification.id, specification]));
+  for (const specificationId of specificationIds) {
+    const specification = specifications.get(specificationId);
+    if (!specification) {
+      const foreign = db.prepare("SELECT 1 FROM source_specifications WHERE id = ? LIMIT 1").get(specificationId);
+      throw new ReferenceClassificationError(foreign
+        ? `specification ${specificationId} does not belong to this conversation`
+        : `specification ${specificationId} does not exist`);
+    }
+    if (specification.status !== "active") {
+      throw new ReferenceClassificationError(`specification ${specificationId} is superseded`);
+    }
   }
 }
 
@@ -205,16 +258,24 @@ export function classifyReference(
   idempotencyKey?: string,
 ): ReferenceClassificationDto {
   validateInput(input);
+  const submittedIds = input.specificationIds ?? input.specificationLinks ?? [];
+  const specificationIds = submittedIds.map((link) => link.trim()).filter(nonEmpty);
+  const legacySpecificationLinks = input.specificationIds === undefined && input.specificationLinks !== undefined
+    ? specificationIds
+    : undefined;
   const normalized = {
     ...input,
     purpose: input.purpose.trim(),
     rationale: input.rationale.trim(),
-    specificationLinks: input.specificationLinks.map((link) => link.trim()).filter(nonEmpty),
+    specificationIds,
+    specificationLinks: specificationIds,
+    ...(legacySpecificationLinks ? { legacySpecificationLinks } : {}),
     ...(input.noSpecificationReason ? { noSpecificationReason: input.noSpecificationReason.trim() } : {}),
   };
   if (idempotencyKey) {
     const row = db.prepare(`SELECT reference_id, conversation_id, id AS classification_id, status, purpose,
-      relationships_json, rationale, specification_links_json, no_specification_reason, actor, created_at
+      relationships_json, rationale, specification_links_json, specification_ids_json,
+      legacy_specification_links_json, no_specification_reason, actor, created_at
       FROM reference_classifications WHERE id = ?`).get(idempotencyKey) as unknown as ReferenceRow | undefined;
     if (row) {
       const existing = toClassification(row)!;
@@ -222,13 +283,15 @@ export function classifyReference(
         existing.status === normalized.status && existing.purpose === normalized.purpose &&
         JSON.stringify(existing.relationships) === JSON.stringify(normalized.relationships) &&
         existing.rationale === normalized.rationale &&
-        JSON.stringify(existing.specificationLinks) === JSON.stringify(normalized.specificationLinks) &&
+        JSON.stringify(existing.specificationIds) === JSON.stringify(normalized.specificationIds) &&
+        JSON.stringify(existing.legacySpecificationLinks) === JSON.stringify(normalized.legacySpecificationLinks) &&
         (existing.noSpecificationReason ?? undefined) === (normalized.noSpecificationReason ?? undefined);
       if (exact) return existing;
       throw new ReferenceClassificationError("idempotency key conflicts with an existing classification", "conflict");
     }
   }
   assertOwnership(db, conversationId, input.referenceId);
+  assertSpecificationOwnership(db, conversationId, specificationIds);
   for (const relationship of input.relationships) {
     if (relationship.referenceId === input.referenceId) {
       throw new ReferenceClassificationError("a reference cannot relate to itself");
@@ -246,8 +309,9 @@ export function classifyReference(
   db.prepare(`
     INSERT INTO reference_classifications
       (id, conversation_id, reference_id, status, purpose, relationships_json,
-       rationale, specification_links_json, no_specification_reason, actor, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       rationale, specification_links_json, specification_ids_json,
+       legacy_specification_links_json, no_specification_reason, actor, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     classification.id,
     conversationId,
@@ -256,7 +320,9 @@ export function classifyReference(
     classification.purpose,
     JSON.stringify(classification.relationships),
     classification.rationale,
-    JSON.stringify(classification.specificationLinks),
+    JSON.stringify(classification.legacySpecificationLinks ?? []),
+    JSON.stringify(classification.specificationIds),
+    classification.legacySpecificationLinks ? JSON.stringify(classification.legacySpecificationLinks) : null,
     classification.noSpecificationReason ?? null,
     classification.actor,
     classification.timestamp,

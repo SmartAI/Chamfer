@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SettingsDto, SettingsPatchDto, SettingsSources } from "@chamfer/shared";
 import { envSettings } from "./envConfig";
+import { validateFusionMcpEndpoint } from "./fusion/mcpClient";
 
 const SETTINGS_KEYS = [
   "anthropicApiKey",
@@ -12,6 +13,7 @@ const SETTINGS_KEYS = [
   "modelJson",
   "maxCadRuns",
   "showCadCode",
+  "fusionMcpEndpoint",
 ] as const;
 
 type SettingsKey = (typeof SETTINGS_KEYS)[number];
@@ -78,6 +80,7 @@ export function writeSettings(db: DatabaseSync, patch: SettingsPatchDto): void {
       continue;
     }
     if (value.startsWith("***")) continue;
+    if (key === "fusionMcpEndpoint") validateFusionMcpEndpoint(value);
     upsert.run(key, value);
   }
 }

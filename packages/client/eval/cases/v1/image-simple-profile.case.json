@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "image.simple-profile",
+  "version": 1,
+  "title": "Simple profile from a synthetic reference",
+  "purpose": "Measure reference classification, visual planning, and final evidence for a simple reference-led part.",
+  "capability": "single-reference-visual-profile",
+  "modality": "image",
+  "complexity": "smoke",
+  "complexityRationale": "One synthetic view defines a symmetric prismatic profile with one central opening and a supplied overall scale.",
+  "categories": ["image", "visual-reference", "construction"],
+  "gatingStatus": "release",
+  "capabilityStatus": "supported",
+  "inputs": {
+    "turns": [{
+      "role": "user",
+      "text": "Build the flat profile shown in this synthetic reference. Use an overall width of 40 mm, preserve its proportions, and make it 5 mm thick.",
+      "assetIds": ["profile-reference"]
+    }],
+    "assets": [{
+      "id": "profile-reference",
+      "path": "assets/simple-profile.png",
+      "mimeType": "image/png",
+      "sha256": "75e40a44f00683f0f655b538c4a04e87f28e279ef94a0a378f1ffd40c9d4ba39",
+      "provenance": "synthetic",
+      "expectedRole": "visual-reference",
+      "provenanceNotes": "Authored as SVG geometry solely for this public evaluation case."
+    }]
+  },
+  "expectedOutcome": {
+    "kind": "completed",
+    "requirements": [
+      {
+        "id": "thickness",
+        "description": "The current part is 5 mm thick.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "bbox-axis" }
+      },
+      {
+        "id": "visual-evidence",
+        "description": "Current visual verification covers the active reference and current artifact.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "visual-verification" }
+      },
+      {
+        "id": "profile-intent",
+        "description": "The outer profile, center opening, and paired side recesses preserve the reference form.",
+        "evaluation": { "kind": "semantic", "rubricId": "visual-form" }
+      }
+    ]
+  },
+  "requiredEvidence": [
+    { "id": "verification-gate", "kind": "verification-gate", "evaluatorId": "verification-gate" },
+    { "id": "thickness", "kind": "geometry-measurement", "evaluatorId": "bbox-axis" },
+    { "id": "plan", "kind": "plan-check", "evaluatorId": "plan-conformance" },
+    { "id": "visual-evidence", "kind": "visual-verification", "evaluatorId": "visual-verification" }
+  ],
+  "forbiddenOutcomes": [
+    { "kind": "stale-evidence-success", "reason": "Visual evidence must identify the current artifact and active reference." },
+    { "kind": "false-success", "reason": "A gate pass alone does not prove visual-form intent." }
+  ],
+  "evaluatorRefs": [
+    { "id": "verification-gate", "version": 1, "required": true, "config": {} },
+    { "id": "bbox-axis", "version": 1, "required": true, "config": { "expectedMm": 5, "toleranceMm": 0.5, "axis": "smallest" } },
+    { "id": "plan-conformance", "version": 1, "required": true, "config": { "minimumSpecRows": 1 } },
+    { "id": "visual-verification", "version": 1, "required": true, "config": { "minimumReferences": 1 } }
+  ],
+  "rubricRefs": [{ "id": "visual-form", "version": 1, "required": true }],
+  "sourceSafety": {
+    "classification": "synthetic",
+    "containsProductionData": false,
+    "notes": "The SVG is synthetic and contains no external or user-derived image material."
+  }
+}

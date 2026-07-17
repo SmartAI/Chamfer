@@ -16,7 +16,7 @@ test("verifies a large active set across bounded deterministic requests", async 
     },
   });
   const conversation = await (await page.request.post("/api/conversations", {
-    data: { title: "Batched visual verification" },
+    data: { title: "Batched visual verification", cadEnvironment: "build123d" },
   })).json() as { id: string };
   const referenceIds = ["batch-ref-e", "batch-ref-a", "batch-ref-d", "batch-ref-b", "batch-ref-c"];
   for (const [index, referenceId] of referenceIds.entries()) {
@@ -47,9 +47,34 @@ test("verifies a large active set across bounded deterministic requests", async 
         purpose: `Visible form reference ${referenceId}`,
         relationships: [],
         rationale: "Defines visible proportions.",
-        specificationLinks: [`visual.${referenceId}`],
+        specificationIds: [],
+        noSpecificationReason: "This fixture provides qualitative form guidance without a calibrated dimension.",
       },
     });
+    const registration = await page.request.post(`/api/conversations/${conversation.id}/reference-registrations`, {
+      headers: { "Idempotency-Key": `batch-registration-${referenceId}` },
+      data: {
+        referenceId,
+        sourceRegion: { x: 0, y: 0, width: 1, height: 1 },
+        projection: "perspective",
+        visibleLandmarks: [{ id: "center", label: "Visible reference center", position: { x: 0.5, y: 0.5 } }],
+        uncertainty: {
+          level: "medium",
+          notes: "Synthetic qualitative fixture without a physical scale.",
+          occluded: false,
+        },
+        geometry: {
+          sourceSizePx: { width: 512, height: 512 },
+          regionPx: { x: 0, y: 0, width: 512, height: 512 },
+          extraction: {
+            status: "failed",
+            reason: "This test exercises semantic batching, not physical shape extraction.",
+            extractor: { id: "opencv-js-contour", version: 1 },
+          },
+        },
+      },
+    });
+    expect(registration.ok()).toBe(true);
   }
 
   await page.goto("/");

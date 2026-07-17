@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { langfuseConfig, langfuseSessionId, observeLlm, usageAttributes } from "./observability";
+import { describe, expect, it, vi } from "vitest";
+import {
+  AgentRunTraceManager,
+  langfuseConfig,
+  langfuseSessionId,
+  maskLangfuseData,
+  observeLlm,
+  summarizeGenerationInput,
+  summarizeGenerationOutput,
+  shutdownObservability,
+  usageAttributes,
+  type TraceObservation,
+} from "./observability";
+import type { AgentRunLifecycleDto, AgentRunLifecycleEvent } from "@chamfer/shared";
 import type { LlmStreamer, PiEvent } from "./llm";
 
 const usage = {
@@ -91,6 +103,126 @@ describe("observeLlm", () => {
     const options = { apiKey: "sk-secret" };
     await collect(observeLlm(recording, "chat-response").stream(model, context, options));
     expect(seen).toEqual([model, context, options]);
+  });
+});
+
+describe("privacy-safe generation summaries", () => {
+  it("records structure without prompt text, image bytes, CAD code, or model output", () => {
+    const secret = "sk-secret-value";
+    const input = summarizeGenerationInput({
+      messages: [
+        { role: "user", content: [{ type: "text", text: `private ${secret}` }, { type: "image", data: "base64-private", mimeType: "image/png" }] },
+        { role: "toolResult", content: [{ type: "text", text: "/Users/private/design.step" }] },
+      ],
+    });
+    const output = summarizeGenerationOutput([
+      { type: "thinking", thinking: "private reasoning" },
+      { type: "text", text: "private answer" },
+      { type: "toolCall", name: "run_build123d", arguments: { code: "private CAD code" } },
+    ]);
+    expect(input).toEqual({ messageCount: 2, roles: { user: 1, assistant: 0, toolResult: 1, system: 0, other: 0 }, textCharacters: 49, imageCount: 1, toolCallCount: 0 });
+    expect(output).toEqual({ blockCount: 3, textCharacters: 31, imageCount: 0, toolCallCount: 1, toolNames: ["run_build123d"] });
+    expect(JSON.stringify({ input, output })).not.toMatch(/sk-secret|base64-private|Users|private answer|private CAD/);
+  });
+
+  it("masks credential-shaped values and local user paths before export", () => {
+    const masked = maskLangfuseData({
+      data: '{"authorization":"Bearer abc.def.secret","apiKey":"sk-1234567890","path":"/Users/bob/private.step","home":"/home/alice/x"}',
+    });
+    expect(masked).not.toMatch(/abc\.def\.secret|sk-1234567890|\/Users\/bob|\/home\/alice/);
+    expect(masked).toContain("[REDACTED]");
+  });
+});
+
+describe("complete agent-run trace hierarchy", () => {
+  it("parents a model generation and tool observation beneath the stable agent run", () => {
+    const recorded: Array<{ name: string; parent?: string; ended?: boolean }> = [];
+    const observation = (name: string, parent?: string): TraceObservation => {
+      const item = { name, parent, ended: false };
+      recorded.push(item);
+      return {
+        update() {},
+        end() { item.ended = true; },
+        startObservation(childName) { return observation(childName, name); },
+      };
+    };
+    const manager = new AgentRunTraceManager((name) => observation(name));
+    const run: AgentRunLifecycleDto = {
+      version: 1,
+      id: "run-1",
+      conversationId: "conversation-1",
+      status: "running",
+      startedAt: 1_000,
+      release: "v0.2.2",
+      agentConfiguration: { identityHash: "a".repeat(64), provider: "openai", model: "gpt-5", skillMode: "catalog" },
+      lastSeq: 0,
+      counters: { modelCalls: 0, toolCalls: 0, cadRuns: 0, retries: 0, compactions: 0, persistenceFailures: 0, searches: 0, skillLoads: 0 },
+      durations: { modelMs: 0, toolMs: 0, cadMs: 0, compactionMs: 0, persistenceMs: 0, retryDelayMs: 0 },
+    };
+    const event = (value: Record<string, unknown>, seq: number, timestamp: number) =>
+      ({ version: 1, runId: run.id, seq, timestamp, ...value }) as AgentRunLifecycleEvent;
+    manager.record(run, event({ type: "run.started", agentConfiguration: run.agentConfiguration }, 0, 1_000));
+    manager.record(run, event({ type: "turn.started", operationId: "turn-1" }, 1, 1_010));
+    const generation = manager.startGeneration(run.conversationId, "chat-response", {});
+    generation.end();
+    manager.record(run, event({ type: "tool.started", operationId: "tool-1", name: "run_build123d" }, 2, 1_020));
+    manager.record(run, event({ type: "tool.completed", operationId: "tool-1", outcome: "ok", durationMs: 20 }, 3, 1_040));
+    manager.record({ ...run, status: "completed", outcome: "completed" }, event({ type: "run.completed", outcome: "completed", durationMs: 50 }, 4, 1_050));
+
+    expect(recorded.map(({ name, parent }) => [name, parent])).toEqual([
+      ["chamfer-agent-run", undefined],
+      ["agent-turn", "chamfer-agent-run"],
+      ["chat-response", "agent-turn"],
+      ["cad-execution", "chamfer-agent-run"],
+    ]);
+    expect(recorded.filter((item) => item.ended).map((item) => item.name)).toEqual([
+      "chamfer-agent-run",
+      "agent-turn",
+      "chat-response",
+      "cad-execution",
+    ]);
+  });
+
+  it("ends and evicts an abandoned browser run after a bounded idle TTL", async () => {
+    vi.useFakeTimers();
+    const roots: Array<{ ended: boolean }> = [];
+    const manager = new AgentRunTraceManager(() => {
+      const root = { ended: false };
+      roots.push(root);
+      const observation: TraceObservation = {
+        update() {},
+        end() { root.ended = true; },
+        startObservation() { return observation; },
+      };
+      return observation;
+    }, { abandonedRunTtlMs: 25, maxActiveRuns: 2 });
+    const run: AgentRunLifecycleDto = {
+      version: 1,
+      id: "abandoned-run",
+      conversationId: "conversation-1",
+      status: "running",
+      startedAt: 1_000,
+      release: "test",
+      agentConfiguration: { identityHash: "a".repeat(64), provider: "openai", model: "gpt-5", skillMode: "catalog" },
+      lastSeq: 0,
+      counters: { modelCalls: 0, toolCalls: 0, cadRuns: 0, retries: 0, compactions: 0, persistenceFailures: 0, searches: 0, skillLoads: 0 },
+      durations: { modelMs: 0, toolMs: 0, cadMs: 0, compactionMs: 0, persistenceMs: 0, retryDelayMs: 0 },
+    };
+    manager.record(run, { version: 1, runId: run.id, seq: 0, timestamp: 1_000, type: "run.started", agentConfiguration: run.agentConfiguration });
+    expect(roots[0]?.ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(roots[0]?.ended).toBe(true);
+    vi.useRealTimers();
+  });
+});
+
+describe("bounded observability shutdown", () => {
+  it("settles at the deadline when the exporter never responds", async () => {
+    vi.useFakeTimers();
+    const result = shutdownObservability({ shutdown: () => new Promise(() => {}) }, 25);
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(result).resolves.toBe("timeout");
+    vi.useRealTimers();
   });
 });
 

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -7,7 +8,7 @@ const PNG_1X1 = Buffer.from(
 
 test("uploaded image persists as a reference and renders unchanged after reload", async ({ page }, testInfo) => {
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();
   await composer.fill("attachment-replay: remember this reference image");

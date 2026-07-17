@@ -52,4 +52,18 @@ describe("skill registry", () => {
   it("counts prose without charging for code blocks", () => {
     expect(proseWordCount("one two\n```python\nthree four five six\n```\nseven")).toBe(3);
   });
+
+  it("keeps shared CAD methods reusable and environment API examples isolated", () => {
+    const localCatalog = skillCatalog("build123d");
+    const fusionCatalog = skillCatalog("fusion");
+
+    expect(localCatalog).toContain("design-intent");
+    expect(fusionCatalog).toContain("design-intent");
+    expect(localCatalog).toContain("sweep-and-loft");
+    expect(localCatalog).not.toContain("fusion-parametric-features");
+    expect(fusionCatalog).toContain("fusion-parametric-features");
+    expect(fusionCatalog).not.toContain("sweep-and-loft");
+    expect(findSkill("fusion-parametric-features", "build123d")).toBeUndefined();
+    expect(findSkill("sweep-and-loft", "fusion")).toBeUndefined();
+  });
 });

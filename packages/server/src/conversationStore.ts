@@ -1,12 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { AttachmentDto, ConversationDto, Gate, MessageDto } from "@chamfer/shared";
+import type { AttachmentDto, CadEnvironment, ConversationDto, Gate, MessageDto } from "@chamfer/shared";
 
 interface ConversationRow {
   id: string;
   title: string;
+  cad_environment: CadEnvironment;
   created_at: number;
   updated_at: number;
   last_gate_status: string | null;
+  source_specifications_required: number;
 }
 
 const GATE_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "error"]);
@@ -49,8 +51,10 @@ function toConversationDto(row: ConversationRow): ConversationDto {
   return {
     id: row.id,
     title: row.title,
+    cadEnvironment: row.cad_environment,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    sourceSpecificationsRequired: row.source_specifications_required === 1,
     ...(row.last_gate_status && GATE_STATUSES.has(row.last_gate_status)
       ? { lastGateStatus: row.last_gate_status as Gate["status"] }
       : {}),
@@ -80,16 +84,23 @@ function toAttachmentDto(row: AttachmentRow): AttachmentDto {
   };
 }
 
-export function createConversation(db: DatabaseSync, title: string): ConversationDto {
+export function createConversation(
+  db: DatabaseSync,
+  title: string,
+  cadEnvironment: CadEnvironment = "build123d",
+): ConversationDto {
   const id = crypto.randomUUID();
   const now = Date.now();
-  db.prepare("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+  db.prepare(
+    "INSERT INTO conversations (id, title, cad_environment, created_at, updated_at, source_specifications_required) VALUES (?, ?, ?, ?, ?, 1)",
+  ).run(
     id,
     title,
+    cadEnvironment,
     now,
     now,
   );
-  return { id, title, createdAt: now, updatedAt: now };
+  return { id, title, cadEnvironment, createdAt: now, updatedAt: now, sourceSpecificationsRequired: true };
 }
 
 export function getConversation(db: DatabaseSync, id: string): ConversationDto | undefined {

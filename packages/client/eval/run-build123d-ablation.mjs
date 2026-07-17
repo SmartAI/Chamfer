@@ -95,6 +95,12 @@ try {
         const created = page.waitForResponse((response) =>
           response.request().method() === "POST" && response.url().endsWith("/api/conversations"));
         await page.getByRole("button", { name: "New chat" }).first().click();
+        // Creation now goes through an explicit CAD-environment chooser; select
+        // the Local build123d environment to trigger the conversation POST.
+        const environmentDialog = page.getByRole("dialog", { name: "Choose a CAD environment" });
+        await environmentDialog.waitFor({ state: "visible" });
+        await environmentDialog.getByRole("radio", { name: /Local build123d/ }).check();
+        await environmentDialog.getByRole("button", { name: "Start conversation" }).click();
         conversation = await (await created).json();
         await page.getByRole("textbox", { name: "Message Chamfer..." }).fill(TASKS[taskName]);
         await page.getByRole("button", { name: "Send" }).click();

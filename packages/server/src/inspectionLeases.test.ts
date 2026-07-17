@@ -27,7 +27,7 @@ async function createConversation(app: ReturnType<typeof createApp>) {
   return await (await app.request("/api/conversations", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: "Lease test" }),
+    body: JSON.stringify({ title: "Lease test", cadEnvironment: "build123d" }),
   })).json() as ConversationDto;
 }
 

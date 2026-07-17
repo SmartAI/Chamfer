@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 // The fake LLM's "gate-fail" scenario declares an EXPECT bbox the produced box
 // never has; the verify gate must fail and the failure must be visible on the
@@ -6,7 +7,7 @@ import { expect, test } from "@playwright/test";
 test("a failing verify gate is reported on the tool card", async ({ page }) => {
   test.setTimeout(600_000);
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();
   await composer.fill("make a gate-fail box");

@@ -4,6 +4,10 @@ name: Release
 # Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN secret. The trusted
 # publisher (repo SmartAI/Chamfer, workflow release.yml) must be configured
 # in the package settings on npmjs.com; the very first publish is manual.
+#
+# Releases happen ONLY on the public repo. Development lives in the private
+# repo (SmartAI/Chamfer-private), which shares this file but must never publish;
+# the job guard below skips it there (and on forks). See scripts/publish-public.sh.
 
 on:
   push:
@@ -14,8 +18,17 @@ permissions:
   id-token: write
 
 jobs:
+  agent-evaluation:
+    uses: ./.github/workflows/agent-evaluation.yml
+    with:
+      depth: release
+    secrets: inherit
+
   publish:
+    needs: agent-evaluation
     runs-on: ubuntu-latest
+    # Public repo only — never release from the private dev repo or a fork.
+    if: github.repository == 'SmartAI/Chamfer'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

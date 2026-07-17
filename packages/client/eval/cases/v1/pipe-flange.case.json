@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "text.pipe-flange",
+  "version": 1,
+  "title": "Bolt-circle pipe flange",
+  "purpose": "Measure a standard mechanical part that combines concentric profiles, an axial bore, and a polar bolt pattern.",
+  "capability": "concentric-bore-and-bolt-circle",
+  "modality": "text",
+  "complexity": "standard",
+  "complexityRationale": "The part requires an annular extrusion, a central through bore, and a six-instance polar through-hole operation.",
+  "categories": ["construction", "standard-part", "patterns"],
+  "gatingStatus": "release",
+  "capabilityStatus": "supported",
+  "inputs": {
+    "turns": [{
+      "role": "user",
+      "text": "Create a 12 mm thick pipe flange with a 90 mm outer diameter, a 44 mm through bore, and six 8 mm through holes equally spaced on a 70 mm bolt circle."
+    }],
+    "assets": []
+  },
+  "expectedOutcome": {
+    "kind": "completed",
+    "requirements": [
+      {
+        "id": "envelope",
+        "description": "The final flange envelope is 90 by 90 by 12 mm.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "bbox" }
+      },
+      {
+        "id": "bores",
+        "description": "The central bore and all six bolt holes are through features with the requested diameters.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "gate-checks" }
+      }
+    ]
+  },
+  "requiredEvidence": [
+    { "id": "verification-gate", "kind": "verification-gate", "evaluatorId": "verification-gate" },
+    { "id": "envelope", "kind": "geometry-measurement", "evaluatorId": "bbox" },
+    { "id": "bores", "kind": "geometry-measurement", "evaluatorId": "gate-checks" }
+  ],
+  "forbiddenOutcomes": [
+    { "kind": "false-success", "reason": "Visual resemblance cannot replace through-hole and diameter evidence." }
+  ],
+  "evaluatorRefs": [
+    { "id": "verification-gate", "version": 1, "required": true, "config": {} },
+    { "id": "bbox", "version": 1, "required": true, "config": { "expectedMm": [90, 90, 12], "toleranceMm": 0.5 } },
+    { "id": "gate-checks", "version": 1, "required": true, "config": { "names": ["check:hole_through[0]", "check:hole_through[1]"] } }
+  ],
+  "rubricRefs": [],
+  "sourceSafety": {
+    "classification": "synthetic",
+    "containsProductionData": false,
+    "notes": "Generic flange dimensions authored for the public corpus."
+  }
+}

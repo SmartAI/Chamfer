@@ -1,19 +1,20 @@
 import { cn } from "@/lib/utils";
 import type { GateSummary } from "@/agent/gateSummary";
-import type { VisualVerificationRecordDto } from "@chamfer/shared";
+import type { ProofEvidenceState, VisualVerificationRecordDto } from "@chamfer/shared";
 
 export interface VerificationChipProps {
   streaming: boolean;
   summary: GateSummary | undefined;
   visual?: VisualVerificationRecordDto;
+  proofState?: Exclude<ProofEvidenceState, "not-applicable">;
 }
 
 /** Session-level verification status chip for the chat header.
  * Copy rule: states what was checked ("n/n checks"), never "correct" —
  * the gate verifies the agent's declared plan, not the user's intent. */
-export function VerificationChip({ streaming, summary, visual }: VerificationChipProps) {
+export function VerificationChip({ streaming, summary, visual, proofState }: VerificationChipProps) {
   const state = streaming ? "verifying" : summary?.status;
-  if (!state && !visual) return null;
+  if (!state && !visual && !proofState) return null;
 
   const label =
     state === "verifying"
@@ -26,7 +27,27 @@ export function VerificationChip({ streaming, summary, visual }: VerificationChi
 
   return (
     <span className="flex min-w-0 items-center gap-1 overflow-hidden">
-    {state && <span
+    {proofState && (
+      <span
+        data-testid="proof-status-chip"
+        data-status={proofState}
+        className={cn(
+          "inline-flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium",
+          proofState === "proven"
+            ? "border-emerald-400 bg-emerald-100 text-emerald-800"
+            : proofState === "failed"
+              ? "border-red-300 bg-red-50 text-red-700"
+              : "border-slate-300 bg-slate-50 text-slate-700",
+        )}
+      >
+        <span aria-hidden="true" className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          proofState === "proven" ? "bg-emerald-600" : proofState === "failed" ? "bg-red-500" : "bg-slate-500",
+        )} />
+        {proofState === "proven" ? "Proven" : `Proof ${proofState}`}
+      </span>
+    )}
+    {state && (streaming || !proofState) && <span
       data-testid="verify-chip"
       data-status={state}
       className={cn(
@@ -49,7 +70,7 @@ export function VerificationChip({ streaming, summary, visual }: VerificationChi
       />
       {label}
     </span>}
-    {visual && (
+    {visual && proofState !== "proven" && (
       <span
         data-testid="visual-verify-chip"
         data-verdict={visual.verdict}

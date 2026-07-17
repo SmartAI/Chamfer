@@ -1,0 +1,28 @@
+{
+  "probeVersion": 1,
+  "startedAt": "2026-07-14T12:00:00.000Z",
+  "finishedAt": "2026-07-14T12:00:01.000Z",
+  "endpoint": "http://127.0.0.1:8997/mcp",
+  "verdict": "go",
+  "safeForBroaderMutation": true,
+  "versions": { "fusion": "fake", "mcpProtocol": "2025-11-25", "mcpServerName": "MCP Server Adapter", "mcpServer": "1.0.0" },
+  "disposableDocument": { "probeToken": "fake", "documentName": "Fixture", "dataFileId": null, "rootEntityToken": "root" },
+  "documentation": [{ "query": "Camera", "sha256": "fake" }],
+  "engineeringSnapshotHashes": ["before", "after", "before"],
+  "screenshotSha256": "fake",
+  "identitySamples": [{ "rootEntityToken": "root" }],
+  "checks": [
+    { "id": "mcp-session", "passed": true },
+    { "id": "raw-tool-schemas", "passed": true },
+    { "id": "installed-api-documentation", "passed": true },
+    { "id": "disposable-document", "passed": true },
+    { "id": "coherent-mutation", "passed": true },
+    { "id": "single-undo-atomicity", "passed": true },
+    { "id": "deliberate-immediate-verification", "passed": true },
+    { "id": "deterministic-rollback", "passed": true },
+    { "id": "recompute-stability", "passed": true },
+    { "id": "exact-camera-restoration", "passed": true },
+    { "id": "document-identity-stability", "passed": true },
+    { "id": "unrelated-document-isolation", "passed": true }
+  ]
+}

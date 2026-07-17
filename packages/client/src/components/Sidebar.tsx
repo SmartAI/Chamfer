@@ -23,12 +23,7 @@ export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() =>
-              void newConversation().catch(() => {
-                // Failure lands in ChatProvider's error state, which ChatPanel renders
-                // as a dismissible banner.
-              })
-            }
+            onClick={() => newConversation()}
             className="flex h-9 flex-1 items-center justify-center gap-2 rounded-md bg-foreground px-3 text-sm font-medium text-background transition-opacity hover:opacity-85"
           >
             <Plus className="h-4 w-4" />
@@ -77,6 +72,7 @@ export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {
                   )}
                   <button
                     type="button"
+                    data-conversation-id={conversation.id}
                     onClick={() => selectConversation(conversation.id)}
                     aria-current={active ? "true" : undefined}
                     className="min-w-0 flex-1 truncate text-left"

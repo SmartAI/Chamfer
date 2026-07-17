@@ -13,10 +13,15 @@ function makeConversation(id: string): ConversationDto {
   return {
     id,
     title: `Conversation ${id}`,
+    cadEnvironment: "build123d",
     createdAt: Date.now(),
     updatedAt: Date.now(),
   } as ConversationDto;
 }
+
+beforeEach(() => {
+  mockedRest.getConversation.mockImplementation(async (id) => makeConversation(id));
+});
 
 /** Fake ChatSession whose abort() is a spy, so tests can assert the outgoing session was
  * aborted rather than left streaming headless after a conversation switch/delete. */
@@ -175,6 +180,81 @@ describe("ChatProvider conversation switching", () => {
 
     await waitFor(() => expect(createSessionMock).toHaveBeenCalled());
     expect(createSessionMock.mock.calls[0]?.[0]).toMatchObject({ maxCadRuns: 7 });
+  });
+
+  it("restores a Fusion binding with a Fusion-only prompt and tool catalog", async () => {
+    const fusionConversation = { ...makeConversation("fusion-conversation"), cadEnvironment: "fusion" as const };
+    mockedRest.listConversations.mockResolvedValue([fusionConversation]);
+    mockedRest.getConversation.mockResolvedValue(fusionConversation);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
+    mockedRest.listMessages.mockResolvedValue([] as MessageDto[]);
+    mockedRest.listArtifacts.mockResolvedValue([]);
+
+    const createSessionMock = vi.fn().mockReturnValue(makeFakeSession(fusionConversation.id));
+    let latest: ReturnType<typeof useChatState> | undefined;
+    render(
+      <ChatProvider __createSession={createSessionMock}>
+        <Harness onValue={(value) => (latest = value)} />
+      </ChatProvider>,
+    );
+
+    await waitFor(() => expect(latest?.loading).toBe(false));
+    act(() => latest?.selectConversation(fusionConversation.id));
+    await waitFor(() => expect(createSessionMock).toHaveBeenCalled());
+
+    expect(createSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      cadEnvironment: "fusion",
+      skillMode: "none",
+    });
+    expect(createSessionMock.mock.calls[0]?.[0].tools.map((tool: { name: string }) => tool.name)).toEqual(["search_fusion_docs", "inspect_fusion"]);
+    expect(createSessionMock.mock.calls[0]?.[0].systemPrompt).toContain("permanently bound to Autodesk Fusion");
+    expect(createSessionMock.mock.calls[0]?.[0].systemPrompt).not.toContain("run_build123d");
+  });
+
+  it("initializes session sequence allocation from the largest durable sequence across empty, contiguous, and gapped histories", async () => {
+    const conversations = [makeConversation("empty"), makeConversation("contiguous"), makeConversation("gapped")];
+    mockedRest.listConversations.mockResolvedValue(conversations);
+    mockedRest.getSettings.mockResolvedValue({ modelJson: "{}", sources: {} } as SettingsResponseDto);
+    mockedRest.listMessages.mockImplementation(async (conversationId) => {
+      const sequences = conversationId === "empty" ? [] : conversationId === "contiguous" ? [0, 1, 2] : [0, 2, 7];
+      return sequences.map((seq) => ({
+        id: `${conversationId}-${seq}`,
+        conversationId,
+        seq,
+        role: "user",
+        contentJson: JSON.stringify({ role: "user", content: `message ${seq}`, timestamp: seq }),
+        createdAt: seq,
+      })) as MessageDto[];
+    });
+    mockedRest.listArtifacts.mockResolvedValue([]);
+
+    const createSessionMock = vi.fn((opts: {
+      conversationId: string;
+      nextMessageSeq: number;
+      priorMessages: Array<{ content: string }>;
+    }) => makeFakeSession(opts.conversationId));
+    let latest: ReturnType<typeof useChatState> | undefined;
+    render(
+      <ChatProvider __createSession={createSessionMock as never}>
+        <Harness onValue={(value) => (latest = value)} />
+      </ChatProvider>,
+    );
+
+    await waitFor(() => expect(latest?.loading).toBe(false));
+    for (const conversation of conversations) {
+      act(() => latest?.selectConversation(conversation.id));
+      await waitFor(() => expect(latest?.session?.conversationId).toBe(conversation.id));
+    }
+
+    expect(createSessionMock.mock.calls.map(([options]) => ({
+      conversationId: options.conversationId,
+      nextMessageSeq: options.nextMessageSeq,
+      history: options.priorMessages.map((message: { content: string }) => message.content),
+    }))).toEqual([
+      { conversationId: "empty", nextMessageSeq: 0, history: [] },
+      { conversationId: "contiguous", nextMessageSeq: 3, history: ["message 0", "message 1", "message 2"] },
+      { conversationId: "gapped", nextMessageSeq: 8, history: ["message 0", "message 2", "message 7"] },
+    ]);
   });
 
   it("exposes the configured model name and CAD-run cap for the status strip", async () => {

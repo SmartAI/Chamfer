@@ -13,11 +13,20 @@
     "dev": "npm-run-all --parallel dev:server dev:client",
     "dev:server": "npm run dev -w @chamfer/server",
     "dev:client": "npm run dev -w @chamfer/client",
-    "build": "npm run build -w @chamfer/shared && npm run build -w @chamfer/client && npm run build -w @chamfer/server && npm run build -w chamfer",
+    "eval:agent": "npm run eval:agent -w @chamfer/client --",
+    "eval:paired": "npm run eval:paired -w @chamfer/client --",
+    "eval:compare": "npm run eval:compare -w @chamfer/client --",
+    "eval:sync": "npm run eval:sync -w @chamfer/server --",
+    "eval:sync-reviews": "npm run eval:sync-reviews -w @chamfer/server --",
+    "build": "npm run build -w @chamfer/shared && npm run build -w @chamfer/fusion-fixtures && npm run build -w @chamfer/client && npm run build -w @chamfer/server && npm run build -w chamfer",
     "start": "npm run start -w @chamfer/server",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "e2e": "playwright test -c e2e/playwright.config.ts"
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "fusion:integrity": "npm run fusion:integrity -w @chamfer/server --",
+    "fusion:gate": "npm run fusion:gate -w @chamfer/server --",
+    "fusion:evaluate": "npm run fusion:evaluate -w @chamfer/server --",
+    "eval:proven-single-part": "npm run start -w @chamfer/evaluation --"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

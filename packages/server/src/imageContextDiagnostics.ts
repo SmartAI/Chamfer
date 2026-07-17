@@ -15,6 +15,10 @@ export interface ModelRequestDiagnostic {
   imageCount: number;
   images: RequestImageDiagnostic[];
   structuredRecords: StructuredBatchDiagnostic[];
+  /** Privacy-safe counts proving normalized authority projection without storing prompt text. */
+  authoritativePlanProjectionCount?: number;
+  sourceSpecificationProjectionCount?: number;
+  domainPlanPayloadCount?: number;
 }
 
 export interface StructuredBatchDiagnostic {
@@ -97,6 +101,9 @@ export function sanitizeModelRequest(sequence: number, context: unknown): ModelR
   const list = Array.isArray(messages) ? messages as DiagnosticMessage[] : [];
   const images: RequestImageDiagnostic[] = [];
   const structuredRecords: StructuredBatchDiagnostic[] = [];
+  let authoritativePlanProjectionCount = 0;
+  let sourceSpecificationProjectionCount = 0;
+  let domainPlanPayloadCount = 0;
   for (const message of list) {
     if (!Array.isArray(message.content)) continue;
     for (const raw of message.content) {
@@ -111,10 +118,22 @@ export function sanitizeModelRequest(sequence: number, context: unknown): ModelR
       }
       if (block.type === "text" && typeof block.text === "string") {
         structuredRecords.push(...batchRecords(block.text));
+        if (block.text === "[Authoritative design plan]") authoritativePlanProjectionCount += 1;
+        if (block.text.startsWith("[Current source specifications]")) sourceSpecificationProjectionCount += 1;
+        domainPlanPayloadCount += block.text.split('"format":"domain-operations-v1"').length - 1;
       }
     }
   }
-  return { sequence, messageCount: list.length, imageCount: images.length, images, structuredRecords };
+  return {
+    sequence,
+    messageCount: list.length,
+    imageCount: images.length,
+    images,
+    structuredRecords,
+    authoritativePlanProjectionCount,
+    sourceSpecificationProjectionCount,
+    domainPlanPayloadCount,
+  };
 }
 
 export function summarizeImageExposure(requests: readonly ModelRequestDiagnostic[]): ImageExposureReport {

@@ -11,6 +11,22 @@ import {
   type CompactionMessage,
 } from "./contextPolicy";
 
+function renderedCadDetails(id: number): object {
+  return {
+    code: {
+      toolCallId: `call-${id}`,
+      artifactId: `artifact-${id}`,
+      artifactVersion: id,
+    },
+    measurements: {
+      bboxMm: [id + 1, id + 2, id + 3],
+      volumeMm3: id + 4,
+      areaMm2: id + 5,
+      children: [],
+    },
+  };
+}
+
 function sheet(id: number): AgentMessage {
   return {
     role: "toolResult",
@@ -21,6 +37,7 @@ function sheet(id: number): AgentMessage {
       { type: "image", data: `png-${id}`, mimeType: "image/png" },
     ],
     isError: false,
+    details: renderedCadDetails(id),
     timestamp: id,
   } as unknown as AgentMessage;
 }
@@ -40,6 +57,7 @@ function referencedSheet(id: number): AgentMessage {
       },
     ],
     isError: false,
+    details: renderedCadDetails(id),
     timestamp: id,
   } as unknown as AgentMessage;
 }

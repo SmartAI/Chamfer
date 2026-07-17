@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "text.lofted-adapter",
+  "version": 1,
+  "title": "Hollow round-to-rectangular adapter",
+  "purpose": "Measure topology-sensitive construction across dissimilar profiles while preserving a continuous hollow passage.",
+  "capability": "topology-sensitive-hollow-loft",
+  "modality": "text",
+  "complexity": "challenge",
+  "complexityRationale": "Dissimilar loft profiles, wall offset behavior, and two open ends create topology and validity risks absent from prismatic parts.",
+  "categories": ["construction", "topology", "loft"],
+  "gatingStatus": "frontier",
+  "capabilityStatus": "frontier",
+  "inputs": {
+    "turns": [{
+      "role": "user",
+      "text": "Build a 50 mm long hollow adapter from a 40 mm outside-diameter round inlet to a 50 by 30 mm rectangular outlet. Keep a 3 mm nominal wall and leave both ends open."
+    }],
+    "assets": []
+  },
+  "expectedOutcome": {
+    "kind": "completed",
+    "requirements": [
+      {
+        "id": "envelope",
+        "description": "The adapter spans a 50 by 30 by 50 mm outer envelope within tolerance.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "bbox" }
+      },
+      {
+        "id": "wall",
+        "description": "The nominal wall thickness is 3 mm and both terminal profiles remain open.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "gate-checks" }
+      },
+      {
+        "id": "transition-form",
+        "description": "The body forms one coherent round-to-rectangular transition without unintended pinches or twists.",
+        "evaluation": { "kind": "semantic", "rubricId": "design-intent" }
+      }
+    ]
+  },
+  "requiredEvidence": [
+    { "id": "verification-gate", "kind": "verification-gate", "evaluatorId": "verification-gate" },
+    { "id": "envelope", "kind": "geometry-measurement", "evaluatorId": "bbox" },
+    { "id": "wall-and-openings", "kind": "geometry-measurement", "evaluatorId": "gate-checks" }
+  ],
+  "forbiddenOutcomes": [
+    { "kind": "false-success", "reason": "A capped, invalid, self-intersecting, or pinched loft cannot satisfy the adapter request." }
+  ],
+  "evaluatorRefs": [
+    { "id": "verification-gate", "version": 1, "required": true, "config": {} },
+    { "id": "bbox", "version": 1, "required": true, "config": { "expectedMm": [50, 30, 50], "toleranceMm": 1 } },
+    { "id": "gate-checks", "version": 1, "required": true, "config": { "names": ["valid", "check:wall_thickness[0]"] } }
+  ],
+  "rubricRefs": [
+    { "id": "design-intent", "version": 1, "required": true }
+  ],
+  "sourceSafety": {
+    "classification": "synthetic",
+    "containsProductionData": false,
+    "notes": "Synthetic transition geometry with no user-derived design evidence."
+  }
+}

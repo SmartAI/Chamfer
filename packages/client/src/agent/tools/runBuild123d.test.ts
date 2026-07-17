@@ -51,6 +51,7 @@ describe("run_build123d tool", () => {
         artifactId: "artifact-1",
         artifactVersion: 3,
       },
+      evaluationMesh: mesh,
     });
   });
 

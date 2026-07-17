@@ -18,7 +18,7 @@ describe("app", () => {
     const created = await (await app.request("/api/conversations", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "secret title" }),
+      body: JSON.stringify({ title: "secret title", cadEnvironment: "build123d" }),
     })).json() as { id: string };
 
     for await (const _event of llm.stream({}, {

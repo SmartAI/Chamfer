@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+<rect width="640" height="360" fill="white"/><g fill="none" stroke="#111" stroke-width="2">
+<rect x="55" y="70" width="220" height="140" rx="12"/><circle cx="95" cy="105" r="10"/><circle cx="235" cy="105" r="10"/><circle cx="95" cy="175" r="10"/><circle cx="235" cy="175" r="10"/><rect x="130" y="105" width="70" height="70"/>
+<rect x="355" y="105" width="220" height="70"/><path d="M355 145h220M390 105v70M540 105v70"/>
+<path d="M55 235v35M275 235v35M55 255h220M45 70h-20M45 210h-20M35 70v140"/>
+</g><g font-family="sans-serif" font-size="14" fill="#111"><text x="55" y="45">FUS-MM-101 TOP</text><text x="355" y="80">FRONT</text><text x="145" y="285">110 mm</text><text x="4" y="145">70</text><text x="125" y="100">50 x 30 pocket</text><text x="360" y="195">12 mm thick; front is +Y</text><text x="55" y="330">4 x Ø8.5 THRU; centers 15 from adjacent edges; R6 corners</text></g></svg>

@@ -13,7 +13,7 @@ import {
   Tags,
   Wrench,
 } from "lucide-react";
-import type { Gate, Measurements } from "@chamfer/shared";
+import type { Gate, Measurements, ShapeProofRecord } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import { cn } from "@/lib/utils";
 import { CadCodeBlock } from "./CadCodeBlock";
@@ -71,6 +71,12 @@ export function toolPresentation(
     }
     case "record_inspection_observation":
       return { Icon: NotebookPen, summary: "Recorded observation" };
+    case "record_source_specifications":
+      return { Icon: NotebookPen, summary: "Recorded text requirements" };
+    case "record_reference_specifications":
+      return { Icon: NotebookPen, summary: "Recorded reference requirements" };
+    case "request_design_clarification":
+      return { Icon: ScanEye, summary: "Requested one design clarification" };
     case "record_visual_verification":
     case "record_visual_verification_batch": {
       const verdict = trimmed(args.finalVerdict);
@@ -81,6 +87,10 @@ export function toolPresentation(
       return { Icon: Tags, summary: "Classified reference" };
     case "update_plan":
       return { Icon: ListChecks, summary: "Updated plan" };
+    case "create_plan":
+      return { Icon: ListChecks, summary: "Created plan" };
+    case "revise_plan":
+      return { Icon: ListChecks, summary: "Revised plan" };
     default:
       return { Icon: Wrench, summary: toolDisplayName(call.name) };
   }
@@ -98,6 +108,7 @@ export interface ToolCallCardResult {
     resource?: string;
     deduped?: boolean;
     loaded?: boolean;
+    shapeProof?: ShapeProofRecord;
   };
   isError?: boolean;
 }
@@ -230,10 +241,21 @@ export function ToolCallCard({ call, result, interrupted = false, resultMessageI
   const code = typeof call.arguments.code === "string" ? call.arguments.code : "";
   const measurements = result?.details?.measurements;
   const gate = result?.details?.gate;
+  const shapeProof = result?.details?.shapeProof;
+  const shapeProofViews = shapeProof?.views ?? (shapeProof ? [{
+    status: shapeProof.status,
+    registration: shapeProof.registration,
+    render: shapeProof.render,
+    thresholds: shapeProof.thresholds,
+    metrics: shapeProof.metrics,
+    worst: { metric: "evaluation" as const, detail: shapeProof.worst.detail },
+  }] : []);
+  const requiredShapeProofViews = shapeProof?.coverage?.requiredRegistrationIds?.length ?? (shapeProof ? 1 : 0);
+  const worstLandmarks = shapeProof?.metrics?.landmarks ?? [];
   const gateFailures = gate?.checks.filter((check) => !check.passed) ?? [];
   const docText = !result?.isError && READABLE_TEXT_TOOLS.has(call.name) ? resultText(result?.content) : "";
   const hasImages = inspectedEvidence.length > 0 || Boolean(sheetReference) || Boolean(sheetUrl);
-  const hasBody = Boolean(result?.isError || code || measurements || gate || docText || hasImages);
+  const hasBody = Boolean(result?.isError || code || measurements || gate || shapeProof || docText || hasImages);
 
   const header = (
     <>
@@ -290,6 +312,119 @@ export function ToolCallCard({ call, result, interrupted = false, resultMessageI
               <span>{measurements.areaMm2} mm2</span>
             </div>
           )}
+          {measurements?.integrity && (
+            <div
+              data-testid="tool-integrity"
+              data-status={measurements.integrity.status}
+              className={cn(
+                "overflow-hidden rounded-md border text-xs",
+                measurements.integrity.status === "conforming"
+                  ? "border-emerald-200 bg-emerald-50/60 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100"
+                  : "border-destructive/40 bg-destructive/10 text-destructive",
+              )}
+            >
+              <div className="flex items-center gap-2 border-b border-current/15 px-2 py-1.5 font-medium">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    measurements.integrity.status === "conforming" ? "bg-emerald-500" : "bg-destructive",
+                  )}
+                />
+                Component integrity
+                <span className="ml-auto font-mono font-normal">{measurements.integrity.componentId}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 px-2 py-1.5">
+                <span className="opacity-70">Geometry</span>
+                <span>
+                  {measurements.integrity.solidCount} connected solid{measurements.integrity.solidCount === 1 ? "" : "s"}
+                </span>
+                <span className="opacity-70">Topology</span>
+                <span>{measurements.integrity.valid ? "Valid" : "Invalid"}</span>
+                <span className="opacity-70">Result label</span>
+                <span className="font-mono">{measurements.integrity.resultLabel || "Missing"}</span>
+              </div>
+              {measurements.integrity.issues.length > 0 && (
+                <ul className="border-t border-current/15 px-2 py-1.5">
+                  {measurements.integrity.issues.map((issue) => (
+                    <li key={issue.code}>{issue.detail}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {shapeProof && (
+            <div
+              data-testid="tool-shape-proof"
+              data-status={shapeProof.status}
+              className={cn(
+                "overflow-hidden rounded-md border text-xs",
+                shapeProof.status === "passed"
+                  ? "border-emerald-200 bg-emerald-50/60 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100"
+                  : "border-destructive/40 bg-destructive/10 text-destructive",
+              )}
+            >
+              <div className="flex items-center gap-2 border-b border-current/15 px-2 py-1.5 font-medium">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    shapeProof.status === "passed" ? "bg-emerald-500" : "bg-destructive",
+                  )}
+                />
+                Independent shape proof
+                <span className="ml-auto font-normal">
+                  {shapeProofViews.filter((view) => view.status === "passed").length}/{requiredShapeProofViews} views
+                  <span className="ml-1 capitalize">· {shapeProof.status}</span>
+                </span>
+              </div>
+              {shapeProof.metrics ? (
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-2 py-1.5">
+                  <span className="opacity-70">Silhouette IoU</span>
+                  <span className="whitespace-nowrap text-right font-mono">
+                    {shapeProof.metrics.silhouetteIou.toFixed(4)} / {shapeProof.thresholds.silhouetteIouMin.toFixed(4)} min
+                  </span>
+                  <span className="opacity-70">Contour distance</span>
+                  <span className="whitespace-nowrap text-right font-mono">
+                    {shapeProof.metrics.symmetricContourDistanceMm.toFixed(3)} / {shapeProof.thresholds.symmetricContourDistanceMmMax.toFixed(3)} mm max
+                  </span>
+                  <span className="opacity-70">Registered view</span>
+                  <span className="capitalize">{shapeProof.registration.direction}</span>
+                  {worstLandmarks.length > 0 ? (
+                    <>
+                      <span className="opacity-70">Worst landmark</span>
+                      <span className="whitespace-nowrap text-right font-mono">
+                        {Math.max(...worstLandmarks.map((landmark) => landmark.positionErrorMm ?? Number.POSITIVE_INFINITY)).toFixed(3)} / {shapeProof.thresholds.landmarkPositionErrorMmMax.toFixed(3)} mm max
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+              {shapeProofViews.length > 1 ? (
+                <div data-testid="tool-shape-proof-views" className="divide-y divide-current/10 border-t border-current/15">
+                  {shapeProofViews.map((view) => (
+                    <div
+                      key={view.registration.id}
+                      data-testid="tool-shape-proof-view"
+                      data-status={view.status}
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 px-2 py-1.5"
+                    >
+                      <span className={cn("h-1.5 w-1.5 rounded-full", view.status === "passed" ? "bg-emerald-500" : "bg-destructive")} />
+                      <span className="capitalize">{view.registration.direction} · {view.registration.referenceId}</span>
+                      <span className="font-mono uppercase">{view.status}</span>
+                      <span className="col-start-2 col-span-2 truncate opacity-70" title={view.worst.detail}>
+                        {view.worst.metric}{view.worst.landmarkId ? ` · ${view.worst.landmarkId}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="border-t border-current/15 px-2 py-1.5">{shapeProof.worst.detail}</div>
+              <div className="border-t border-current/15 px-2 py-1 font-mono text-[10px] opacity-70">
+                {shapeProof.evaluator.id} v{shapeProof.evaluator.version} · {shapeProof.policy.id} v{shapeProof.policy.version}
+              </div>
+            </div>
+          )}
           {gate && (
             <div
               data-testid="tool-gate"
@@ -311,7 +446,7 @@ export function ToolCallCard({ call, result, interrupted = false, resultMessageI
               </div>
               {gate.status === "error" ? (
                 <div className="p-2 text-muted-foreground">
-                  Verification unavailable — the evaluator errored; inspect the views manually.
+                  Verification unavailable - the evaluator errored; inspect the views manually.
                   <div className="mt-1 font-mono">{gate.checks.map((check) => check.detail).join("; ")}</div>
                 </div>
               ) : (
@@ -352,8 +487,8 @@ export function ToolCallCard({ call, result, interrupted = false, resultMessageI
                     )}
                   >
                     {gate.status === "passed"
-                      ? "GATE PASSED — all declared expectations met"
-                      : `GATE FAILED — ${gateFailures.length} of ${gate.checks.length} checks failed`}
+                      ? "GATE PASSED - all declared expectations met"
+                      : `GATE FAILED - ${gateFailures.length} of ${gate.checks.length} checks failed`}
                   </div>
                 </>
               )}

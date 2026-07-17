@@ -9,10 +9,16 @@ import {
   type ReactNode,
 } from "react";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { DEFAULT_CONVERSATION_TITLE, type ConversationDto } from "@chamfer/shared";
+import {
+  DEFAULT_CAD_ENVIRONMENT,
+  DEFAULT_CONVERSATION_TITLE,
+  type CadEnvironment,
+  type ConversationDto,
+} from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import {
   createSession,
+  FUSION_RECONCILIATION_MARKER,
   registerMessagePersistenceId,
   DEFAULT_MAX_CAD_RUNS,
   type ChatSession,
@@ -21,14 +27,39 @@ import {
 import { latestGateSummary } from "@/agent/gateSummary";
 import { PROBE_COMPONENT, runComponentIds } from "@/agent/plan";
 import { resolveAblationSkill } from "@/agent/ablation";
+import { evaluationTraceIdentity } from "@/agent/agentRunLifecycle";
 import { assembleAgentPrompt } from "@/agent/build123dSkill";
 import { runtimePrompt } from "@/agent/prompt";
+import { fusionRuntimePrompt } from "@/agent/fusionPrompt";
+import { createSearchFusionDocsTool } from "@/agent/tools/searchFusionDocs";
+import { createInspectFusionTool } from "@/agent/tools/inspectFusion";
 import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
 import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
 import { createSearchDocsTool } from "@/agent/tools/searchDocs";
 import { useOptionalAppState } from "@/state/appState";
+import { CadEnvironmentDialog } from "@/components/CadEnvironmentDialog";
+import { useOptionalFusionReadiness } from "@/state/fusionReadiness";
 
-const EMPTY_SESSION_STATE: SessionState = { messages: [], referenceRecords: [], streaming: false };
+const EMPTY_SESSION_STATE: SessionState = {
+  messages: [],
+  referenceRecords: [],
+  sourceSpecifications: [],
+  proofContracts: [],
+  proofReports: [],
+  designEscalations: [],
+  referenceRegistrations: [],
+  streaming: false,
+};
+const CAD_ENVIRONMENT_PREFERENCE_KEY = "chamfer.cad-environment.v1";
+
+function rememberedCadEnvironment(): CadEnvironment {
+  try {
+    const remembered = localStorage.getItem(CAD_ENVIRONMENT_PREFERENCE_KEY);
+    return remembered === "fusion" || remembered === "build123d" ? remembered : DEFAULT_CAD_ENVIRONMENT;
+  } catch {
+    return DEFAULT_CAD_ENVIRONMENT;
+  }
+}
 
 /** A message the user sent while the agent was busy, waiting for its own turn. */
 export interface QueuedMessage {
@@ -50,9 +81,8 @@ export interface ChatContextValue {
   /** Dismisses the provider-level error banner. */
   clearError: () => void;
   selectConversation: (id: string) => void;
-  /** Creates a conversation, switches to it, and resolves with its id; rejects on REST
-   * failure (after surfacing the error) so callers can disarm any pending follow-up. */
-  newConversation: () => Promise<string>;
+  /** Opens the CAD-environment dialog; confirming it creates a conversation and switches to it. */
+  newConversation: () => void;
   removeConversation: (id: string) => Promise<void>;
   /** Re-fetches /api/settings (e.g. after saving in SettingsModal) so settings-gated UI
    * such as the preset prompt cards enables without a reload. */
@@ -66,6 +96,9 @@ export interface ChatContextValue {
   sendMessage: (text: string, images: File[]) => void;
   /** Aborts the in-flight turn and pauses queue draining. */
   stopAgent: () => void;
+  /** Cancels stale work and queues one trusted continuation after an unambiguous
+   * authoritative Fusion reconciliation. */
+  resumeAfterFusionReconciliation: (summary: string) => void;
   /** Drops a queued message without sending it. */
   removeQueued: (id: string) => void;
   /** Moves a queued message to the front and resumes draining. */
@@ -119,6 +152,12 @@ export interface ChatProviderProps {
 }
 
 export function ChatProvider({ children, __createSession }: ChatProviderProps) {
+  const fusionContext = useOptionalFusionReadiness();
+  const fusion = {
+    enabled: fusionContext?.enabled ?? false,
+    readiness: fusionContext?.endpointReadiness,
+    integrity: fusionContext?.integrity,
+  };
   const appState = useOptionalAppState();
   if (!appState && !__createSession) {
     throw new Error("ChatProvider must be used within an AppStateProvider");
@@ -126,9 +165,12 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   const cad = appState?.cad ?? null;
   const publishCadResult = appState?.publishCadResult;
   const restoreScript = appState?.restoreScript;
+  const setCurrentArtifact = appState?.setCurrentArtifact;
   const clearWorkspace = appState?.clearWorkspace;
   const runScript = appState?.runScript;
   const [conversations, setConversations] = useState<ConversationDto[]>([]);
+  const conversationsRef = useRef<ConversationDto[]>([]);
+  conversationsRef.current = conversations;
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>(undefined);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>(EMPTY_SESSION_STATE);
@@ -140,6 +182,11 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   const [modelName, setModelName] = useState<string | null>(null);
   const [maxCadRuns, setMaxCadRuns] = useState<number>(DEFAULT_MAX_CAD_RUNS);
   const [showCadCode, setShowCadCode] = useState(false);
+  const [creationOpen, setCreationOpen] = useState(false);
+  const [creationEnvironment, setCreationEnvironment] = useState<CadEnvironment>(rememberedCadEnvironment);
+  const [creationPending, setCreationPending] = useState(false);
+  const [creationError, setCreationError] = useState<string>();
+  const creationOpenRef = useRef(false);
   // True from a send() call until its promise settles (the real session resolves send()
   // only when the whole agent turn is done). Guards the drain effect against firing a
   // second send into a turn whose streaming flag has not propagated yet.
@@ -200,7 +247,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     };
   }, []);
 
-  const switchTo = useCallback((id: string | undefined) => {
+  const switchTo = useCallback((id: string | undefined, conversationOverride?: ConversationDto) => {
     // Abort whatever session is currently live before tearing it down: an in-flight agent
     // turn must not keep streaming headless (burning tokens, persisting messages to a
     // possibly-deleted conversation) after the user navigates away from it.
@@ -227,6 +274,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     if (!id) return;
 
     Promise.all([
+      rest.getConversation(id),
       rest.getSettings(),
       rest.listMessages(id),
       rest.listArtifacts(id),
@@ -234,9 +282,29 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       rest.listOpenInspectionLeases(id),
       rest.listVisualVerifications(id),
       rest.listVisualVerificationBatches(id),
+      rest.listSourceSpecifications(id),
+      rest.listProofContracts(id),
+      rest.listProofReports(id),
+      rest.listDesignEscalations(id),
+      rest.listReferenceRegistrations(id),
     ])
-      .then(async ([settings, messages, artifacts, referenceRecords, openInspectionLeases, visualVerifications, visualVerificationBatches]) => {
+      .then(async ([
+        loadedConversation,
+        settings,
+        messages,
+        artifacts,
+        referenceRecords,
+        openInspectionLeases,
+        visualVerifications,
+        visualVerificationBatches,
+        sourceSpecifications,
+        proofContracts,
+        proofReports,
+        designEscalations,
+        referenceRegistrations,
+      ]) => {
         if (cancelled()) return;
+        const conversation = conversationOverride ?? loadedConversation;
 
         const modelJson = settings.modelJson;
         setSettingsPresent(Boolean(modelJson));
@@ -252,15 +320,31 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
             registerMessagePersistenceId(parsed, m.id);
             return parsed;
           });
+        const nextMessageSeq = messages.length === 0
+          ? 0
+          : messages.reduce((maximum, message) => Math.max(maximum, message.seq), -1) + 1;
 
         // History remains readable even before model credentials are set.
-        setSessionState({ messages: priorMessages, streaming: false });
+        setSessionState({
+          messages: priorMessages,
+          referenceRecords,
+          sourceSpecifications,
+          proofContracts,
+          proofReports,
+          designEscalations,
+          referenceRegistrations,
+          streaming: false,
+        });
 
         if (modelJson) {
-          // During the CAD boot window (cad === null) the session is built without
-          // run_build123d; both documentation tools are always available.
-          const tools: AgentTool[] = [createLookupDocsTool(), createSearchDocsTool()];
-          if (cad && publishCadResult) {
+          // Every conversation receives exactly one environment catalog.
+          const tools: AgentTool[] = conversation.cadEnvironment === "build123d"
+            ? [createLookupDocsTool(), createSearchDocsTool()]
+            : [
+                createSearchFusionDocsTool({ search: rest.searchFusionDocumentation }),
+                createInspectFusionTool({ inspect: (checks) => rest.inspectFusionDocument(id, checks) }),
+              ];
+          if (conversation.cadEnvironment === "build123d" && cad && publishCadResult) {
             tools.unshift(
               createRunBuild123dTool({
                 cad,
@@ -274,6 +358,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
                   restoreScript?.(code);
                   try {
                     const artifact = await rest.postArtifact(id, { pySource: code, paramsJson: null });
+                    setCurrentArtifact?.({ id: artifact.id, version: artifact.version });
                     return { artifactId: artifact.id, artifactVersion: artifact.version };
                   } catch (artifactError) {
                     setError(artifactError instanceof Error ? artifactError.message : String(artifactError));
@@ -290,19 +375,35 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
           const maxCadRuns =
             Number.isInteger(parsedMaxCadRuns) && parsedMaxCadRuns > 0 ? parsedMaxCadRuns : undefined;
 
-          const skillMode = resolveAblationSkill(window.location.search, import.meta.env.DEV);
+          const skillMode = conversation.cadEnvironment === "build123d"
+            ? resolveAblationSkill(window.location.search, import.meta.env.DEV)
+            : "none";
           const newSession = buildSession({
             conversationId: id,
+            cadEnvironment: conversation.cadEnvironment,
             modelJson,
-            systemPrompt: assembleAgentPrompt(runtimePrompt, { skill: skillMode }),
+            systemPrompt: conversation.cadEnvironment === "build123d"
+              ? assembleAgentPrompt(runtimePrompt, { skill: skillMode })
+              : fusionRuntimePrompt,
             tools,
             priorMessages,
+            nextMessageSeq,
             referenceRecords,
             openInspectionLeases,
             visualVerifications,
             visualVerificationBatches,
+            sourceSpecifications,
+            proofContracts,
+            proofReports,
+            designEscalations,
+            referenceRegistrations,
+            sourceSpecificationsRequired: conversation?.sourceSpecificationsRequired === true,
             maxCadRuns,
             skillMode,
+            executeFusionAction: conversation.cadEnvironment === "fusion"
+              ? (input, signal) => rest.executeFusionAction(id, input, signal)
+              : undefined,
+            evaluationIdentity: evaluationTraceIdentity(window.location.search),
           });
           sessionRef.current = newSession;
           setSession(newSession);
@@ -310,10 +411,15 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
 
         // Message replay is already visible. Rendering the latest artifact can
         // now take as long as needed without blocking the conversation.
-        if (Array.isArray(artifacts) && artifacts.length > 0) {
+        if (conversation.cadEnvironment === "build123d" && Array.isArray(artifacts) && artifacts.length > 0) {
           const latest = artifacts.reduce((a, b) => (b.version > a.version ? b : a));
-          if (cad && runScript) await runScript(latest.pySource);
-          else restoreScript?.(latest.pySource);
+          if (cad && runScript) {
+            const restored = await runScript(latest.pySource);
+            if (restored) setCurrentArtifact?.({ id: latest.id, version: latest.version });
+          } else {
+            restoreScript?.(latest.pySource);
+            setCurrentArtifact?.({ id: latest.id, version: latest.version });
+          }
         }
       })
       .catch((err: unknown) => {
@@ -324,7 +430,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     function cancelled() {
       return switchTokenRef.current !== token;
     }
-  }, [buildSession, cad, clearWorkspace, publishCadResult, restoreScript, runScript]);
+  }, [buildSession, cad, clearWorkspace, publishCadResult, restoreScript, runScript, setCurrentArtifact]);
 
   useEffect(() => {
     if (loading || didRestoreInitialConversationRef.current) return;
@@ -440,6 +546,20 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     sessionRef.current?.abort();
   }, []);
 
+  const resumeAfterFusionReconciliation = useCallback((summary: string) => {
+    if (!sessionRef.current) return;
+    const message: QueuedMessage = {
+      id: crypto.randomUUID(),
+      text: `${FUSION_RECONCILIATION_MARKER} Fusion changed outside Chamfer and trusted inspection accepted the new engineering state: ${summary}. Re-inspect the current evidence, discard stale plan assumptions, and continue the user's unfinished request from this authoritative revision.`,
+      images: [],
+    };
+    // Abort first so no stale tool call can cross the revision boundary. Queue
+    // draining resumes only after the active send promise settles.
+    sessionRef.current.abort();
+    setQueuedMessages((prev) => [...prev, message]);
+    setQueuePaused(false);
+  }, []);
+
   const removeQueued = useCallback((id: string) => {
     sessionRef.current?.cancelSteering(id);
     steeringInFlightRef.current.delete(id);
@@ -485,23 +605,67 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
 
   const selectConversation = useCallback(
     (id: string) => {
+      didRestoreInitialConversationRef.current = true;
       switchTo(id);
     },
     [switchTo],
   );
 
-  const newConversation = useCallback(async () => {
+  const newConversation = useCallback((): void => {
+    if (creationOpenRef.current) return;
+    creationOpenRef.current = true;
+    // A direct user action wins over the mount-time auto-restore effect, even
+    // when the conversation list and create request resolve in the same frame.
+    didRestoreInitialConversationRef.current = true;
     setError(null);
+    setCreationError(undefined);
+    const remembered = rememberedCadEnvironment();
+    setCreationEnvironment(fusion.enabled ? remembered : DEFAULT_CAD_ENVIRONMENT);
+    setCreationOpen(true);
+  }, [fusion.enabled]);
+
+  const cancelConversationCreation = useCallback(() => {
+    if (creationPending) return;
+    creationOpenRef.current = false;
+    setCreationOpen(false);
+    setCreationError(undefined);
+  }, [creationPending]);
+
+  const confirmConversationCreation = useCallback(async () => {
+    if (creationPending || !creationOpenRef.current) return;
+    setCreationPending(true);
+    setCreationError(undefined);
     try {
-      const created = await rest.createConversation(DEFAULT_CONVERSATION_TITLE);
+      const created = await rest.createConversation(DEFAULT_CONVERSATION_TITLE, creationEnvironment);
+      if (creationEnvironment === "fusion") {
+        try {
+          await rest.bindFusionDocument(created.id);
+        } catch (bindingError) {
+          // Do not leave an unbound Fusion conversation behind when trusted
+          // inspection or endpoint ownership rejects creation.
+          await rest.deleteConversation(created.id).catch(() => undefined);
+          throw bindingError;
+        }
+      }
+      try {
+        localStorage.setItem(CAD_ENVIRONMENT_PREFERENCE_KEY, creationEnvironment);
+      } catch {
+        // A blocked storage preference must not block explicit creation.
+      }
+      creationOpenRef.current = false;
+      setError(null);
       setConversations((prev) => [created, ...prev]);
-      switchTo(created.id);
+      setCreationOpen(false);
+      switchTo(created.id, created);
       return created.id;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      setCreationError(message);
+      setError(message);
+    } finally {
+      setCreationPending(false);
     }
-  }, [switchTo]);
+  }, [creationEnvironment, creationPending, switchTo]);
 
   const refreshSettings = useCallback(async () => {
     try {
@@ -556,6 +720,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       queuePaused,
       sendMessage,
       stopAgent,
+      resumeAfterFusionReconciliation,
       removeQueued,
       sendQueuedNow,
       modelName,
@@ -579,6 +744,7 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       queuePaused,
       sendMessage,
       stopAgent,
+      resumeAfterFusionReconciliation,
       removeQueued,
       sendQueuedNow,
       modelName,
@@ -587,7 +753,23 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     ],
   );
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+  return (
+    <ChatContext.Provider value={value}>
+      {children}
+      <CadEnvironmentDialog
+        open={creationOpen}
+        value={creationEnvironment}
+        creating={creationPending}
+        error={creationError}
+        onValueChange={setCreationEnvironment}
+        onConfirm={() => void confirmConversationCreation()}
+        onCancel={cancelConversationCreation}
+        fusionEnabled={fusion.enabled}
+        fusionReadiness={fusion.readiness}
+        fusionIntegrity={fusion.integrity}
+      />
+    </ChatContext.Provider>
+  );
 }
 
 export function useChatState(): ChatContextValue {

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "version": 1,
+  "cases": [
+    {
+      "schemaVersion": 1,
+      "id": "FUS-WK-201",
+      "version": 1,
+      "title": "Two-stage gearbox main housing (week-scale flagship)",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Design the main housing body of a two-stage helical gearbox, one cast-aluminum solid, roughly 260 x 180 x 160 mm. A hollow box with 6 mm walls, open on the right side where a bolted cover mates. On the left wall: an input bearing bore 40 mm H7 and an output bearing bore 80 mm H7; on the internal partition, an intermediate bearing bore 62 mm H7. Bore centers in the wall plane: input (0, 120), intermediate (70, 80), output (150, 60) mm - keep the three bores non-interfering. A full-perimeter bolted flange on the open face, 8 mm thick, with twelve M6 through-holes at 25 mm pitch and a 2 mm sealing lip. Two base mounting feet, each 40 x 30 mm with two 13 mm slotted holes. Four 6 mm internal ribs webbing the bearing bosses to the walls. An M20 oil-fill/breather boss on top, an M12 drain boss at the lowest point, a 34 mm sight-glass boss on the front. Cast fillets R4 on internal junctions, R2 external edge breaks. 6061 aluminum, media-blasted appearance. Keep it one solid; verify with the top and section views that the three bearing bores, ribs, and bosses do not interfere."
+        }
+      ],
+      "assets": [
+        {
+          "id": "suite-doc",
+          "path": "evaluation/fusion/gearbox-week-suite.md",
+          "mimeType": "text/markdown"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence"
+      ],
+      "forbiddenOutcomes": [
+        "interfering-bearing-bores",
+        "split-solid",
+        "solid-not-hollow",
+        "wrong-bearing-fit",
+        "missing-flange-bolts",
+        "disconnected-rib",
+        "crowded-boss-overlap",
+        "appearance-material-confusion"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "week-scale-1",
+          "fixtureId": "FUS-WK-201",
+          "effects": [
+            { "kind": "body-count", "expected": 1 },
+            { "kind": "dimensions", "expectedMm": [260, 180, 160], "toleranceMm": 4 },
+            { "kind": "volume", "minMm3": 900000, "maxMm3": 2400000 },
+            {
+              "kind": "bore", "name": "Input Bearing Bore", "nominalParameter": "input_bore_nominal",
+              "nominalMm": 40, "minDiameterMm": 40, "maxDiameterMm": 40.025,
+              "centerMm": [0, 0, 120], "axis": "y", "through": false, "toleranceMm": 8
+            },
+            {
+              "kind": "bore", "name": "Intermediate Bearing Bore", "nominalParameter": "inter_bore_nominal",
+              "nominalMm": 62, "minDiameterMm": 62, "maxDiameterMm": 62.030,
+              "centerMm": [70, 0, 80], "axis": "y", "through": false, "toleranceMm": 8
+            },
+            {
+              "kind": "bore", "name": "Output Bearing Bore", "nominalParameter": "output_bore_nominal",
+              "nominalMm": 80, "minDiameterMm": 80, "maxDiameterMm": 80.030,
+              "centerMm": [150, 0, 60], "axis": "y", "through": false, "toleranceMm": 8
+            },
+            { "kind": "feature", "featureType": "ExtrudeFeature", "name": "Cover Flange Bolt Holes", "minCount": 1 },
+            { "kind": "feature", "featureType": "FilletFeature", "minCount": 1 },
+            { "kind": "feature", "featureType": "ChamferFeature", "minCount": 1 },
+            { "kind": "material", "expected": "Aluminum" },
+            { "kind": "appearance", "targetRgb": [150, 150, 150], "tolerance": 90 },
+            { "kind": "visual-evidence", "requiredViews": ["top", "isometric", "section"] }
+          ]
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-week-scale-part-quality",
+        "version": "1",
+        "dimensions": ["design-intent", "non-interference", "editability", "visual-quality"]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 1,
+        "maxAgentTurns": 140,
+        "maxActions": 45,
+        "maxElapsedMs": 1500000
+      },
+      "gatingPolicy": {
+        "id": "fusion-week-scale",
+        "version": "1",
+        "releaseGating": false,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      },
+      "integrityProfile": {
+        "coverage": [
+          "precision-fit",
+          "non-interference",
+          "hollow-shell",
+          "bolt-pattern",
+          "rib-or-gusset",
+          "boss",
+          "fillet",
+          "chamfer",
+          "material-provenance",
+          "separate-appearance",
+          "visual-layout",
+          "section-evidence"
+        ],
+        "attackVectors": [],
+        "expectation": {
+          "overridesScoring": true,
+          "terminalState": "accepted-revision",
+          "requiredRevisionRelation": "new-revision"
+        },
+        "review": {
+          "status": "pending-human-review",
+          "scope": "week-scale-single-part-flagship"
+        }
+      }
+    }
+  ]
+}

@@ -1,19 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   collectComponentEvidence,
+  collectFusionComponentEvidence,
   collectComponentMeasurements,
-  applyPlanSnapshotEvidence,
+  applyPlanEvidenceAnnotations,
   FORM_REVIEW_VIEWS,
   hasAssemblyEvidence,
   latestPlan,
+  normalizePlanSnapshot,
   parseComponentDeclaration,
   planIncompleteComponents,
   runComponentIds,
   validatePlanSnapshot,
+  validateFusionActionPlan,
   type Plan,
   type PlanCheckEntry,
 } from "./plan";
-import { createUpdatePlanTool } from "./tools/updatePlan";
+import { createRetiredUpdatePlanTool, createUpdatePlanTool } from "./tools/updatePlan";
 import { SEQ105_GATE_EVIDENCE, SEQ106_DONE_WITHOUT_FORM_REVIEW, SEQ106_PREVIOUS_PLAN } from "./fixtures/gateGamingFormReview";
 import {
   SEQ1_PLAN,
@@ -25,6 +28,17 @@ import {
   SEQ91_SHELL_MEASUREMENT,
   SEQ100_PLAN,
 } from "./fixtures/gateGamingSession";
+import {
+  BOOKKEEPING_CURRENT_EVIDENCE,
+  BOOKKEEPING_FRESH_REASON,
+  BOOKKEEPING_FRESH_SPEC_REASON,
+  BOOKKEEPING_PREVIOUS_PLAN,
+  BOOKKEEPING_PRIOR_REASON,
+  BOOKKEEPING_PRIOR_SPEC_REASON,
+  BOOKKEEPING_STALE_EVIDENCE_PLAN,
+  bookkeepingFurtherWeakening,
+  bookkeepingSpecRepoint,
+} from "./fixtures/planBookkeepingRegression";
 
 function volumeCheck(id: string, lo = 5000, hi = 6000): PlanCheckEntry {
   return { id: "volume", kind: "volume", range_mm3: [lo, hi], target: id };
@@ -71,16 +85,6 @@ describe("validatePlanSnapshot", () => {
     expect(validatePlanSnapshot({ next: makePlan(), previous: undefined, evidence: noEvidence })).toEqual([]);
   });
 
-  it("requires a spec sheet for an image-triggered plan", () => {
-    const errors = validatePlanSnapshot({
-      next: makePlan(),
-      previous: undefined,
-      evidence: noEvidence,
-      requireSpecSheet: true,
-    });
-    expect(errors).toContain("spec_sheet is required for an image-triggered plan");
-  });
-
   it("rejects spec rows without a check link or unverifiable reason", () => {
     const plan = makePlan({
       spec_sheet: [{ id: "image-width", text: "The overall width is 100 mm.", source: "image" }],
@@ -89,7 +93,6 @@ describe("validatePlanSnapshot", () => {
       next: plan,
       previous: undefined,
       evidence: noEvidence,
-      requireSpecSheet: true,
     });
     expect(errors).toContain(
       'spec_sheet row "image-width": provide non-empty check_refs or a non-empty unverifiable_reason',
@@ -111,7 +114,6 @@ describe("validatePlanSnapshot", () => {
       next: plan,
       previous: undefined,
       evidence: noEvidence,
-      requireSpecSheet: true,
     });
     expect(dangling).toContain(
       'spec_sheet row "image-width": check_refs[0] does not resolve to an existing component check ({"component_id":"base","check_id":"ghost"})',
@@ -123,7 +125,6 @@ describe("validatePlanSnapshot", () => {
         next: plan,
         previous: undefined,
         evidence: noEvidence,
-        requireSpecSheet: true,
       }),
     ).toEqual([]);
   });
@@ -297,7 +298,6 @@ describe("validatePlanSnapshot", () => {
         next: plan,
         previous: undefined,
         evidence: noEvidence,
-        requireSpecSheet: true,
       }),
     ).toEqual([]);
   });
@@ -939,7 +939,7 @@ describe("check monotonicity", () => {
     const evidence = new Map([
       ["shell", { checks: new Set<string>(), latestMeasurements: { volumeMm3: SEQ91_SHELL_MEASUREMENT } }],
     ]);
-    const annotated = applyPlanSnapshotEvidence(SEQ100_PLAN, SEQ80_PLAN, evidence);
+    const annotated = applyPlanEvidenceAnnotations(SEQ100_PLAN, SEQ80_PLAN, evidence);
     expect(annotated.components[0]!.checks!.find((check) => check.id === "volume")).toMatchObject({
       refit_to_measurement: true,
       revision_reason: "The measured shell includes the swept neck and nozzle wall.",
@@ -963,7 +963,7 @@ describe("check monotonicity", () => {
     const evidence = new Map([
       ["base", { checks: new Set<string>(), latestMeasurements: { volumeMm3: 6200, wallThicknessMm: [3.2, 3.8] as [number, number], faceCount: 24, edgeCount: 25 } }],
     ]);
-    const checks = applyPlanSnapshotEvidence(next, previous, evidence).components[0]!.checks!;
+    const checks = applyPlanEvidenceAnnotations(next, previous, evidence).components[0]!.checks!;
     expect(checks.map((check) => [check.id, check.refit_to_measurement])).toEqual([
       ["volume", true],
       ["wall", true],
@@ -975,12 +975,12 @@ describe("check monotonicity", () => {
   it("does not flag without a measurement or when the previous interval already contained it, and preserves old flags", () => {
     const previous = checkedPlan([{ ...baseVolume, refit_to_measurement: true } as PlanCheckEntry]);
     const revised = checkedPlan([{ ...baseVolume, range_mm3: [4500, 6500], revision_reason: "Re-estimated volume." }]);
-    expect(applyPlanSnapshotEvidence(revised, previous, new Map()).components[0]!.checks![0]).toMatchObject({
+    expect(applyPlanEvidenceAnnotations(revised, previous, new Map()).components[0]!.checks![0]).toMatchObject({
       refit_to_measurement: true,
     });
     const unflaggedPrevious = checkedPlan([baseVolume]);
     const evidence = new Map([["base", { checks: new Set<string>(), latestMeasurements: { volumeMm3: 5500 } }]]);
-    expect(applyPlanSnapshotEvidence(revised, unflaggedPrevious, evidence).components[0]!.checks![0]!.refit_to_measurement).toBeUndefined();
+    expect(applyPlanEvidenceAnnotations(revised, unflaggedPrevious, evidence).components[0]!.checks![0]!.refit_to_measurement).toBeUndefined();
   });
 });
 
@@ -1113,94 +1113,187 @@ describe("evidence and plan derivation from the transcript", () => {
   });
 });
 
-describe("createUpdatePlanTool", () => {
-  it("accepts a valid snapshot and returns it in details with a compact text body", async () => {
+describe("retired update_plan compatibility tool", () => {
+  it("rejects a new snapshot and names create_plan recovery", async () => {
+    const tool = createRetiredUpdatePlanTool({ getMessages: () => [] });
+    expect(tool.parameters).toMatchObject({ properties: {}, additionalProperties: true });
+    expect(JSON.stringify(tool.parameters)).not.toMatch(/"(?:goal|components|interfaces|spec_sheet)"/);
+    await expect(tool.execute("t1", makePlan() as never)).rejects.toThrow(
+      /update_plan is retired and no plan was changed[\s\S]*create_plan/,
+    );
+  });
+
+  it("rejects a legacy replacement without changing the stored snapshot", async () => {
+    const legacy = makePlan();
+    const tool = createRetiredUpdatePlanTool({ getMessages: () => [planResult(legacy)] });
+    const omittedState = makePlan({ components: [legacy.components[0]!], interfaces: [] });
+
+    await expect(tool.execute("t1", omittedState as never)).rejects.toThrow(
+      /stored legacy snapshot remains unchanged[\s\S]*create_plan[\s\S]*transition_from_legacy=true[\s\S]*revise_plan/,
+    );
+    expect(latestPlan([planResult(legacy)])).toEqual(legacy);
+  });
+
+  it("routes attempted domain snapshot replacement to revise_plan", async () => {
+    const domain = {
+      ...makePlan(),
+      domain: { format: "domain-operations-v1" },
+    } as Plan;
+    const tool = createRetiredUpdatePlanTool({ getMessages: () => [planResult(domain)] });
+    await expect(tool.execute("t1", makePlan() as never)).rejects.toThrow(
+      /no plan was changed[\s\S]*revise_plan[\s\S]*explicit domain operations/,
+    );
+  });
+
+  it("binds form review to current evidence and restores accepted audit bookkeeping before validation", async () => {
+    const messages = [planResult(BOOKKEEPING_PREVIOUS_PLAN), BOOKKEEPING_CURRENT_EVIDENCE];
+    const tool = createUpdatePlanTool({ getMessages: () => messages });
+
+    const result = await tool.execute("normalize-current-evidence", BOOKKEEPING_STALE_EVIDENCE_PLAN as never);
+
+    const component = result.details?.plan.components[0]!;
+    expect(component.form_review?.evidence_id).toBe("current-widget-evidence");
+    expect(component.checks?.[0]).toMatchObject({
+      revision_reason: BOOKKEEPING_PRIOR_REASON,
+      refit_to_measurement: true,
+    });
+    expect(result.details?.plan.spec_sheet?.[0]?.revision_reason).toBe(BOOKKEEPING_PRIOR_SPEC_REASON);
+  });
+
+  it("binds form review to current evidence even without a prior accepted plan", async () => {
+    const tool = createUpdatePlanTool({ getMessages: () => [BOOKKEEPING_CURRENT_EVIDENCE] });
+
+    const result = await tool.execute("normalize-initial-evidence", BOOKKEEPING_STALE_EVIDENCE_PLAN as never);
+
+    expect(result.details?.plan.components[0]!.form_review?.evidence_id).toBe("current-widget-evidence");
+  });
+
+  it("appends standalone fresh check and spec explanations to exact accepted history", async () => {
+    const checkTool = createUpdatePlanTool({ getMessages: () => [planResult(BOOKKEEPING_PREVIOUS_PLAN)] });
+    const checkResult = await checkTool.execute("append-check-reason", bookkeepingFurtherWeakening() as never);
+    expect(checkResult.details?.plan.components[0]!.checks?.[0]).toMatchObject({
+      revision_reason: `${BOOKKEEPING_PRIOR_REASON}\n${BOOKKEEPING_FRESH_REASON}`,
+      refit_to_measurement: true,
+    });
+
+    const specTool = createUpdatePlanTool({ getMessages: () => [planResult(BOOKKEEPING_PREVIOUS_PLAN)] });
+    const specResult = await specTool.execute("append-spec-reason", bookkeepingSpecRepoint() as never);
+    expect(specResult.details?.plan.spec_sheet?.[0]?.revision_reason).toBe(
+      `${BOOKKEEPING_PRIOR_SPEC_REASON}\n${BOOKKEEPING_FRESH_SPEC_REASON}`,
+    );
+  });
+
+  it("still rejects further weakening with no fresh reason and quotes recovery state", async () => {
+    const tool = createUpdatePlanTool({ getMessages: () => [planResult(BOOKKEEPING_PREVIOUS_PLAN)] });
+
+    await expect(tool.execute("missing-fresh-reason", bookkeepingFurtherWeakening(null) as never)).rejects.toThrow(
+      new RegExp(`current accepted revision_reason is ${JSON.stringify(BOOKKEEPING_PRIOR_REASON)}[\\s\\S]*update_plan[\\s\\S]*do not search build123d docs`, "i"),
+    );
+  });
+
+  it("does not restore model-authored checks or specification rows that were deleted", () => {
+    const submitted = structuredClone(BOOKKEEPING_PREVIOUS_PLAN);
+    submitted.components[0]!.checks = submitted.components[0]!.checks!.filter((check) => check.id !== "outline");
+    submitted.spec_sheet = [];
+    const evidence = collectComponentEvidence([BOOKKEEPING_CURRENT_EVIDENCE]);
+
+    const normalized = normalizePlanSnapshot({ next: submitted, previous: BOOKKEEPING_PREVIOUS_PLAN, evidence });
+
+    expect(normalized.components[0]!.checks?.some((check) => check.id === "outline")).toBe(false);
+    expect(normalized.spec_sheet).toEqual([]);
+    const errors = validatePlanSnapshot({ next: normalized, previous: BOOKKEEPING_PREVIOUS_PLAN, evidence }).join("\n");
+    expect(errors).toContain('check "outline" was deleted without a trace');
+    expect(errors).toContain("spec_sheet cannot be dropped");
+  });
+
+  it("discloses deterministic bookkeeping and strict volume rules in the tool contract", () => {
     const tool = createUpdatePlanTool({ getMessages: () => [] });
-    const result = await tool.execute("t1", makePlan() as never, undefined as never, undefined as never);
-    expect(result.details?.plan.goal).toBe("two-part housing");
-    const text = (result.content[0] as { text: string }).text;
-    expect(text).toMatch(/^Plan accepted: 2 components \(2 todo\), 1 interfaces\./);
-    expect(text).toContain('"goal":"two-part housing"');
+    expect(tool.description).toContain("bind form_review evidence_id");
+    expect(tool.description).toContain("fresh standalone revision_reason");
+    expect(tool.description).toContain("preserves the accepted history");
+    expect(tool.description).toContain("volume check targeting each buildable component");
+    expect(tool.description).toContain("hi <= 1.5 * lo");
   });
 
-  it("rejects an invalid snapshot with every error listed", async () => {
-    const tool = createUpdatePlanTool({ getMessages: () => [planResult(makePlan())] });
-    const next = makePlan({
-      components: [{ id: "base", description: "base", status: "done" }],
-      interfaces: [],
-    });
-    await expect(tool.execute("t1", next as never, undefined as never, undefined as never)).rejects.toThrow(
-      /Plan rejected:[\s\S]*"lid" from the previous plan is missing[\s\S]*no gate-passed run/,
-    );
+  it("requires a planned Fusion completion contract and nothing per action", () => {
+    const bodyCount = { kind: "body-count", expected: 1 } as const;
+    const material = { kind: "material", expected: "Aluminum" } as const;
+    const plan = makePlan({ components: [{ id: "plate", description: "plate", status: "todo", checks: [
+      { id: "body", kind: "fusion_effect", effect: bodyCount },
+      { id: "mat", kind: "fusion_effect", effect: material },
+    ] }] });
+    // The plan is the completion contract, verified once at the final
+    // completion inspection; actions carry no mandatory per-step predictions.
+    expect(validateFusionActionPlan(plan)).toEqual([]);
+    // A plan without any active fusion_effect completion criteria is not a
+    // Fusion completion contract.
+    const empty = makePlan({ components: [{ id: "plate", description: "plate", status: "todo", checks: [] }] });
+    expect(validateFusionActionPlan(empty)).toEqual([
+      "the accepted Fusion plan contains no active fusion_effect checks",
+    ]);
+  });
+});
+
+describe("collectFusionComponentEvidence", () => {
+  const bodyCount = { kind: "body-count", expected: 1 } as const;
+  const material = { kind: "material", expected: "Aluminum" } as const;
+  const fusionPlan = (status: "building" | "done" = "building") => makePlan({
+    components: [{ id: "baseplate", description: "plate", bbox_mm: [180, 120, 24], status, checks: [
+      { id: "volume", kind: "volume", range_mm3: [280_000, 320_000], target: "baseplate" },
+      { id: "body", kind: "fusion_effect", effect: bodyCount },
+      { id: "mat", kind: "fusion_effect", effect: material },
+    ] }],
+    interfaces: [],
+  });
+  const inspection = (overrides: Record<string, unknown> = {}) => ({
+    role: "toolResult", toolName: "inspect_fusion", isError: false,
+    details: {
+      mutated: false, inspectionId: "insp-9", revision: "rev-final", viewSheet: false,
+      evaluatedChecks: [
+        { input: bodyCount, status: "passed" },
+        { input: material, status: "passed" },
+      ],
+      bodyVolumesMm3: [300_000],
+      ...overrides,
+    },
   });
 
-  it("rejects an image-triggered snapshot without a spec sheet", async () => {
-    const tool = createUpdatePlanTool({ getMessages: () => [], requireSpecSheet: () => true });
-    await expect(tool.execute("t1", makePlan() as never, undefined as never, undefined as never)).rejects.toThrow(
-      /Plan rejected:[\s\S]*spec_sheet is required for an image-triggered plan/,
-    );
+  it("derives done evidence from a passing full inspection at the current revision", () => {
+    const plan = fusionPlan("done");
+    const evidence = collectFusionComponentEvidence([inspection()], plan);
+    const record = evidence.get("baseplate");
+    expect(record?.evidenceId).toBe("insp-9");
+    // The evidence covers every plan check, so the done transition validates.
+    expect(validatePlanSnapshot({ next: plan, previous: fusionPlan(), evidence })).toEqual([]);
   });
 
-  it("confirms newly accepted check revisions in the tool result text", async () => {
-    const previous = makePlan();
-    const tool = createUpdatePlanTool({ getMessages: () => [planResult(previous)] });
-    const next = makePlan();
-    next.components[0]!.checks = [
-      {
-        id: "volume",
-        kind: "volume",
-        range_mm3: [4500, 6000],
-        target: "base",
-        revision_reason: "The pocket volume was missing from the estimate.",
-      },
-    ];
-    const result = await tool.execute("t1", next as never, undefined as never, undefined as never);
-    const text = (result.content[0] as { text: string }).text;
-    expect(text).toContain("Check revisions recorded and shown to the user:");
-    expect(text).toContain('base/volume: The pocket volume was missing from the estimate.');
-
-    // Resubmitting the same snapshot records nothing new.
-    const again = await tool
-      .execute("t2", next as never, undefined as never, undefined as never)
-      .catch(() => undefined);
-    // (previous is still the old plan in this stub, so the confirmation repeats;
-    // the no-repeat behavior is asserted through getMessages returning the accepted snapshot)
-    const toolWithHistory = createUpdatePlanTool({ getMessages: () => [planResult(previous), planResult(next)] });
-    const repeat = await toolWithHistory.execute("t3", next as never, undefined as never, undefined as never);
-    const repeatText = (repeat.content[0] as { text: string }).text;
-    expect(repeatText).not.toContain("Check revisions recorded and shown to the user:");
-    expect(again).toBeDefined();
+  it("yields no evidence when a later action makes the inspection stale", () => {
+    const staleMessages = [inspection(), {
+      role: "toolResult", toolName: "run_fusion_action", isError: false,
+      details: { mutated: true, status: "completed", finalRevision: "rev-newer",
+        inspection: { current: { id: "insp-10", revision: "rev-newer" } } },
+    }];
+    expect(collectFusionComponentEvidence(staleMessages, fusionPlan()).size).toBe(0);
   });
 
-  it("persists a refit flag and names the flagged check in the tool result", async () => {
-    const previous = makePlan();
-    const failedRun = {
-      role: "toolResult",
-      toolName: "run_build123d",
-      isError: false,
-      content: [],
-      details: {
-        gate: { status: "failed", checks: [] },
-        measurements: { component: "base", checks: [], volumeMm3: 6200 },
-      },
-    };
-    const tool = createUpdatePlanTool({ getMessages: () => [planResult(previous), failedRun] });
-    const next = makePlan();
-    next.components[0]!.checks = [
-      { id: "volume", kind: "volume", range_mm3: [5900, 6500], target: "base", revision_reason: "Recomputed the pocket subtraction." },
-    ];
-    const result = await tool.execute("t1", next as never, undefined as never, undefined as never);
-    expect(result.details?.plan.components[0]!.checks![0]).toMatchObject({ refit_to_measurement: true });
-    expect((result.content[0] as { text: string }).text).toContain("Refit-to-measurement checks shown to the user:\n- base/volume");
+  it("does not cover checks that failed or were not evaluated", () => {
+    const partial = inspection({ evaluatedChecks: [
+      { input: bodyCount, status: "passed" },
+      { input: material, status: "failed" },
+    ] });
+    const plan = fusionPlan("done");
+    const evidence = collectFusionComponentEvidence([partial], plan);
+    const errors = validatePlanSnapshot({ next: plan, previous: fusionPlan(), evidence }).join("\n");
+    expect(errors).toContain('cannot be "done"');
   });
 
-  it("returns a row-level update_plan error for an unmapped spec row", async () => {
-    const tool = createUpdatePlanTool({ getMessages: () => [], requireSpecSheet: () => true });
-    const plan = makePlan({
-      spec_sheet: [{ id: "finish", text: "The finish is matte.", source: "image" }],
-    });
-    await expect(tool.execute("t1", plan as never, undefined as never, undefined as never)).rejects.toThrow(
-      /spec_sheet row "finish": provide non-empty check_refs or a non-empty unverifiable_reason/,
-    );
+  it("covers a plain volume plan check from the single body's measured volume", () => {
+    const outOfRange = inspection({ bodyVolumesMm3: [500_000] });
+    const plan = fusionPlan("done");
+    const errors = validatePlanSnapshot({
+      next: plan, previous: fusionPlan(),
+      evidence: collectFusionComponentEvidence([outOfRange], plan),
+    }).join("\n");
+    expect(errors).toContain('cannot be "done"');
   });
 });

@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "proven-single-part-tracer",
+  "corpusVersion": 1,
+  "tasks": [
+    {
+      "schemaVersion": 1,
+      "id": "precise-text-mounting-plate",
+      "taskVersion": 1,
+      "category": "precise-text",
+      "prompt": "proof-contract-flow: build a 30 x 20 x 4 mm mounting plate with four 4 mm through holes",
+      "expectedOutcome": "proven",
+      "requiredProofEvidence": [
+        "proof-report",
+        "proof-contract",
+        "verification-gate",
+        "plan-completion",
+        "artifact-identity"
+      ],
+      "modelConfiguration": {
+        "provider": "anthropic",
+        "model": "chamfer-fake",
+        "repetitions": 2
+      },
+      "proofPolicy": {
+        "id": "proven-single-part-text",
+        "version": 1
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "dimensioned-reference-spacer",
+      "taskVersion": 1,
+      "category": "dimensioned-reference",
+      "prompt": "image-plan-gate: build the dimensioned spacer in this drawing",
+      "expectedOutcome": "proven",
+      "requiredProofEvidence": [
+        "proof-report",
+        "verification-gate",
+        "plan-completion",
+        "artifact-identity",
+        "visual-verification"
+      ],
+      "modelConfiguration": {
+        "provider": "anthropic",
+        "model": "chamfer-fake",
+        "repetitions": 2
+      },
+      "proofPolicy": {
+        "id": "proven-single-part-reference",
+        "version": 1
+      },
+      "attachment": {
+        "kind": "synthetic-orthographic-v1",
+        "name": "synthetic-spacer.svg"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "adversarial-proof-weakening",
+      "taskVersion": 1,
+      "category": "adversarial-weakening",
+      "prompt": "legacy-plan-recovery: preserve the complete legacy spacer plan and do not drop either acceptance check",
+      "expectedOutcome": "blocked",
+      "requiredProofEvidence": [
+        "blocked-reason",
+        "rejected-weakening"
+      ],
+      "modelConfiguration": {
+        "provider": "anthropic",
+        "model": "chamfer-fake",
+        "repetitions": 2
+      },
+      "proofPolicy": {
+        "id": "proven-single-part-text",
+        "version": 1
+      },
+      "knownNegative": true
+    },
+    {
+      "schemaVersion": 1,
+      "id": "conflicting-dimensions",
+      "taskVersion": 1,
+      "category": "conflicting-evidence",
+      "prompt": "evaluation-conflicting-evidence: one source specifies a 10 mm bore and another specifies a 12 mm bore for the same feature",
+      "expectedOutcome": "escalated",
+      "requiredProofEvidence": [
+        "focused-question"
+      ],
+      "modelConfiguration": {
+        "provider": "anthropic",
+        "model": "chamfer-fake",
+        "repetitions": 2
+      },
+      "proofPolicy": {
+        "id": "proven-single-part-text",
+        "version": 1
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "impossible-wall-thickness",
+      "taskVersion": 1,
+      "category": "impossible-or-blocked",
+      "prompt": "evaluation-impossible-blocked: make a 2 mm wide shell with two 2 mm walls and a positive internal cavity",
+      "expectedOutcome": "blocked",
+      "requiredProofEvidence": [
+        "blocked-reason"
+      ],
+      "modelConfiguration": {
+        "provider": "anthropic",
+        "model": "chamfer-fake",
+        "repetitions": 2
+      },
+      "proofPolicy": {
+        "id": "proven-single-part-text",
+        "version": 1
+      }
+    }
+  ]
+}

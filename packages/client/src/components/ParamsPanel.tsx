@@ -220,11 +220,12 @@ export function ConnectedParamsPanel() {
     await applyParams(
       values,
       activeConversationId
-        ? async (code) => {
-            await rest.postArtifact(activeConversationId, {
+          ? async (code) => {
+            const artifact = await rest.postArtifact(activeConversationId, {
               pySource: code,
               paramsJson: JSON.stringify(values),
             });
+            return { id: artifact.id, version: artifact.version };
           }
         : undefined,
     );

@@ -1,6 +1,13 @@
 import { Hono } from "hono";
 import type { DatabaseSync } from "node:sqlite";
-import { DEFAULT_CONVERSATION_TITLE, type AttachmentReferenceBlock, type GenerateTitleDto } from "@chamfer/shared";
+import {
+  DEFAULT_CONVERSATION_TITLE,
+  isCadCodeIdentity,
+  isMeasurements,
+  type AttachmentReferenceBlock,
+  type CadEnvironment,
+  type GenerateTitleDto,
+} from "@chamfer/shared";
 import {
   conversationExists,
   attachmentReferenceCount,
@@ -25,6 +32,7 @@ import type { LlmStreamer } from "../llm";
 import { deleteConversationWithAttachments } from "../conversationDeletion";
 
 const VALID_ATTACHMENT_KINDS = new Set(["user-image", "view-sheet"]);
+const VALID_CAD_ENVIRONMENTS = new Set<CadEnvironment>(["build123d", "fusion"]);
 
 const SQLITE_CONSTRAINT_UNIQUE = 2067;
 
@@ -88,6 +96,9 @@ function validateAtomicMessage(
     if (viewSheets.length !== 1 || !isRecord(message.details) || !isRecord(message.details.inspectionSheet)) {
       return { error: "CAD image messages require one derived inspection sheet" };
     }
+    if (!isCadCodeIdentity(message.details.code) || !isMeasurements(message.details.measurements)) {
+      return { error: "CAD image messages require valid code identity and measurements" };
+    }
     const expectedSheet = {
       attachmentId: viewSheets[0]!.attachmentId,
       code: message.details.code,
@@ -96,6 +107,14 @@ function validateAtomicMessage(
     };
     if (JSON.stringify(message.details.inspectionSheet) !== JSON.stringify(expectedSheet)) {
       return { error: "inspection sheet metadata must derive from the CAD result" };
+    }
+  } else if (message.role === "toolResult" &&
+      (message.toolName === "run_fusion_action" || message.toolName === "inspect_fusion")) {
+    const visual = isRecord(message.details) && isRecord(message.details.visualArtifact) ? message.details.visualArtifact : undefined;
+    const inspectionSheet = visual && isRecord(visual.inspectionSheet) ? visual.inspectionSheet : undefined;
+    if (viewSheets.length !== 1 || inspectionSheet?.attachmentId !== viewSheets[0]!.attachmentId ||
+        typeof visual?.artifactId !== "string" || typeof visual.artifactVersion !== "number" || typeof visual.revision !== "string") {
+      return { error: "Fusion image messages require one revision-bound inspection sheet" };
     }
   } else if (viewSheets.length > 0) {
     return { error: "view sheets can only belong to CAD results" };
@@ -131,13 +150,25 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
   const app = new Hono();
 
   app.post("/api/conversations", async (c) => {
-    const { title } = (await c.req.json()) as { title: string };
-    const conversation = createConversation(db, title);
+    const body = (await c.req.json()) as { title?: unknown; cadEnvironment?: unknown };
+    if (typeof body.title !== "string" || body.title.trim().length === 0) {
+      return c.json({ error: "title is required" }, 400);
+    }
+    if (typeof body.cadEnvironment !== "string" ||
+        !VALID_CAD_ENVIRONMENTS.has(body.cadEnvironment as CadEnvironment)) {
+      return c.json({ error: "cadEnvironment must be build123d or fusion" }, 400);
+    }
+    const conversation = createConversation(db, body.title, body.cadEnvironment as CadEnvironment);
     return c.json(conversation);
   });
 
   app.get("/api/conversations", (c) => {
     return c.json(listConversations(db));
+  });
+
+  app.get("/api/conversations/:id", (c) => {
+    const conversation = getConversation(db, c.req.param("id"));
+    return conversation ? c.json(conversation) : c.json({ error: "not found" }, 404);
   });
 
   app.post("/api/conversations/:id/generate-title", async (c) => {

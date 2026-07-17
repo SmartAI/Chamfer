@@ -818,6 +818,57 @@ def _gate_check(name, passed, detail):
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
+def _single_component_integrity(source, shape):
+    """Kernel-owned integrity verdict for one declared deliverable component.
+
+    Diagnostic probes, assemblies, and legacy scripts without a COMPONENT
+    declaration keep their existing behavior. A single named deliverable is
+    stricter: its root label must carry that identity and its B-rep must be one
+    connected valid solid.
+    """
+    try:
+        component = parse_component(source)
+    except ValueError:
+        return None
+    if not isinstance(component, str) or component == PROBE_COMPONENT:
+        return None
+
+    result_label = getattr(shape, "label", "") or ""
+    solid_count = len(shape.solids())
+    valid = bool(shape.is_valid)
+    issues = []
+    if result_label != component:
+        found = repr(result_label) if result_label else "no label"
+        issues.append({
+            "code": "component-identity",
+            "detail": (
+                f'Component declaration names "{component}", but the result root has {found}. '
+                f'Set result.label = "{component}".'
+            ),
+        })
+    if solid_count != 1:
+        issues.append({
+            "code": "disconnected-solid",
+            "detail": (
+                f'Component "{component}" has disconnected geometry: expected exactly '
+                f"1 connected solid, found {solid_count}."
+            ),
+        })
+    if not valid:
+        issues.append({
+            "code": "invalid-topology",
+            "detail": f'Component "{component}" has invalid B-rep topology.',
+        })
+    return {
+        "status": "nonconforming" if issues else "conforming",
+        "componentId": component,
+        "resultLabel": result_label,
+        "solidCount": solid_count,
+        "valid": valid,
+        "issues": issues,
+    }
+
+
 def _resolve_target(shape, target):
     """The shape a check applies to: the whole result, one child by label, or
     the result itself when its own label matches (so a single-component run
@@ -1050,6 +1101,19 @@ def _run_gate_checks(source, shape):
         parse_component(source)
     except ValueError as e:
         checks.append(_gate_check("component_block", False, str(e)))
+    integrity = _single_component_integrity(source, shape)
+    if integrity is not None:
+        detail = (
+            f'Component "{integrity["componentId"]}" is one connected valid solid '
+            "with matching declaration and result label."
+            if integrity["status"] == "conforming"
+            else " ".join(issue["detail"] for issue in integrity["issues"])
+        )
+        checks.append(_gate_check(
+            "single_component_integrity",
+            integrity["status"] == "conforming",
+            detail,
+        ))
     try:
         expect = parse_expect(source)
     except ValueError as e:
@@ -1196,6 +1260,9 @@ def run_script(source: str) -> dict:
         positions = [c for v in vertices for c in (v.X, v.Y, v.Z)]
         indices = [i for tri in triangles for i in tri]
         measurements = _measure(shape)
+        integrity = _single_component_integrity(source, shape)
+        if integrity is not None:
+            measurements["integrity"] = integrity
         # Plan evidence echo: which component(s) this run declared, and the raw
         # CHECKS entries it ran. Malformed declarations surface through the gate
         # (component_block / checks_block checks), not here.

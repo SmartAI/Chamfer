@@ -8,7 +8,7 @@ import {
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { compactionBoundary, transformLlmContext, type CompactionMessage } from "./contextPolicy";
-import { isPlanToolResult } from "./plan";
+import { projectStaleFusionInspectionText } from "./inspectionSheetLifecycle";
 
 /**
  * Domain-aware context compaction for long design sessions, built on pi's compaction
@@ -32,15 +32,15 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 /** Below this many messages to summarize, compaction is not worth an LLM call. */
 const MIN_MESSAGES_TO_SUMMARIZE = 4;
 
-export const CHAMFER_SUMMARY_INSTRUCTIONS = `This conversation is a CAD design session: a user directing an agent that writes build123d scripts, runs them, and verifies the geometry against a verify gate.
+export const CHAMFER_SUMMARY_INSTRUCTIONS = `This conversation is a CAD design session: a user directing an agent that builds geometry (build123d scripts, or native Fusion actions against a bound document), runs it, and verifies every result against independent measurements.
 
 The summary MUST preserve, verbatim where stated:
 1. Every user-stated requirement: dimensions, tolerances, counts, spacings, angles, materials, orientations, units, and named features. Never round, drop, or paraphrase a number.
 2. The overall design intent and its component breakdown, with per-component status: built and gate-passed, built but failing, or not started.
 3. Decisions and corrections made along the way, including anything the user explicitly rejected or changed their mind about.
-4. The most recent verify-gate verdict and measured overall dimensions, and what remains to be done next.
+4. The most recent verification verdict, measured overall dimensions, and (for Fusion) the current design revision hash, and what remains to be done next.
 
-Format as short titled sections with bullet lists. Do not include Python code; the latest script is stored separately and remains available to the agent. Do not restate the content of loaded skills (load_skill results); they are re-attached to the context mechanically.`;
+Format as short titled sections with bullet lists. Do not include Python code; the latest script is stored separately and remains available to the agent. Do not restate the accepted plan, source specifications, or loaded skills; they are re-attached to the context mechanically.`;
 
 /** True when a toolResult message carries a verify-gate verdict. */
 function hasGateVerdict(message: unknown): boolean {
@@ -67,8 +67,8 @@ export function needsCompaction(messages: AgentMessage[], model: Model<Api>): { 
  * First transcript index of the kept tail: walking back from the end until roughly
  * `keepRecentTokens` are retained, snapped back to the start of a user turn so
  * assistant/toolResult pairs are never split, never past the newest verify-gate
- * result (the latest gate + measurements always stay verbatim), and never past the
- * newest accepted plan snapshot (the plan of record must stay in context verbatim).
+ * result (the latest gate + measurements always stay verbatim). The normalized
+ * plan of record is reprojected mechanically and does not pin historical snapshots.
  * Returns a value <= `floor` when there is nothing worth summarizing.
  */
 export function findCompactionCut(
@@ -84,7 +84,7 @@ export function findCompactionCut(
     if (accumulated >= keepRecentTokens) break;
   }
 
-  for (const keep of [hasGateVerdict, isPlanToolResult]) {
+  for (const keep of [hasGateVerdict]) {
     for (let index = messages.length - 1; index >= floor; index -= 1) {
       if (keep(messages[index])) {
         if (index < candidate) candidate = index;
@@ -115,12 +115,20 @@ function withoutImages(messages: AgentMessage[]): AgentMessage[] {
   });
 }
 
+
 export interface RunCompactionArgs {
   messages: AgentMessage[];
   model: Model<Api>;
   streamFn: StreamFn;
   /** Called right before the summary LLM call starts (feeds the "compacting" UI status). */
   onStart?: () => void;
+  /** Environment-owned provider projection. Applied only to the summary payload;
+   * durable history and compaction indices remain unchanged. */
+  projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
+  /** Compact even when the token estimate is below pi's threshold. Used after a
+   * provider context-overflow error, where the estimate has already been proven
+   * wrong by the provider's own tokenizer. */
+  force?: boolean;
 }
 
 /**
@@ -129,8 +137,9 @@ export interface RunCompactionArgs {
  * when compaction is unnecessary or not worthwhile. Throws when the summary LLM
  * call itself fails; callers treat that as non-fatal and skip compaction.
  */
-export async function runCompaction({ messages, model, streamFn, onStart }: RunCompactionArgs): Promise<CompactionMessage | undefined> {
-  const needed = needsCompaction(messages, model);
+export async function runCompaction({ messages, model, streamFn, onStart, projectMessages, force }: RunCompactionArgs): Promise<CompactionMessage | undefined> {
+  const needed = needsCompaction(messages, model)
+    ?? (force ? { tokens: estimateContextTokens(transformLlmContext(messages)).tokens } : undefined);
   if (!needed) return undefined;
 
   const boundary = compactionBoundary(messages);
@@ -138,14 +147,23 @@ export async function runCompaction({ messages, model, streamFn, onStart }: RunC
   const cut = findCompactionCut(messages, floor);
   // Also summarize the previous boundary's kept tail (visibleStart..boundary.index):
   // it precedes the new cut, so it leaves the context and must fold into the summary.
+  // Stale fusion snapshots are stubbed against the FULL transcript before slicing
+  // (content-only transformation, indices unchanged): an inspection superseded by
+  // a newer one in the kept tail never needs to enter the summary verbatim.
   const visibleStart = boundary ? boundary.visibleStart : 0;
-  const toSummarize = messages
+  const toSummarize = projectStaleFusionInspectionText(messages)
     .slice(visibleStart, cut)
     .filter((message) => (message as { role?: unknown }).role !== "compaction");
   if (toSummarize.length < MIN_MESSAGES_TO_SUMMARIZE) return undefined;
 
   onStart?.();
-  const conversation = serializeConversation(withoutImages(toSummarize) as Message[]);
+  // The summary payload is shrunk in layers: environment projection, images
+  // stripped, and (inside pi's serializeConversation) tool-result text capped
+  // at 2k chars. The stale-snapshot stub above matters here too: pi truncates
+  // blindly from the head, which would keep snapshot JSON prefix and drop the
+  // check verdicts; the stub keeps the verdicts instead.
+  const providerMessages = projectMessages ? projectMessages(toSummarize) : toSummarize;
+  const conversation = serializeConversation(withoutImages(providerMessages) as Message[]);
   const parts = [
     boundary ? `Previous summary of even earlier work:\n${boundary.row.summary}` : undefined,
     `Conversation to summarize:\n${conversation}`,

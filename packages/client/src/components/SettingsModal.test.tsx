@@ -15,6 +15,9 @@ const SETTINGS: SettingsResponseDto = {
   googleApiKey: "",
   modelJson: JSON.stringify({ id: "claude-opus-4" }),
   sources: {},
+  experimentalFusionEnabled: false,
+  fusionEnabled: false,
+  fusionIntegrity: { access: "hidden", verdict: "no-go", limitations: ["Test fixture"] },
 };
 
 const MODELS: ModelInfoDto[] = [

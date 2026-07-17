@@ -2,6 +2,35 @@ import { describe, expect, it } from "vitest";
 import { fakeLlm } from "./fakeLlm";
 
 describe("fake visual-finalization scenario", () => {
+  it("finishes the image plan after the accepted plan revision without re-running CAD", async () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "image-plan-gate" }] },
+      ...[
+        ["image-plan-reference-specifications", "record_reference_specifications"],
+        ["image-plan-classify", "classify_reference"],
+        ["image-plan-register", "register_reference_view"],
+        ["image-plan-invalid", "update_plan"],
+        ["image-plan-valid", "create_plan"],
+      ].flatMap(([id, name]) => [
+        { role: "assistant", content: [{ type: "toolCall", id, name, arguments: {} }] },
+        { role: "toolResult", toolCallId: id, toolName: name, content: [], isError: false },
+      ]),
+      ...["image-plan-run-rejected", "image-plan-run-valid"].flatMap((id) => [
+        { role: "assistant", content: [{ type: "toolCall", id, name: "run_build123d", arguments: {} }] },
+        { role: "toolResult", toolCallId: id, toolName: "run_build123d", content: [], isError: id.endsWith("rejected") },
+      ]),
+      { role: "assistant", content: [{ type: "toolCall", id: "image-plan-done", name: "revise_plan", arguments: {} }] },
+      { role: "toolResult", toolCallId: "image-plan-done", toolName: "revise_plan", content: [], isError: false },
+    ];
+
+    const events = [];
+    for await (const event of fakeLlm().stream({} as never, { messages } as never, {} as never)) events.push(event);
+    expect(events.find((event) => event.type === "done")?.message.content[0]).toMatchObject({
+      type: "text",
+      text: "Spacer complete: the image plan is built and verified.",
+    });
+  });
+
   it("pauses after premature CAD rejection without creating active-reference finalization work", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "retrievable-evidence-workflow" }] },
@@ -23,6 +52,10 @@ describe("fake visual-finalization scenario", () => {
         { role: "assistant", content: [{ type: "toolCall", id: `workflow-classify-${name}`, name: "classify_reference", arguments: {} }] },
         { role: "toolResult", toolCallId: `workflow-classify-${name}`, toolName: "classify_reference", content: [] },
       ]),
+      ...["primary", "detail", "profile"].flatMap((name) => [
+        { role: "assistant", content: [{ type: "toolCall", id: `workflow-register-${name}`, name: "register_reference_view", arguments: {} }] },
+        { role: "toolResult", toolCallId: `workflow-register-${name}`, toolName: "register_reference_view", content: [] },
+      ]),
       { role: "assistant", content: [{ type: "toolCall", id: "workflow-inspect-old", name: "inspect_evidence", arguments: {} }] },
       { role: "toolResult", toolCallId: "workflow-inspect-old", toolName: "inspect_evidence", content: [] },
       { role: "assistant", content: [{ type: "toolCall", id: "workflow-observe-old", name: "record_inspection_observation", arguments: {} }] },
@@ -43,6 +76,7 @@ describe("fake visual-finalization scenario", () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "visual-finalization-setup" }] },
       { role: "user", content: [{ type: "text", text: "[Reference visual-reference-e2e: status=active; purpose=primary]" }] },
+      { role: "toolResult", toolCallId: "visual-register", toolName: "register_reference_view", content: [], isError: false },
       { role: "user", content: [{ type: "text", text: "visual-finalization-build" }] },
       { role: "assistant", content: [{ type: "toolCall", id: "visual-run-1", name: "run_build123d", arguments: {} }] },
       { role: "user", content: [

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": 1,
+  "fixtures": [
+    {
+      "id": "proven-evidence-accepted",
+      "expectation": {
+        "expectedOutcome": "proven",
+        "requiredProofEvidence": ["proof-report", "verification-gate"]
+      },
+      "observation": {
+        "provider": "fixture",
+        "model": "deterministic",
+        "promptVersion": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "latencyMs": 0,
+        "tokenUse": { "input": 0, "output": 0, "total": 0 },
+        "cadRunCount": 1,
+        "finalStatus": "proven",
+        "evidence": ["proof-report", "verification-gate"],
+        "proofIdentities": { "proofPolicyId": "fixture-policy", "proofPolicyVersion": 1 }
+      },
+      "expected": { "passed": true, "falseProven": false }
+    },
+    {
+      "id": "cad-only-result-rejected",
+      "expectation": {
+        "expectedOutcome": "proven",
+        "requiredProofEvidence": ["proof-report", "verification-gate"]
+      },
+      "observation": {
+        "provider": "fixture",
+        "model": "deterministic",
+        "promptVersion": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "latencyMs": 0,
+        "tokenUse": { "input": 0, "output": 0, "total": 0 },
+        "cadRunCount": 1,
+        "finalStatus": "unproven",
+        "evidence": ["verification-gate"],
+        "proofIdentities": { "proofPolicyId": "fixture-policy", "proofPolicyVersion": 1 }
+      },
+      "expected": { "passed": false, "falseProven": false }
+    },
+    {
+      "id": "known-negative-proven-rejected",
+      "expectation": {
+        "expectedOutcome": "blocked",
+        "requiredProofEvidence": ["blocked-reason"],
+        "knownNegative": true
+      },
+      "observation": {
+        "provider": "fixture",
+        "model": "deterministic",
+        "promptVersion": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "latencyMs": 0,
+        "tokenUse": { "input": 0, "output": 0, "total": 0 },
+        "cadRunCount": 1,
+        "finalStatus": "proven",
+        "evidence": ["proof-report"],
+        "proofIdentities": { "proofPolicyId": "fixture-policy", "proofPolicyVersion": 1 }
+      },
+      "expected": { "passed": false, "falseProven": true }
+    },
+    {
+      "id": "focused-escalation-accepted",
+      "expectation": {
+        "expectedOutcome": "escalated",
+        "requiredProofEvidence": ["focused-question"]
+      },
+      "observation": {
+        "provider": "fixture",
+        "model": "deterministic",
+        "promptVersion": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "latencyMs": 0,
+        "tokenUse": { "input": 0, "output": 0, "total": 0 },
+        "cadRunCount": 0,
+        "finalStatus": "escalated",
+        "evidence": ["focused-question"],
+        "proofIdentities": { "proofPolicyId": "fixture-policy", "proofPolicyVersion": 1 }
+      },
+      "expected": { "passed": true, "falseProven": false }
+    },
+    {
+      "id": "honest-block-accepted",
+      "expectation": {
+        "expectedOutcome": "blocked",
+        "requiredProofEvidence": ["blocked-reason"]
+      },
+      "observation": {
+        "provider": "fixture",
+        "model": "deterministic",
+        "promptVersion": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "latencyMs": 0,
+        "tokenUse": { "input": 0, "output": 0, "total": 0 },
+        "cadRunCount": 0,
+        "finalStatus": "blocked",
+        "evidence": ["blocked-reason"],
+        "proofIdentities": { "proofPolicyId": "fixture-policy", "proofPolicyVersion": 1 }
+      },
+      "expected": { "passed": true, "falseProven": false }
+    }
+  ]
+}

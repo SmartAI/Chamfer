@@ -4,6 +4,7 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { findCompactionCut, needsCompaction, runCompaction } from "./compaction";
 import { isCompactionMessage } from "./contextPolicy";
+import { projectFusionModelContext } from "./fusionContextPolicy";
 
 const MODEL = {
   id: "fake",
@@ -116,7 +117,7 @@ describe("findCompactionCut", () => {
     expect(findCompactionCut(messages, 0, 10)).toBe(0);
   });
 
-  it("never cuts past the newest accepted plan snapshot", () => {
+  it("can cut past plan snapshots because the normalized plan is reprojected", () => {
     const planResult = {
       role: "toolResult",
       toolCallId: "plan-1",
@@ -134,9 +135,7 @@ describe("findCompactionCut", () => {
       bigUser(30_000, "later chatter"),
       assistant("reply"),
     ];
-    // Budget alone would keep only the tail; the plan result pulls the cut back
-    // to the start of its turn so the plan of record stays in context verbatim.
-    expect(findCompactionCut(messages, 0, 1_000)).toBe(2);
+    expect(findCompactionCut(messages, 0, 1_000)).toBe(4);
   });
 });
 
@@ -178,6 +177,105 @@ describe("runCompaction", () => {
     const prompt = request.messages[0]?.content[0]?.text ?? "";
     expect(prompt).toContain("gearbox housing");
     expect(prompt).toContain("Never round, drop, or paraphrase a number");
+  });
+
+  it("applies the Fusion privacy projection before the compaction provider request", async () => {
+    const messages = [
+      user("Create the bound bracket"),
+      { role: "toolResult", toolCallId: "safe", toolName: "inspect_fusion", isError: false,
+        content: [{ type: "text", text: "Revision: rev-1" }],
+        details: { endpoint: "http://127.0.0.1:27182/mcp", nativeToken: "private-token" }, timestamp: 0 },
+      { role: "toolResult", toolCallId: "raw", toolName: "fusion_mcp_read", isError: false,
+        content: [{ type: "text", text: "unrelated-project.f3d" }], details: { credential: "secret" }, timestamp: 0 },
+      bigUser(45_000, "more requirements"), assistant("ack"),
+      bigUser(45_000, "even more"), assistant("ack 2"), user("tail"), assistant("done"),
+    ] as unknown as AgentMessage[];
+    const streamFn = summaryStreamFn("- Bound bracket at rev-1.");
+    await runCompaction({ messages, model: MODEL, streamFn, projectMessages: projectFusionModelContext });
+
+    const request = (streamFn as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { messages: { content: { text: string }[] }[] };
+    const prompt = request.messages[0]?.content[0]?.text ?? "";
+    expect(prompt).toContain("Revision: rev-1");
+    expect(prompt).not.toContain("127.0.0.1");
+    expect(prompt).not.toContain("private-token");
+    expect(prompt).not.toContain("fusion_mcp_read");
+    expect(prompt).not.toContain("unrelated-project.f3d");
+    expect(prompt).not.toContain("secret");
+  });
+
+  it("force-compacts a history below pi's threshold after a provider overflow", async () => {
+    const messages = [
+      user("Design a bracket 40x20x5mm"),
+      assistant("Working"),
+      bigUser(25_000, "requirement dump one"),
+      assistant("ack"),
+      bigUser(25_000, "requirement dump two"),
+      assistant("ack 2"),
+      user("tail"),
+      assistant("done"),
+    ];
+    // Below the ~84k-token threshold for a 100k window: the normal path declines.
+    expect(await runCompaction({ messages, model: MODEL, streamFn: summaryStreamFn("unused") })).toBeUndefined();
+    const row = await runCompaction({ messages, model: MODEL, streamFn: summaryStreamFn("- Bracket 40x20x5mm."), force: true });
+    expect(isCompactionMessage(row)).toBe(true);
+    expect(row!.keptTail).toBeLessThan(messages.length);
+  });
+
+  it("caps oversized tool-result text and stubs stale fusion snapshots in the summary payload", async () => {
+    const staleInspection = {
+      role: "toolResult", toolCallId: "inspect-1", toolName: "inspect_fusion", isError: false,
+      content: [{ type: "text", text: [
+        "# Bound Fusion inspection",
+        "Document: Untitled (doc-1)",
+        "Revision: rev-1",
+        `Snapshot: ${JSON.stringify({ giant: "s".repeat(60_000) })}`,
+        "Checks: []",
+      ].join("\n") }],
+      details: {}, timestamp: 0,
+    } as unknown as AgentMessage;
+    const bigActionResult = {
+      role: "toolResult", toolCallId: "action-1", toolName: "run_fusion_action", isError: false,
+      content: [{ type: "text", text: `Fusion action completed. ${"a".repeat(70_000)}` }],
+      details: {}, timestamp: 0,
+    } as unknown as AgentMessage;
+    // 100k chars so the kept-tail accumulation breaks exactly here, leaving the
+    // stale inspection and the oversized action result inside the summary slice.
+    const currentInspection = {
+      role: "toolResult", toolCallId: "inspect-2", toolName: "inspect_fusion", isError: false,
+      content: [{ type: "text", text: [
+        "# Bound Fusion inspection",
+        "Document: Untitled (doc-1)",
+        "Revision: rev-2",
+        `Snapshot: ${JSON.stringify({ giant: "c".repeat(100_000) })}`,
+        "Checks: []",
+      ].join("\n") }],
+      details: {}, timestamp: 0,
+    } as unknown as AgentMessage;
+    const messages = [
+      user("Create the bound bracket"),
+      staleInspection,
+      bigActionResult,
+      assistant("progress"),
+      user("inspect again"),
+      currentInspection,
+      assistant("second look"),
+      user("tail"),
+      assistant("done"),
+    ];
+    const streamFn = summaryStreamFn("- Bracket at rev-2.");
+    const row = await runCompaction({ messages, model: MODEL, streamFn, force: true, projectMessages: projectFusionModelContext });
+
+    expect(isCompactionMessage(row)).toBe(true);
+    const request = (streamFn as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { messages: { content: { text: string }[] }[] };
+    const prompt = request.messages[0]?.content[0]?.text ?? "";
+    // The stale snapshot collapses to a stub (superseded by the kept-tail
+    // inspection); the oversized action text is capped by pi's serialization.
+    expect(prompt).not.toContain("s".repeat(10_000));
+    expect(prompt).not.toContain("a".repeat(10_000));
+    expect(prompt).toContain("Superseded by a newer trusted inspection");
+    expect(prompt).toContain("more characters truncated");
+    // The whole summarization request stays far below the window.
+    expect(prompt.length).toBeLessThan(40_000);
   });
 
   it("is deterministic for identical durable attachment and reference-record state", async () => {

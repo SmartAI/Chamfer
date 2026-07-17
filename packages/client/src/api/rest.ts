@@ -1,12 +1,24 @@
 import type {
   ArtifactDto,
   AttachmentDto,
+  CadEnvironment,
   ConversationDto,
   GenerateTitleDto,
   MessageDto,
   ModelInfoDto,
   SettingsPatchDto,
   SettingsResponseDto,
+  FusionReadinessDto,
+  FusionDocumentBindingDto,
+  FusionDocumentationQueryDto,
+  FusionDocumentationResultDto,
+  FusionCheckInput,
+  FusionInspectionDto,
+  FusionReconciliationPollDto,
+  FusionActionRequestDto,
+  FusionActionResultDto,
+  FusionActionLedgerRecordDto,
+  FusionSaveResultDto,
   ClassifyReferenceInput,
   ReferenceClassificationDto,
   ReferenceRecordDto,
@@ -14,9 +26,23 @@ import type {
   InspectionLeaseDto,
   InspectionObservationInput,
   RecordVisualVerificationInput,
+  RecordSourceSpecificationsInput,
+  SourceSpecificationDto,
   RecordVisualVerificationBatchInput,
   VisualVerificationBatchRecordDto,
   VisualVerificationRecordDto,
+  CreateProofContractInput,
+  ProofContractDto,
+  DesignEscalationDto,
+  OpenDesignEscalationInput,
+  CreateReferenceRegistrationInput,
+  ReferenceRegistrationDto,
+  CreateProofReportInput,
+  ProofReportDto,
+  AgentRunLifecycleBatch,
+  AgentRunLifecycleDto,
+  AgentRunFeedbackDto,
+  AgentRunFeedbackRating,
 } from "@chamfer/shared";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
@@ -69,6 +95,71 @@ export function putSettings(patch: SettingsPatchDto): Promise<void> {
   return requestVoid("/api/settings", jsonInit("PUT", patch));
 }
 
+export function getFusionReadiness(conversationId?: string): Promise<FusionReadinessDto> {
+  const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : "";
+  return requestJson<FusionReadinessDto>(`/api/fusion/readiness${query}`);
+}
+
+export function bindFusionDocument(conversationId: string): Promise<FusionDocumentBindingDto> {
+  return requestJson<FusionDocumentBindingDto>(`/api/conversations/${conversationId}/fusion-binding`, {
+    method: "POST",
+  });
+}
+
+export function transferFusionOwnership(conversationId: string): Promise<FusionDocumentBindingDto> {
+  return requestJson<FusionDocumentBindingDto>(`/api/conversations/${conversationId}/fusion-ownership`, {
+    method: "POST",
+  });
+}
+
+export function saveFusionDocument(
+  conversationId: string,
+  document: FusionDocumentBindingDto["document"],
+): Promise<FusionSaveResultDto> {
+  return requestJson<FusionSaveResultDto>(`/api/conversations/${conversationId}/fusion-save`,
+    jsonInit("POST", { document }));
+}
+
+export function searchFusionDocumentation(input: FusionDocumentationQueryDto): Promise<FusionDocumentationResultDto> {
+  return requestJson<FusionDocumentationResultDto>("/api/fusion/documentation", jsonInit("POST", input));
+}
+
+export function inspectFusionDocument(
+  conversationId: string,
+  checks: FusionCheckInput[] = [],
+): Promise<FusionInspectionDto> {
+  return requestJson<FusionInspectionDto>(`/api/conversations/${conversationId}/fusion-inspections`,
+    jsonInit("POST", { checks }));
+}
+
+export function reconcileFusionDocument(conversationId: string): Promise<FusionReconciliationPollDto> {
+  return requestJson<FusionReconciliationPollDto>(`/api/conversations/${conversationId}/fusion-reconciliation`, { method: "POST" });
+}
+
+export async function executeFusionAction(conversationId: string, input: FusionActionRequestDto, signal?: AbortSignal): Promise<FusionActionResultDto> {
+  const timeout = AbortSignal.timeout(120_000);
+  const actionSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const notifyInterruption = () => {
+    const reason = actionSignal.reason instanceof DOMException && actionSignal.reason.name === "TimeoutError" ? "timeout" : "canceled";
+    void fetch(`/api/conversations/${conversationId}/fusion-actions/${encodeURIComponent(input.actionId)}/interrupt`, {
+      ...jsonInit("POST", { reason }), keepalive: true,
+    }).catch(() => undefined);
+  };
+  actionSignal.addEventListener("abort", notifyInterruption, { once: true });
+  if (actionSignal.aborted) notifyInterruption();
+  try {
+    return await requestJson<FusionActionResultDto>(`/api/conversations/${conversationId}/fusion-actions`, {
+      ...jsonInit("POST", input), signal: actionSignal,
+    });
+  } finally {
+    actionSignal.removeEventListener("abort", notifyInterruption);
+  }
+}
+
+export function listFusionActions(conversationId: string): Promise<FusionActionLedgerRecordDto[]> {
+  return requestJson<FusionActionLedgerRecordDto[]>(`/api/conversations/${conversationId}/fusion-actions`);
+}
+
 // ---------- Models ----------
 
 export function getModels(): Promise<ModelInfoDto[]> {
@@ -81,8 +172,12 @@ export function listConversations(): Promise<ConversationDto[]> {
   return requestJson<ConversationDto[]>("/api/conversations");
 }
 
-export function createConversation(title: string): Promise<ConversationDto> {
-  return requestJson<ConversationDto>("/api/conversations", jsonInit("POST", { title }));
+export function createConversation(title: string, cadEnvironment: CadEnvironment): Promise<ConversationDto> {
+  return requestJson<ConversationDto>("/api/conversations", jsonInit("POST", { title, cadEnvironment }));
+}
+
+export function getConversation(id: string): Promise<ConversationDto> {
+  return requestJson<ConversationDto>(`/api/conversations/${id}`);
 }
 
 export function generateTitle(conversationId: string): Promise<GenerateTitleDto> {
@@ -93,6 +188,98 @@ export function generateTitle(conversationId: string): Promise<GenerateTitleDto>
 
 export function deleteConversation(id: string): Promise<void> {
   return requestVoid(`/api/conversations/${id}`, { method: "DELETE" });
+}
+
+export function listSourceSpecifications(conversationId: string): Promise<SourceSpecificationDto[]> {
+  return requestJson<SourceSpecificationDto[]>(`/api/conversations/${conversationId}/source-specifications`);
+}
+
+export function recordSourceSpecifications(
+  conversationId: string,
+  input: RecordSourceSpecificationsInput,
+  idempotencyKey?: string,
+): Promise<SourceSpecificationDto[]> {
+  return requestJson<SourceSpecificationDto[]>(
+    `/api/conversations/${conversationId}/source-specifications`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function listProofContracts(conversationId: string): Promise<ProofContractDto[]> {
+  return requestJson<ProofContractDto[]>(`/api/conversations/${conversationId}/proof-contracts`);
+}
+
+export function freezeProofContract(
+  conversationId: string,
+  input: CreateProofContractInput,
+): Promise<ProofContractDto> {
+  return requestJson<ProofContractDto>(
+    `/api/conversations/${conversationId}/proof-contracts`,
+    jsonInit("POST", input),
+  );
+}
+
+export function listProofReports(conversationId: string): Promise<ProofReportDto[]> {
+  return requestJson<ProofReportDto[]>(`/api/conversations/${conversationId}/proof-reports`);
+}
+
+export function createProofReport(
+  conversationId: string,
+  input: CreateProofReportInput,
+  idempotencyKey: string,
+): Promise<ProofReportDto> {
+  return requestJson<ProofReportDto>(
+    `/api/conversations/${conversationId}/proof-reports`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function listDesignEscalations(conversationId: string): Promise<DesignEscalationDto[]> {
+  return requestJson<DesignEscalationDto[]>(`/api/conversations/${conversationId}/design-escalations`);
+}
+
+export function openDesignEscalation(
+  conversationId: string,
+  input: OpenDesignEscalationInput,
+  idempotencyKey: string,
+): Promise<DesignEscalationDto> {
+  return requestJson<DesignEscalationDto>(
+    `/api/conversations/${conversationId}/design-escalations`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function postAgentRunEvents(
+  conversationId: string,
+  runId: string,
+  batch: AgentRunLifecycleBatch,
+  signal?: AbortSignal,
+): Promise<AgentRunLifecycleDto> {
+  const init = jsonInit("POST", batch);
+  if (signal) init.signal = signal;
+  return requestJson<AgentRunLifecycleDto>(
+    `/api/conversations/${conversationId}/agent-runs/${runId}/events`,
+    init,
+  );
+}
+
+export function getAgentRun(conversationId: string, runId: string): Promise<AgentRunLifecycleDto> {
+  return requestJson<AgentRunLifecycleDto>(`/api/conversations/${conversationId}/agent-runs/${runId}`);
+}
+
+export function getLatestAgentRun(conversationId: string): Promise<AgentRunLifecycleDto> {
+  return requestJson<AgentRunLifecycleDto>(`/api/conversations/${conversationId}/agent-runs/latest`);
+}
+
+export function postAgentRunFeedback(
+  conversationId: string,
+  runId: string,
+  rating: AgentRunFeedbackRating,
+): Promise<AgentRunFeedbackDto> {
+  return requestJson<AgentRunFeedbackDto>(
+    `/api/conversations/${conversationId}/agent-runs/${runId}/feedback`,
+    jsonInit("POST", { rating }),
+  );
 }
 
 // ---------- Messages ----------
@@ -172,6 +359,21 @@ export function classifyReference(
 ): Promise<ReferenceClassificationDto> {
   return requestJson<ReferenceClassificationDto>(
     `/api/conversations/${conversationId}/reference-classifications`,
+    idempotentJsonInit("POST", input, idempotencyKey),
+  );
+}
+
+export function listReferenceRegistrations(conversationId: string): Promise<ReferenceRegistrationDto[]> {
+  return requestJson<ReferenceRegistrationDto[]>(`/api/conversations/${conversationId}/reference-registrations`);
+}
+
+export function registerReference(
+  conversationId: string,
+  input: CreateReferenceRegistrationInput,
+  idempotencyKey?: string,
+): Promise<ReferenceRegistrationDto> {
+  return requestJson<ReferenceRegistrationDto>(
+    `/api/conversations/${conversationId}/reference-registrations`,
     idempotentJsonInit("POST", input, idempotencyKey),
   );
 }

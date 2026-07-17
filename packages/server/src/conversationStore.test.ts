@@ -14,10 +14,19 @@ function toolResultJson(gateStatus: string | undefined): string {
 }
 
 describe("lastGateStatus rollup", () => {
+  it("persists an explicit Fusion environment in the conversation identity", () => {
+    const db = openDb(":memory:");
+    const conversation = createConversation(db, "Fusion design", "fusion");
+    expect(conversation.cadEnvironment).toBe("fusion");
+    expect(getConversation(db, conversation.id)?.cadEnvironment).toBe("fusion");
+    expect(listConversations(db)[0]?.cadEnvironment).toBe("fusion");
+  });
+
   it("is absent on a fresh conversation", () => {
     const db = openDb(":memory:");
     const convo = createConversation(db, "New chat");
     expect(getConversation(db, convo.id)?.lastGateStatus).toBeUndefined();
+    expect(getConversation(db, convo.id)?.sourceSpecificationsRequired).toBe(true);
   });
 
   it("is set from a gate-bearing toolResult message", () => {
@@ -63,18 +72,39 @@ describe("lastGateStatus rollup", () => {
 });
 
 describe("last_gate_status migration", () => {
-  it("adds the column to a pre-existing database without it", () => {
+  it("migrates a pre-existing conversation to build123d without losing related data", () => {
     const db = openDb(":memory:");
-    // Simulate a pre-migration DB: drop and recreate conversations without the column.
     db.exec("DROP TABLE conversations");
     db.exec(`CREATE TABLE conversations (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    )`);
+    );
+    INSERT INTO conversations VALUES ('legacy-conversation', 'Legacy design', 1, 2);
+    INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at)
+      VALUES ('legacy-message', 'legacy-conversation', 0, 'user', '{"role":"user","content":"Keep me"}', 1);
+    INSERT INTO artifacts (id, conversation_id, version, py_source, params_json, created_at)
+      VALUES ('legacy-artifact', 'legacy-conversation', 1, 'result = Box(1, 2, 3)', NULL, 1);
+    `);
+    db.prepare("INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('legacy', 'Legacy', 1, 1)").run();
     expect(() => {
       migrateDb(db);
       migrateDb(db); // idempotent
     }).not.toThrow();
     const cols = db.prepare("PRAGMA table_info(conversations)").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain("last_gate_status");
+    expect(cols.map((c) => c.name)).toContain("cad_environment");
+    expect(getConversation(db, "legacy-conversation")).toMatchObject({
+      title: "Legacy design",
+      cadEnvironment: "build123d",
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?")
+      .get("legacy-conversation")).toEqual({ count: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM artifacts WHERE conversation_id = ?")
+      .get("legacy-conversation")).toEqual({ count: 1 });
+    expect(cols.map((c) => c.name)).toContain("source_specifications_required");
+    const legacy = db.prepare("SELECT source_specifications_required AS required FROM conversations WHERE id = 'legacy'").get() as
+      { required: number };
+    expect(legacy.required).toBe(0);
+    const fresh = createConversation(db, "Fresh after migration");
+    expect(fresh.sourceSpecificationsRequired).toBe(true);
   });
 });

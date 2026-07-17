@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Gate, Measurements } from "@chamfer/shared";
+import { isCadCodeIdentity, isMeasurements, type Gate, type Measurements } from "@chamfer/shared";
 
 export const INSPECTION_SHEET_STUB_TEXT =
   "[Inspection sheet pixels evicted. The linked CAD code, measurements, verification verdict, and attachment remain available as historical evidence.]";
@@ -37,17 +37,31 @@ function contentOf(message: unknown): ContentBlock[] | undefined {
   return Array.isArray(content) ? content : undefined;
 }
 
-export function isInspectionSheetResult(message: unknown): boolean {
+/** A CAD execution or rendered visual read that produced the complete render
+ * evidence needed for durable storage. inspect_fusion qualifies through its
+ * revision-bound visualArtifact: a read-only visual read is exactly as
+ * authoritative as an action render for evidence purposes. */
+export function isRenderedCadResult(message: unknown): boolean {
   if (typeof message !== "object" || message === null) return false;
-  const candidate = message as { role?: unknown; toolName?: unknown; isError?: unknown };
-  if (candidate.role !== "toolResult" || candidate.toolName !== "run_build123d" || candidate.isError === true) {
+  const candidate = message as { role?: unknown; toolName?: unknown; isError?: unknown; details?: SheetDetails };
+  if (candidate.role !== "toolResult" || !["run_build123d", "run_fusion_action", "inspect_fusion"].includes(String(candidate.toolName))) {
     return false;
   }
+  const details = candidate.details as (SheetDetails & { visualArtifact?: unknown }) | undefined;
+  const hasBuild123dEvidence = isCadCodeIdentity(details?.code) && isMeasurements(details?.measurements);
+  const hasFusionEvidence = Boolean(details?.visualArtifact);
   return Boolean(
+    (hasBuild123dEvidence || hasFusionEvidence) &&
     contentOf(message)?.some(
       (block) => block.type === "image" || (block.type === "attachment-reference" && block.kind === "view-sheet"),
     ),
   );
+}
+
+/** A rendered CAD result eligible to become the current reasoning and proof sheet. */
+export function isInspectionSheetResult(message: unknown): boolean {
+  if (!isRenderedCadResult(message)) return false;
+  return (message as { isError?: unknown }).isError !== true;
 }
 
 function withoutPixels(message: AgentMessage): AgentMessage {
@@ -126,11 +140,105 @@ export function projectCurrentInspectionSheet(messages: AgentMessage[]): AgentMe
   return messages.map((message, index) => (evicted.has(index) ? withoutPixels(message) : message));
 }
 
+/** A read-only inspect_fusion result carrying a rendered view sheet (visual-evidence read). */
+function isFusionInspectViewResult(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) return false;
+  const candidate = message as { role?: unknown; toolName?: unknown; isError?: unknown; details?: { viewSheet?: unknown } };
+  if (candidate.role !== "toolResult" || candidate.toolName !== "inspect_fusion" || candidate.isError === true) return false;
+  return candidate.details?.viewSheet === true && Boolean(contentOf(message)?.some(
+    (block) => block.type === "image" || (block.type === "attachment-reference" && block.kind === "view-sheet"),
+  ));
+}
+
+const FUSION_INSPECTION_HEADER = "# Bound Fusion inspection";
+
+function isSuccessfulFusionInspection(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) return false;
+  const candidate = message as { role?: unknown; toolName?: unknown; isError?: unknown };
+  return candidate.role === "toolResult" && candidate.toolName === "inspect_fusion" && candidate.isError !== true;
+}
+
+/**
+ * Compact rendering of a superseded inspection text: identity lines stay, the
+ * snapshot dump goes, and check verdicts collapse to counts plus the failed
+ * details (the historically meaningful part). A full snapshot of a complex part
+ * runs ~70k characters, and every inspection used to stay in model context
+ * verbatim for the rest of the conversation - the dominant context-overflow
+ * driver in long autonomous Fusion builds.
+ */
+export function stubStaleFusionInspectionText(text: string): string {
+  if (!text.startsWith(FUSION_INSPECTION_HEADER)) return text;
+  const lines = text.split("\n");
+  const identity = lines.filter((line) => line.startsWith("Document: ") || line.startsWith("Revision: "));
+  const checksLine = lines.find((line) => line.startsWith("Checks: "));
+  let checksSummary = "";
+  if (checksLine) {
+    try {
+      const checks = JSON.parse(checksLine.slice("Checks: ".length)) as { kind?: string; status?: string; detail?: string }[];
+      const failed = checks.filter((check) => check.status === "failed");
+      const passed = checks.filter((check) => check.status === "passed").length;
+      checksSummary = ` ${passed} checks passed, ${failed.length} failed${
+        failed.length > 0 ? `: ${failed.map((check) => `${check.kind} (${check.detail})`).join("; ")}` : "."
+      }`;
+    } catch {
+      // Unparseable checks stay elided; the newest inspection carries the live verdicts.
+    }
+  }
+  return [
+    FUSION_INSPECTION_HEADER,
+    ...identity,
+    `[Superseded by a newer trusted inspection: snapshot elided.${checksSummary}]`,
+  ].join("\n");
+}
+
+/**
+ * Keep only the newest successful inspect_fusion result's full snapshot text in
+ * model context; earlier inspections become compact identity + verdict stubs.
+ * Pure and deterministic over the message array (same contract as the pixel
+ * eviction projections); the durable transcript is never rewritten.
+ */
+export function projectStaleFusionInspectionText(messages: AgentMessage[]): AgentMessage[] {
+  const indexes = messages.flatMap((message, index) => (isSuccessfulFusionInspection(message) ? [index] : []));
+  if (indexes.length <= 1) return messages;
+  const stale = new Set(indexes.slice(0, -1));
+  return messages.map((message, index) => {
+    if (!stale.has(index)) return message;
+    const content = contentOf(message);
+    if (!content) return message;
+    return {
+      ...(message as object),
+      content: content.map((block) =>
+        block.type === "text" && typeof block.text === "string"
+          ? { ...block, text: stubStaleFusionInspectionText(block.text) }
+          : block,
+      ),
+    } as AgentMessage;
+  });
+}
+
+/**
+ * Keep only the newest inspect_fusion view sheet pixel-bearing; older visual reads
+ * become text stubs. A routine scalar inspection carries no pixels, so this only ever
+ * trims the handful of explicit visual-evidence reads, bounding image budget across a
+ * long autonomous build the same way the CAD sheet lifecycle bounds action renders.
+ */
+export function projectCurrentFusionInspectViews(messages: AgentMessage[]): AgentMessage[] {
+  const indexes = messages.flatMap((message, index) => (isFusionInspectViewResult(message) ? [index] : []));
+  if (indexes.length <= 1) return messages;
+  const evict = new Set(indexes.slice(0, -1));
+  return messages.map((message, index) => (evict.has(index) ? withoutPixels(message) : message));
+}
+
 /** Add the logical attachment id to the render evidence already carried by a CAD result. */
 export function withInspectionSheetEvidence(message: AgentMessage, attachmentId: string): AgentMessage {
-  if (typeof message !== "object" || message === null || !isInspectionSheetResult(message)) return message;
+  if (typeof message !== "object" || message === null || !isRenderedCadResult(message)) return message;
   const details = (message as unknown as { details?: SheetDetails }).details;
-  if (!details?.code || !details.measurements) return message;
+  const fusion = details as SheetDetails & { visualArtifact?: { inspectionSheet?: { attachmentId?: string } } };
+  if (fusion.visualArtifact) {
+    return { ...(message as object), details: { ...details, visualArtifact: { ...fusion.visualArtifact,
+      inspectionSheet: { ...fusion.visualArtifact.inspectionSheet, attachmentId } } } } as AgentMessage;
+  }
+  if (!isCadCodeIdentity(details?.code) || !isMeasurements(details?.measurements)) return message;
   return {
     ...(message as object),
     details: {

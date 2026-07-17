@@ -14,11 +14,18 @@ import {
   ReferenceClassificationError,
 } from "./referenceClassification";
 import { AttachmentStore } from "./attachmentStore";
+import { listSourceSpecifications, recordSourceSpecifications } from "./sourceSpecifications";
 
 function fixture() {
   const db = openDb(":memory:");
   const conversation = createConversation(db, "references");
-  createMessage(db, conversation.id, { id: "message-1", seq: 0, role: "user", contentJson: "{}" });
+  const text = "Build the 30 mm part from these drawings.";
+  createMessage(db, conversation.id, {
+    id: "message-1",
+    seq: 0,
+    role: "user",
+    contentJson: JSON.stringify({ role: "user", content: text, timestamp: 1 }),
+  });
   createAttachment(db, "message-1", "user-image", {
     mime: "image/png",
     contentHash: "a".repeat(64),
@@ -31,6 +38,13 @@ function fixture() {
     byteSize: 1,
     blobPath: "blobs/bb/b.png",
   }, "ref-b");
+  recordSourceSpecifications(db, conversation.id, {
+    specifications: [{
+      id: "overall-size",
+      requirement: "The part must be 30 mm.",
+      source: { messageId: "message-1", text: "30 mm part", start: 10, end: 20 },
+    }],
+  }, "fixture-specification");
   return { db, conversation };
 }
 
@@ -38,7 +52,7 @@ const base = {
   purpose: "Primary dimensioned drawing",
   relationships: [] as Array<{ type: "complements" | "superseded-by"; referenceId: string }>,
   rationale: "The drawing establishes the requested part geometry.",
-  specificationLinks: ["plan.spec_sheet.overall-size"],
+  specificationIds: ["overall-size"],
 };
 
 describe("reference classification", () => {
@@ -208,15 +222,15 @@ describe("reference classification", () => {
     expect(listReferenceRecords(db, conversation.id)[1]?.history).toHaveLength(0);
   });
 
-  it("requires specification links or an explicit reason none can be extracted", () => {
+  it("requires specification identities or an explicit reason none can be extracted", () => {
     const { db, conversation } = fixture();
 
     expect(() => classifyReference(db, conversation.id, {
       ...base,
       referenceId: "ref-a",
       status: "active",
-      specificationLinks: [],
-    })).toThrow(/specificationLinks or noSpecificationReason/);
+      specificationIds: [],
+    })).toThrow(/specificationIds or noSpecificationReason/);
   });
 
   it("rejects malformed structured fields as validation errors", () => {
@@ -226,8 +240,102 @@ describe("reference classification", () => {
       ...base,
       referenceId: "ref-a",
       status: "active",
-      specificationLinks: undefined,
+      specificationIds: undefined,
     } as unknown as ClassifyReferenceInput)).toThrow(ReferenceClassificationError);
     expect(listReferenceRecords(db, conversation.id)[0]?.history).toHaveLength(0);
+  });
+
+  it("rejects dangling, cross-conversation, and superseded specification identities", () => {
+    const { db, conversation } = fixture();
+    expect(() => classifyReference(db, conversation.id, {
+      ...base,
+      referenceId: "ref-a",
+      status: "active",
+      specificationIds: ["missing-specification"],
+    })).toThrow(/does not exist/);
+
+    const other = createConversation(db, "Foreign specification owner");
+    const otherText = "Build a 12 mm cube.";
+    createMessage(db, other.id, {
+      id: "foreign-message",
+      seq: 0,
+      role: "user",
+      contentJson: JSON.stringify({ role: "user", content: otherText, timestamp: 1 }),
+    });
+    recordSourceSpecifications(db, other.id, {
+      specifications: [{
+        id: "foreign-size",
+        requirement: "The cube must be 12 mm.",
+        source: { messageId: "foreign-message", text: "12 mm cube", start: 8, end: 18 },
+      }],
+    }, "foreign-specification");
+    expect(() => classifyReference(db, conversation.id, {
+      ...base,
+      referenceId: "ref-a",
+      status: "active",
+      specificationIds: ["foreign-size"],
+    })).toThrow(/does not belong to this conversation/);
+
+    recordSourceSpecifications(db, conversation.id, {
+      specifications: [{
+        id: "corrected-size",
+        requirement: "The corrected size must be honored.",
+        source: { attachmentId: "ref-b", observation: "Corrected size callout." },
+        supersedesSpecificationId: "overall-size",
+      }],
+    }, "corrected-specification");
+    expect(() => classifyReference(db, conversation.id, {
+      ...base,
+      referenceId: "ref-a",
+      status: "active",
+      specificationIds: ["overall-size"],
+    })).toThrow(/is superseded/);
+    expect(listReferenceRecords(db, conversation.id)[0]?.history).toHaveLength(0);
+  });
+
+  it("migrates legacy string links into durable identities without losing classification history", () => {
+    const directory = mkdtempSync(join(tmpdir(), "chamfer-reference-link-migration-"));
+    const path = join(directory, "legacy-links.db");
+    try {
+      const db = openDb(path);
+      const conversation = createConversation(db, "Legacy links");
+      createMessage(db, conversation.id, { id: "legacy-message", seq: 0, role: "user", contentJson: "{}" });
+      createAttachment(db, "legacy-message", "user-image", {
+        mime: "image/png",
+        contentHash: "d".repeat(64),
+        byteSize: 1,
+        blobPath: "images/dd/legacy.png",
+      }, "legacy-ref");
+      db.prepare(`
+        INSERT INTO reference_classifications
+          (id, conversation_id, reference_id, status, purpose, relationships_json,
+           rationale, specification_links_json, no_specification_reason, actor, created_at)
+        VALUES (?, ?, ?, 'active', 'Legacy drawing', '[]', 'Legacy rationale', ?, NULL, 'agent', 10)
+      `).run("legacy-classification", conversation.id, "legacy-ref", JSON.stringify(["plan.spec_sheet.width"]));
+      db.close();
+
+      const migrated = openDb(path);
+      const records = listReferenceRecords(migrated, conversation.id);
+      expect(records[0]).toMatchObject({
+        specificationIds: ["plan.spec_sheet.width"],
+        legacySpecificationLinks: ["plan.spec_sheet.width"],
+        history: [{ id: "legacy-classification", legacySpecificationLinks: ["plan.spec_sheet.width"] }],
+      });
+      expect(listSourceSpecifications(migrated, conversation.id)).toMatchObject([{
+        id: "plan.spec_sheet.width",
+        actor: "migration",
+        status: "active",
+        source: { attachmentId: "legacy-ref" },
+      }]);
+      migrated.close();
+
+      const reopened = openDb(path);
+      expect(listReferenceRecords(reopened, conversation.id)[0]?.specificationIds)
+        .toEqual(["plan.spec_sheet.width"]);
+      expect(listSourceSpecifications(reopened, conversation.id)).toHaveLength(1);
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

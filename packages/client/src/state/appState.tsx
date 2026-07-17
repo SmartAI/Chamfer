@@ -25,7 +25,11 @@ export interface AppState {
   cad: CadClient | null;
   mesh: MeshPayload | null;
   measurements: Measurements | null;
-  runScript: (code: string) => Promise<void>;
+  /** Durable identity of the model currently shown, or null for unpersisted CAD. */
+  currentArtifact: { id: string; version: number } | null;
+  setCurrentArtifact: (artifact: { id: string; version: number } | null) => void;
+  /** Runs developer CAD code and reports whether this invocation remained current long enough to publish. */
+  runScript: (code: string) => Promise<boolean>;
   publishCadResult: (result: { mesh: MeshPayload; measurements: Measurements }) => void;
   runError: string | null;
   isRendering: boolean;
@@ -50,7 +54,7 @@ export interface AppState {
    */
   applyParams: (
     values: Record<string, number>,
-    persistBeforePublish?: (code: string) => Promise<void>,
+    persistBeforePublish?: (code: string) => Promise<{ id: string; version: number } | void>,
   ) => Promise<string>;
   exportModel: (format: ExportFormat) => Promise<{ data: Uint8Array; filename: string }>;
 }
@@ -70,6 +74,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [client, setClient] = useState<CadClient | null>(null);
   const [mesh, setMesh] = useState<MeshPayload | null>(null);
   const [measurements, setMeasurements] = useState<Measurements | null>(null);
+  const [currentArtifact, setCurrentArtifact] = useState<{ id: string; version: number } | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [currentScript, setCurrentScript] = useState<string | null>(null);
@@ -109,22 +114,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     };
   }, [client, currentScript]);
 
-  async function runScript(code: string): Promise<void> {
+  async function runScript(code: string): Promise<boolean> {
     if (!client) {
       setRunError("CAD worker is not initialized yet");
-      return;
+      return false;
     }
     const generation = ++renderGenerationRef.current;
+    setCurrentArtifact(null);
     setIsRendering(true);
     try {
       const result = await client.run(code, RUN_TIMEOUT_MS);
-      if (renderGenerationRef.current !== generation) return;
+      if (renderGenerationRef.current !== generation) return false;
       setMesh(result.mesh);
       setMeasurements(result.measurements);
       setCurrentScript(code);
       setRunError(null);
+      return true;
     } catch (err) {
-      if (renderGenerationRef.current !== generation) return;
+      if (renderGenerationRef.current !== generation) return false;
       // Keep the prior mesh/measurements so the viewer does not blank out;
       // just surface the error.
       setRunError(err instanceof Error ? err.message : String(err));
@@ -136,7 +143,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   async function applyParams(
     values: Record<string, number>,
-    persistBeforePublish?: (code: string) => Promise<void>,
+    persistBeforePublish?: (code: string) => Promise<{ id: string; version: number } | void>,
   ): Promise<string> {
     if (!client) throw new Error("CAD worker is not initialized yet");
     if (currentScript === null) throw new Error("No script has been run yet");
@@ -144,10 +151,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const result = await client.run(newCode, RUN_TIMEOUT_MS);
     const responsivenessFailure = parameterResponsivenessFailure(result.gate);
     if (responsivenessFailure) throw new Error(responsivenessFailure);
-    await persistBeforePublish?.(newCode);
+    const artifact = await persistBeforePublish?.(newCode);
     setMesh(result.mesh);
     setMeasurements(result.measurements);
     setCurrentScript(newCode);
+    setCurrentArtifact(artifact ?? null);
     setRunError(null);
     return newCode;
   }
@@ -164,6 +172,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setMesh(result.mesh);
     setMeasurements(result.measurements);
     setRunError(null);
+    setCurrentArtifact(null);
   }, []);
 
   const restoreScript = useCallback((code: string | null): void => {
@@ -174,6 +183,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     renderGenerationRef.current += 1;
     setMesh(null);
     setMeasurements(null);
+    setCurrentArtifact(null);
     setCurrentScript(null);
     setParams([]);
     setRunError(null);
@@ -185,6 +195,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     cad: client,
     mesh,
     measurements,
+    currentArtifact,
+    setCurrentArtifact,
     runScript,
     publishCadResult,
     runError,

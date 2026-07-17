@@ -40,4 +40,48 @@ describe("VerificationChip", () => {
     expect(chip.textContent).toContain("Unverified");
     expect(chip.textContent).not.toContain("failed");
   });
+
+  it("shows proven only when a current passing proof report exists", () => {
+    const { rerender } = render(
+      <VerificationChip
+        streaming={false}
+        summary={{ status: "passed", passedChecks: 5, totalChecks: 5 }}
+        proofState="failed"
+      />,
+    );
+    expect(screen.getByTestId("proof-status-chip").textContent).toContain("Proof failed");
+    expect(screen.getByTestId("proof-status-chip").textContent).not.toBe("Proven");
+
+    rerender(
+      <VerificationChip
+        streaming={false}
+        summary={{ status: "passed", passedChecks: 5, totalChecks: 5 }}
+        proofState="proven"
+      />,
+    );
+    expect(screen.getByTestId("proof-status-chip").textContent).toContain("Proven");
+  });
+
+  it("keeps a visual verdict visible when overall proof is unavailable", () => {
+    render(
+      <VerificationChip
+        streaming={false}
+        summary={{ status: "passed", passedChecks: 5, totalChecks: 5 }}
+        proofState="unavailable"
+        visual={{
+          id: "visual-1",
+          conversationId: "conversation-1",
+          artifactId: "artifact-1",
+          artifactVersion: 1,
+          inspectionSheetId: "sheet-1",
+          coveredReferenceIds: ["reference-1"],
+          verdict: "match",
+          observations: [],
+          recordedAt: 1,
+        }}
+      />,
+    );
+    expect(screen.getByTestId("proof-status-chip").textContent).toContain("Proof unavailable");
+    expect(screen.getByTestId("visual-verify-chip").textContent).toContain("Visual match");
+  });
 });

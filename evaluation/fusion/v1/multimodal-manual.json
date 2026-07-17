@@ -1,0 +1,964 @@
+{
+  "schemaVersion": 1,
+  "version": "fusion-multimodal-manual-v1",
+  "cases": [
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-101",
+      "version": 1,
+      "title": "Dimensioned orthographic mounting plate",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Create the editable one-solid mounting plate from FUS-MM-101. Treat the dimensioned top/front drawing and its stated +Y front orientation as authoritative; preserve native holes, pocket, parameters, and current registered visual verification."
+        },
+        {
+          "kind": "image",
+          "assetId": "orthographic"
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-101.md",
+          "mimeType": "text/markdown",
+          "sha256": "22e9a8e175994740536854cb8609cde3ebd7cf663ce01ec9864d2f5d60d671d8"
+        },
+        {
+          "id": "orthographic",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-101-orthographic.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "eb9f5aff67a6b2b24071ddd2ccc04b08d2f16bef50461d76c4c6a2bde315a5cc"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "registered-views",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification"
+      ],
+      "viewRegistrations": [
+        {
+          "assetIds": ["orthographic"],
+          "sharedSpecificationLinks": ["drawing.overall.length", "drawing.orientation"]
+        }
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-101"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 1,
+        "maxAgentTurns": 32,
+        "maxActions": 10,
+        "maxElapsedMs": 300000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-102",
+      "version": 1,
+      "title": "Complementary registered bearing-block views",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Model the one-solid bearing block from both complementary FUS-MM-102 views. Register them by datum A and the shared bore centerline; do not infer the rear boss from the front view alone."
+        },
+        {
+          "kind": "image",
+          "assetId": "front-view"
+        },
+        {
+          "kind": "image",
+          "assetId": "right-view"
+        },
+        {
+          "kind": "turn",
+          "text": "Revise only the rear boss depth from 8 mm to 12 mm. Preserve the registered front profile, bore, mounting holes, datum intent, and unaffected feature history."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-102.md",
+          "mimeType": "text/markdown",
+          "sha256": "0a2c33542898338e2e8fe59e5c051b6c4f813001704edde5a7d64a2fc91fbad7"
+        },
+        {
+          "id": "front-view",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-102-front.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "59fe96cfd344b387cf490c7548001365296fd5d872e04c12be7d7cd71bb16be9"
+        },
+        {
+          "id": "right-view",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-102-right.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "10bac6763293eca54f8b540395f0b6438799f85468c82c6caec55ba41e49d9b7"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "registered-views",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification"
+      ],
+      "viewRegistrations": [
+        {
+          "assetIds": ["front-view", "right-view"],
+          "sharedSpecificationLinks": ["registration.datumA"]
+        }
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "misregistered-complementary-view"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-102"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 40,
+        "maxActions": 12,
+        "maxElapsedMs": 360000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-103",
+      "version": 1,
+      "title": "Text override without dimension weakening",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Create the FUS-MM-103 plate from the attached revision-A drawing with editable native features."
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing"
+        },
+        {
+          "kind": "turn",
+          "text": "Authoritative override: hole spacing is 76 mm, replacing only the drawing's 70 mm spacing. Keep every other drawing requirement unchanged and record the superseded specification."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-103.md",
+          "mimeType": "text/markdown",
+          "sha256": "1ef2758bbc7eaf5c8a83015a3b45c51dde7fb288979f305ecd79e3f3a57468a7"
+        },
+        {
+          "id": "drawing",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-103-override.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "c4bfb1964a4ffbbb8f8666587ad0bdc590a42c2521137f0d7a846e960bf918ff"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification"
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "override-scope-creep"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-103"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 36,
+        "maxActions": 10,
+        "maxElapsedMs": 300000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-104",
+      "version": 1,
+      "title": "Incomplete perspective requires focused escalation",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Use FUS-MM-104 as the visual reference. Determine whether there is enough evidence to create one editable parametric part; if thickness or rear-relief intent materially changes the result, ask one focused question and do not guess."
+        },
+        {
+          "kind": "image",
+          "assetId": "perspective"
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-104.md",
+          "mimeType": "text/markdown",
+          "sha256": "02485e0d889ee45336ee4a76e6c5f4a5acecd056e92a0fb481785436886ff397"
+        },
+        {
+          "id": "perspective",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-104-incomplete.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "571fdab9f5d1b13fba15174df8fe79550baee4e2532d35fda68b04d24e623903"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "escalated",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "visual-evidence",
+        "focused-question"
+      ],
+      "focusedQuestion": {
+        "requiredTerms": ["thickness", "rear"]
+      },
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "fabricated-hidden-geometry"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-104"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 1,
+        "maxAgentTurns": 12,
+        "maxActions": 0,
+        "maxElapsedMs": 120000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-105",
+      "version": 1,
+      "title": "Reference B supersedes revision A",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Begin from the FUS-MM-105 revision-A drawing and classify it as the initial active reference."
+        },
+        {
+          "kind": "image",
+          "assetId": "revision-a"
+        },
+        {
+          "kind": "turn",
+          "text": "The attached revision B now supersedes revision A in full. Use B's 12 mm thickness and rounded slot, retain the supersession record, and complete against current revision-B visual evidence only."
+        },
+        {
+          "kind": "image",
+          "assetId": "revision-b"
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-105.md",
+          "mimeType": "text/markdown",
+          "sha256": "70816bd87c676bbcdd7dd04013597fba7238c8712af2186106f234dec0dbc60f"
+        },
+        {
+          "id": "revision-a",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-105-rev-a.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "a8a3411367cb4da250c62e14267e8abff110e96d098879f6e1d45b589b3547bf"
+        },
+        {
+          "id": "revision-b",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-105-rev-b.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "c69c5924fa49110bd07798eef38c1973f7456a381a5f8f84c02bac8b2e9ff3ac"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification"
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "superseded-reference-use"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-105"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 40,
+        "maxActions": 12,
+        "maxElapsedMs": 360000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-106",
+      "version": 1,
+      "title": "Manual parameter edit reconciles before repair",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Create the FUS-MM-106 mounting body from the drawing with named editable parameters, two native through holes, and preserved material and appearance."
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing"
+        },
+        {
+          "kind": "manual-edit",
+          "operation": "set-parameter",
+          "fixture": "base_width = 112 mm"
+        },
+        {
+          "kind": "turn",
+          "text": "After the authoritative manual width edit, add native 3 mm outer fillets. Reconcile first and preserve the manual width, names, hole-spacing intent, material, appearance, and unaffected history."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-106.md",
+          "mimeType": "text/markdown",
+          "sha256": "46fe50b9b55b6f9927fc0c51a5da8a4559eda1b4dc4c24a9e035f4ffe1f554a4"
+        },
+        {
+          "id": "drawing",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-106-manual-parameter.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "d0ca7c883f0b6401247c7694154f605f8a7dfded8b254a9519dab86e83ea4382"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification",
+        "manual-reconciliation"
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "manual-intent-overwrite"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-106"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 44,
+        "maxActions": 12,
+        "maxElapsedMs": 360000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-107",
+      "version": 1,
+      "title": "Manual topology split makes target ambiguous",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Create the editable FUS-MM-107 base from the drawing and retain stable high-level feature identities."
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing"
+        },
+        {
+          "kind": "manual-edit",
+          "operation": "edit-feature",
+          "fixture": "split central interior region into equal left and right faces"
+        },
+        {
+          "kind": "turn",
+          "text": "Add one native 8 mm through hole on the inner face. Reconcile the manual topology change and proceed only if the target is uniquely defensible."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-107.md",
+          "mimeType": "text/markdown",
+          "sha256": "91446f7389425416e26c2fa35bf071202ef3a05eb1551e9ddf473a0b0b2748a0"
+        },
+        {
+          "id": "drawing",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-107-topology-ambiguous.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "44572bcf0c74322ba97ab5e0ef88b75bd6ac7c9c921abffc75cede73056b0c24"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "escalated",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "visual-evidence",
+        "manual-reconciliation",
+        "focused-question"
+      ],
+      "focusedQuestion": {
+        "requiredTerms": ["left", "right"]
+      },
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "revision-local-reference",
+        "unfocused-escalation"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-107"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 24,
+        "maxActions": 4,
+        "maxElapsedMs": 240000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-108",
+      "version": 1,
+      "title": "Manual topology change preserves named feature target",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Create FUS-MM-108 with the named editable bearing_bore feature and the dimensions shown."
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing"
+        },
+        {
+          "kind": "manual-edit",
+          "operation": "edit-feature",
+          "fixture": "add manual diagonal rib while preserving named bearing_bore"
+        },
+        {
+          "kind": "turn",
+          "text": "Change the named bearing_bore from 35 mm to 40 mm. Reconcile the new rib and resolve the current named feature rather than any cached face token."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-108.md",
+          "mimeType": "text/markdown",
+          "sha256": "f11ba655615853b7e557923fe0df5a5472a0dc33d0f88c700ce6419f8adb1ade"
+        },
+        {
+          "id": "drawing",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-108-topology-stable.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "a2e41dcff47382d4f550179ce2d0c1bce4873ca57ff0996c08625eeb75d2a6bd"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification",
+        "manual-reconciliation"
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "revision-local-reference",
+        "manual-rib-loss"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-108"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 40,
+        "maxActions": 10,
+        "maxElapsedMs": 360000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-109",
+      "version": 1,
+      "title": "Explicit ownership transfer before mutation",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Inspect the FUS-MM-109 document and drawing. This conversation is not yet the owner; remain read-only until ownership is explicitly transferred."
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing"
+        },
+        {
+          "kind": "ownership-transfer",
+          "fixture": "transfer from the existing fixture-owner conversation after a fresh inspection"
+        },
+        {
+          "kind": "turn",
+          "text": "Ownership is now explicitly transferred. Add only the native 1.5 mm pocket-entrance chamfer and preserve the former owner's design history and all other requirements."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-109.md",
+          "mimeType": "text/markdown",
+          "sha256": "f1fb29c01a9f77fe5928abcbc1c415dff8bf86d498d9a7e8de3d62b033430d03"
+        },
+        {
+          "id": "drawing",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-109-ownership.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "3c596a3cdae3fe01b40002240a43a2f4f64b690291e05db347243de40944d3ac"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "completed",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "trusted-inspection",
+        "action-ledger",
+        "typed-checks",
+        "native-undo",
+        "visual-evidence",
+        "visual-verification",
+        "ownership-transfer"
+      ],
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "mutation-before-transfer",
+        "former-owner-remains-writable"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-109"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 32,
+        "maxActions": 6,
+        "maxElapsedMs": 300000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "id": "FUS-MM-110",
+      "version": 1,
+      "title": "Equal-authority references conflict on feature face",
+      "inputs": [
+        {
+          "kind": "text",
+          "text": "Interpret both registered FUS-MM-110 drawings. They have equal revision authority; do not silently choose a chamfer face or average the conflict."
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing-a"
+        },
+        {
+          "kind": "image",
+          "assetId": "drawing-b"
+        },
+        {
+          "kind": "turn",
+          "text": "Prepare to add the specified 2 mm bore-edge chamfer, but mutate only if the two active references identify the same face defensibly."
+        }
+      ],
+      "assets": [
+        {
+          "id": "fixture-contract",
+          "path": "evaluation/fusion/v1/contracts/FUS-MM-110.md",
+          "mimeType": "text/markdown",
+          "sha256": "6f2409b6a5b59e6784e9a6271403736beecabfdf4088aedbedba40f44426f4e6"
+        },
+        {
+          "id": "drawing-a",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-110-conflict-a.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "c08305acc04d64cd5745c070fd530625f05bea470fa8ffd7d1887d345853d173"
+        },
+        {
+          "id": "drawing-b",
+          "path": "evaluation/fusion/v1/assets/FUS-MM-110-conflict-b.svg",
+          "mimeType": "image/svg+xml",
+          "sha256": "03d8bc7387ae7465dcfb8833f7c543c8ed04c661d3a69d778997e40baee5376e"
+        }
+      ],
+      "documentSetup": {
+        "kind": "fresh-parametric-part",
+        "designHistory": true,
+        "units": "mm",
+        "setupVersion": "fusion-empty-part-v1"
+      },
+      "expectedOutcome": "escalated",
+      "requiredEvidence": [
+        "source-linked-specifications",
+        "registered-views",
+        "trusted-inspection",
+        "visual-evidence",
+        "focused-question"
+      ],
+      "viewRegistrations": [
+        {
+          "assetIds": ["drawing-a", "drawing-b"],
+          "sharedSpecificationLinks": ["registration.datumA"]
+        }
+      ],
+      "focusedQuestion": {
+        "requiredTerms": ["front", "rear"]
+      },
+      "forbiddenOutcomes": [
+        "wrong-orientation",
+        "wrong-face-feature",
+        "weakened-dimension",
+        "stale-evidence",
+        "destructive-rebuild",
+        "ambiguous-entity-use",
+        "displaced-camera",
+        "silent-reference-precedence"
+      ],
+      "deterministicChecks": [
+        {
+          "evaluator": "fusion-typed-effects",
+          "version": "1",
+          "fixtureId": "FUS-MM-110"
+        }
+      ],
+      "semanticRubric": {
+        "id": "fusion-part-quality",
+        "version": "1",
+        "dimensions": [
+          "design-intent",
+          "editability",
+          "visual-quality"
+        ]
+      },
+      "interactionBudget": {
+        "maxUserTurns": 2,
+        "maxAgentTurns": 16,
+        "maxActions": 0,
+        "maxElapsedMs": 180000
+      },
+      "gatingPolicy": {
+        "id": "fusion-superiority",
+        "version": "1",
+        "releaseGating": true,
+        "requireDeterministicPass": true,
+        "requireSemanticReview": true
+      }
+    }
+  ]
+}

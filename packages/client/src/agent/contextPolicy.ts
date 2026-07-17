@@ -5,7 +5,9 @@ import {
   currentInspectionSheet,
   INSPECTION_SHEET_STUB_TEXT,
   isInspectionSheetResult,
+  projectCurrentFusionInspectViews,
   projectCurrentInspectionSheet,
+  projectStaleFusionInspectionText,
 } from "./inspectionSheetLifecycle";
 
 /**
@@ -189,7 +191,9 @@ export function transformLlmContext(messages: AgentMessage[]): AgentMessage[] {
     } else {
       context = messages.filter((message) => !isCompactionMessage(message));
     }
-    return projectCurrentInspectionSheet(textOnlyFailedToolResults(context));
+    return projectCurrentFusionInspectViews(
+      projectStaleFusionInspectionText(projectCurrentInspectionSheet(textOnlyFailedToolResults(context))),
+    );
   } catch {
     return messages;
   }

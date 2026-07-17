@@ -117,6 +117,19 @@ describe("envSettings", () => {
     expect(envSettings({ CHAMFER_SHOW_CAD_CODE: "1" }).showCadCode).toBe("1");
   });
 
+  it("maps the strict Fusion endpoint without enabling the experimental UI", () => {
+    expect(envSettings({ CHAMFER_FUSION_MCP_ENDPOINT: "http://127.0.0.1:27182/mcp" })).toEqual({
+      fusionMcpEndpoint: "http://127.0.0.1:27182/mcp",
+    });
+  });
+
+  it("warns and ignores an unsafe Fusion endpoint", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(envSettings({ CHAMFER_FUSION_MCP_ENDPOINT: "https://example.com/mcp" })).toEqual({});
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it("treats CHAMFER_SHOW_CAD_CODE=0 as unset without warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(envSettings({ CHAMFER_SHOW_CAD_CODE: "0" })).toEqual({});

@@ -15,11 +15,11 @@ const parameters = Type.Object({
     referenceId: Type.String(),
   })),
   rationale: Type.String({ description: "Why this semantic classification is correct." }),
-  specificationLinks: Type.Array(Type.String({
-    description: "Stable plan/spec identifiers extracted from or affected by this image.",
+  specificationIds: Type.Array(Type.String({
+    description: "Active durable design-specification identities sourced from this conversation.",
   })),
   noSpecificationReason: Type.Optional(Type.String({
-    description: "Required instead of specificationLinks when the image yields no extractable specification.",
+    description: "Required instead of specificationIds when the image yields no extractable specification.",
   })),
 });
 
@@ -32,7 +32,7 @@ export function createClassifyReferenceTool(deps: {
     name: "classify_reference",
     label: "Classify reference",
     description:
-      "Record an append-only semantic classification for one uploaded reference image. Classify every pending reference before run_build123d.",
+      "Record an append-only semantic classification for one uploaded reference image. Link active identities created by record_reference_specifications, or explain why none can be extracted. Classify every pending reference before run_build123d.",
     parameters,
     executionMode: "sequential",
     execute: async (toolCallId, input) => {

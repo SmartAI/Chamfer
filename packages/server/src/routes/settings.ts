@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SettingsPatchDto, SettingsResponseDto } from "@chamfer/shared";
 import { readEffectiveSettings, writeSettings } from "../settingsStore";
 import { FAKE_MODEL } from "../fakeLlm";
+import { fusionIntegrityAccessFromEnv } from "../fusion/integrityGate";
 
 function mask(value: string | undefined): string {
   return value ? "***" + value.slice(-4) : "";
@@ -13,6 +14,7 @@ export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_
 
   app.get("/api/settings", (c) => {
     const { settings, sources } = readEffectiveSettings(db);
+    const fusionIntegrity = fusionIntegrityAccessFromEnv();
     const masked: SettingsResponseDto = {
       anthropicApiKey: mask(settings.anthropicApiKey),
       anthropicBaseUrl: settings.anthropicBaseUrl,
@@ -23,6 +25,10 @@ export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_
       modelJson: settings.modelJson ?? (fakeMode ? JSON.stringify(FAKE_MODEL) : undefined),
       maxCadRuns: settings.maxCadRuns,
       showCadCode: settings.showCadCode,
+      fusionMcpEndpoint: settings.fusionMcpEndpoint,
+      experimentalFusionEnabled: process.env.CHAMFER_EXPERIMENTAL_FUSION === "1",
+      fusionEnabled: fusionIntegrity.enabled,
+      fusionIntegrity,
       sources,
     };
     return c.json(masked);
@@ -30,7 +36,11 @@ export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_
 
   app.put("/api/settings", async (c) => {
     const patch = (await c.req.json()) as SettingsPatchDto;
-    writeSettings(db, patch);
+    try {
+      writeSettings(db, patch);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
     return c.json({ ok: true });
   });
 

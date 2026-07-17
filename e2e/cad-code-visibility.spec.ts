@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 // CAD code bodies are hidden in chat by default (CHAMFER_SHOW_CAD_CODE unset in
 // the e2e stack). The enabled state is exercised through the settings DB
@@ -13,7 +14,7 @@ test("CAD code is hidden by default and shown when the setting is enabled", asyn
   test.setTimeout(600_000);
 
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();
   await composer.fill("make a box 10 by 20 by 30");
@@ -21,7 +22,8 @@ test("CAD code is hidden by default and shown when the setting is enabled", asyn
 
   const card = page.getByTestId("tool-call-card");
   await expect(card).toBeVisible({ timeout: 600_000 });
-  await expect(card).toContainText("run_build123d");
+  await expect(card.getByTitle("run_build123d")).toBeVisible();
+  await expect(card).toContainText("Executing code");
   await expect(page.getByTestId("tool-gate")).toHaveAttribute("data-status", "passed", { timeout: 600_000 });
 
   // Hidden default: the placeholder row with its actions is there, the body is not.

@@ -17,9 +17,10 @@ const DEFAULT_MAX_DELAY_MS = 60_000;
 
 // Deliberately narrower than session.ts's error classification: only failures that are
 // transient by definition are worth retrying. Auth and request-shape errors would fail
-// identically on every attempt.
+// identically on every attempt. Provider 5xx classes (Anthropic api_error/overloaded_error,
+// gateway failures) are transient server faults, so they retry too.
 const RETRYABLE_PATTERN =
-  /\b429\b|\b529\b|rate[ _-]?limit|too many requests|overloaded|network (?:error|failure)|failed to fetch|fetch failed|\b(?:econnreset|econnrefused|etimedout|epipe)\b|socket hang up|connection (?:reset|closed|terminated)|stream (?:ended|terminated|disconnected)/i;
+  /\b429\b|\b529\b|rate[ _-]?limit|too many requests|overloaded|network (?:error|failure)|failed to fetch|fetch failed|\b(?:econnreset|econnrefused|etimedout|epipe)\b|socket hang up|connection (?:reset|closed|terminated)|stream (?:ended|terminated|disconnected)|\b(?:500|502|503|504)\b|internal server error|bad gateway|service unavailable|gateway time-?out|\bapi_error\b|\bserver_error\b|temporarily unavailable|request timed? ?out/i;
 
 export interface RetryWaitInfo {
   attempt: number;

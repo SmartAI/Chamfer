@@ -176,4 +176,64 @@ describe("PlanCard", () => {
     expect(verdicts[0]?.textContent).toContain("isometric");
     expect(verdicts[0]?.textContent).toContain("Dominant form agrees.");
   });
+
+  it("shows normalized current entities, source coverage, and immutable domain history", () => {
+    const domainPlan: Plan = {
+      ...plan,
+      components: plan.components.map((component) => ({
+        ...component,
+        criteria_revision: 2,
+        retired_revision: component.status === "abandoned" ? 2 : undefined,
+      })),
+      domain: {
+        format: "domain-operations-v1",
+        plan_id: "plan-1",
+        revision: 2,
+        criteria_revision: 2,
+        source_specification_ids: ["spec-current"],
+        requires_form_review: false,
+        actor: "agent",
+        created_at: 1,
+        history: [{
+          mutation_id: "create",
+          fingerprint: "create",
+          revision: 1,
+          criteria_revision: 1,
+          criteria_changed: true,
+          reason: "Initial plan.",
+          actor: "agent",
+          timestamp: 1,
+          operations: [{ kind: "create_plan" }],
+          invalidated_evidence_ids: [],
+        }, {
+          mutation_id: "revise",
+          fingerprint: "revise",
+          revision: 2,
+          criteria_revision: 2,
+          criteria_changed: true,
+          reason: "Retired the obsolete rib.",
+          actor: "agent",
+          timestamp: 2,
+          operations: [{ kind: "retire_component", component_id: "rib" }],
+          invalidated_evidence_ids: [],
+        }],
+      },
+    };
+    render(<PlanCard plan={domainPlan} sourceSpecifications={[{
+      id: "spec-current",
+      conversationId: "conv-1",
+      requirement: "Keep the current envelope.",
+      source: { messageId: "message-1", text: "current envelope", start: 0, end: 16 },
+      actor: "agent",
+      status: "active",
+      timestamp: 1,
+    }]} />);
+
+    expect(screen.getByTestId("plan-source-coverage").textContent).toBe("1/1 source requirements current");
+    fireEvent.click(screen.getByTestId("plan-card-toggle"));
+    expect(screen.getAllByTestId("plan-component")).toHaveLength(3);
+    expect(screen.queryByText("stiffening rib")).toBeNull();
+    expect(screen.getAllByTestId("plan-history-entry")).toHaveLength(2);
+    expect(screen.getByTestId("plan-history").textContent).toContain("Retired the obsolete rib.");
+  });
 });

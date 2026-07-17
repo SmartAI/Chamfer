@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { AttachmentStore } from "./attachmentStore";
 import { conversationExists } from "./conversationStore";
+import { releaseFusionRecoveriesOwnedByConversation } from "./fusion/recoveryStore";
 
 interface BlobCandidate {
   contentHash: string | null;
@@ -25,6 +26,31 @@ export function deleteConversationWithAttachments(
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    releaseFusionRecoveriesOwnedByConversation(db, conversationId);
+    db.prepare("DELETE FROM fusion_inspections WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM fusion_document_bindings WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM proof_report_requests WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM proof_reports WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM proof_contracts WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM design_escalations WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM source_specification_supersessions WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM reference_registrations WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM source_specifications WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM source_specification_mutations WHERE conversation_id = ?").run(conversationId);
+    db.prepare(`DELETE FROM online_failure_signatures WHERE first_run_id IN
+      (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare(`DELETE FROM online_review_queue_refs WHERE run_id IN
+      (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare(`DELETE FROM online_review_inventory WHERE run_id IN
+      (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare(`DELETE FROM online_run_scores WHERE run_id IN
+      (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare("DELETE FROM agent_run_feedback WHERE conversation_id = ?").run(conversationId);
+    db.prepare(`DELETE FROM agent_run_trace_refs WHERE run_id IN
+      (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare(`DELETE FROM agent_run_events WHERE run_id IN
+      (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare("DELETE FROM agent_runs WHERE conversation_id = ?").run(conversationId);
     db.prepare("DELETE FROM visual_verification_batches WHERE conversation_id = ?").run(conversationId);
     db.prepare("DELETE FROM visual_verifications WHERE conversation_id = ?").run(conversationId);
     db.prepare(`DELETE FROM inspection_observations WHERE lease_id IN

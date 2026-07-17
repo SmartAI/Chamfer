@@ -64,6 +64,20 @@ describe("systemPrompt", () => {
     expect(systemPrompt).toContain("Do not invent hidden geometry");
   });
 
+  it("requires source specifications before the first text design plan", () => {
+    expect(systemPrompt).toContain("Before create_plan, call record_source_specifications");
+    expect(systemPrompt).toContain("exact unique quote");
+    expect(systemPrompt).toContain("for each text requirement");
+  });
+
+  it("requires durable reference specifications before image classification", () => {
+    expect(systemPrompt).toContain("Before classify_reference, call record_reference_specifications");
+    expect(systemPrompt).toContain("Pass active specificationIds to classify_reference");
+    expect(systemPrompt).toContain("noSpecificationReason");
+    expect(systemPrompt).toContain("supersedesSpecificationId");
+    expect(systemPrompt).toContain("refresh affected classifications");
+  });
+
   it("prioritizes fidelity and requires a dominant-form review", () => {
     const size = systemPrompt.indexOf("absolute size");
     const census = systemPrompt.indexOf("feature census");
@@ -83,11 +97,18 @@ describe("systemPrompt", () => {
     expect(systemPrompt).toContain("attempt a second construction strategy before simplifying");
     expect(systemPrompt).toContain("Reverting to simpler geometry is a last resort");
     expect(systemPrompt).toContain("An explicit depth callout means a blind feature by default");
-    expect(systemPrompt).toContain("revision_reason");
-    expect(systemPrompt).toContain("refit-to-measurement");
-    expect(systemPrompt).toContain("run CHECKS conformance");
+    expect(systemPrompt).toContain("legacy plan contract is mechanical: weakening requires revision_reason");
+    expect(systemPrompt).toContain("Chamfer owns revision text, tombstones, and refit flags");
+    expect(systemPrompt).toContain("Run CHECKS conformance");
     expect(systemPrompt).toContain("blocked_reason");
     expect(systemPrompt).toContain("form_review");
+    expect(systemPrompt).toContain("revise_plan atomic operations only");
+    expect(systemPrompt).toContain("Chamfer owns stable identities, revisions, retirement, and history");
+    expect(systemPrompt).toContain("Never call update_plan");
+    expect(systemPrompt).toContain("binds form_review evidence_id to the latest eligible gate-passed run");
+    expect(systemPrompt).toContain("fresh standalone revision_reason");
+    expect(systemPrompt).toContain("preserves the exact accepted history");
+    expect(systemPrompt).toContain("hi <= 1.5 * lo");
   });
 
   it("points verification at the new diagnostics", () => {

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ShapeProofRecord } from "@chamfer/shared";
 import {
   PLAN_CHECK_METADATA_KEYS,
   validatePlanCheck,
@@ -6,6 +7,7 @@ import {
   type PlanCheckEntry,
   type PlanSpecSheetRow,
 } from "./planChecks";
+import type { FusionExpectedEffect } from "@chamfer/shared";
 import { validateSpecSheetRevision } from "./specSheetRevision";
 
 export { parseComponentDeclaration } from "./componentDeclaration";
@@ -14,13 +16,9 @@ export type { PlanCheckEntry, PlanCheckRef, PlanSpecSheetRow } from "./planCheck
 /**
  * The plan artifact: a persisted, loop-enforced component list for multi-part designs.
  *
- * Snapshots are full replacements (never deltas) submitted through the update_plan
- * tool. An accepted snapshot lives in that tool result's `details.plan`; the transcript
- * is the storage (tool results are persisted and replayed like every other message),
- * so the latest accepted snapshot is derived by scanning the message history. The
- * trust model mirrors CHECKS: the agent authors the plan but cannot lie about
- * progress - `done` requires gate evidence, and removing unfinished work requires an
- * explicit abandon reason.
+ * Legacy plans are read-only snapshots from historical update_plan results.
+ * Domain plans are created once and revised through explicit operations. Both live in
+ * tool result details so legacy conversations retain their original rendered meaning.
  */
 
 export type PlanComponentStatus = "todo" | "building" | "done" | "blocked" | "abandoned";
@@ -66,6 +64,11 @@ export interface PlanComponent {
   free_floating_reason?: string;
   /** Required on an image-plan transition to done. */
   form_review?: FormReview;
+  /** System-owned criteria and retirement metadata on operation-backed plans. */
+  criteria_revision?: number;
+  retired_revision?: number;
+  completion?: { evidence_id: string; criteria_revision: number };
+  review_history?: Array<{ revision: number; note: string; actor: "agent"; timestamp: number }>;
 }
 
 export type PlanInterfaceKind = "clearance" | "captive";
@@ -83,6 +86,35 @@ export interface PlanInterface {
   kind: PlanInterfaceKind;
   min_mm?: number;
   max_mm?: number;
+  /** System-owned identity and retirement metadata on operation-backed plans. */
+  entity_id?: string;
+  retired_revision?: number;
+}
+
+export interface PlanRevisionRecord {
+  mutation_id: string;
+  fingerprint: string;
+  revision: number;
+  criteria_revision: number;
+  criteria_changed: boolean;
+  reason: string;
+  actor: "agent";
+  timestamp: number;
+  operations: unknown[];
+  invalidated_evidence_ids: string[];
+}
+
+export interface PlanDomainMetadata {
+  format: "domain-operations-v1";
+  plan_id: string;
+  revision: number;
+  criteria_revision: number;
+  source_specification_ids: string[];
+  /** Whether component completion requires a seven-view form review. */
+  requires_form_review?: boolean;
+  actor: "agent";
+  created_at: number;
+  history: PlanRevisionRecord[];
 }
 
 export interface Plan {
@@ -91,6 +123,8 @@ export interface Plan {
   interfaces: PlanInterface[];
   /** Required for image-triggered plans; optional but validated when present otherwise. */
   spec_sheet?: PlanSpecSheetRow[];
+  /** Present only for normalized operation-backed plans. Absent on legacy snapshots. */
+  domain?: PlanDomainMetadata;
 }
 
 /** Component ids must be label-safe slugs; "probe" is reserved for diagnostic runs. */
@@ -103,6 +137,9 @@ export const PROBE_COMPONENT = "probe";
 export const VOLUME_RANGE_MAX_RATIO = 1.5;
 
 export const UPDATE_PLAN_TOOL_NAME = "update_plan";
+export const CREATE_PLAN_TOOL_NAME = "create_plan";
+export const REVISE_PLAN_TOOL_NAME = "revise_plan";
+export const PLAN_TOOL_NAMES = new Set([UPDATE_PLAN_TOOL_NAME, CREATE_PLAN_TOOL_NAME, REVISE_PLAN_TOOL_NAME]);
 
 interface ToolResultLike {
   role?: unknown;
@@ -111,6 +148,8 @@ interface ToolResultLike {
   isError?: unknown;
   details?: {
     plan?: unknown;
+    planConformance?: PlanConformanceRecord;
+    shapeProof?: ShapeProofRecord;
     gate?: { status?: unknown; checks?: Array<{ name?: unknown; detail?: unknown }> };
     measurements?: {
       component?: unknown;
@@ -122,11 +161,11 @@ interface ToolResultLike {
   };
 }
 
-/** The newest accepted plan snapshot in the transcript, or undefined. */
+/** The newest accepted legacy snapshot or operation-backed plan in the transcript. */
 export function latestPlan(messages: readonly unknown[]): Plan | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const m = messages[index] as ToolResultLike;
-    if (m?.role !== "toolResult" || m.toolName !== UPDATE_PLAN_TOOL_NAME) continue;
+    if (m?.role !== "toolResult" || typeof m.toolName !== "string" || !PLAN_TOOL_NAMES.has(m.toolName)) continue;
     if (m.isError) continue;
     const plan = m.details?.plan;
     if (plan && typeof plan === "object") return plan as Plan;
@@ -164,7 +203,9 @@ export function hasAssemblyEvidence(plan: Plan, messages: readonly unknown[]): b
   const active = new Set(
     plan.components.filter((c) => c.status !== "abandoned" && c.status !== "blocked").map((c) => c.id),
   );
-  const interfaces = (plan.interfaces ?? []).filter((i) => active.has(i.a) && active.has(i.b));
+  const interfaces = (plan.interfaces ?? []).filter(
+    (i) => i.retired_revision === undefined && active.has(i.a) && active.has(i.b),
+  );
   if (active.size < 2 || interfaces.length === 0) return true;
   for (const message of messages) {
     const m = message as ToolResultLike;
@@ -217,13 +258,39 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * The plan is the completion contract (what the finished part must satisfy),
+ * verified once at the final plan completion inspection. Per-action effect
+ * declarations are optional and informational: an earlier design that graded
+ * every action against its own predicted effects rolled back geometrically
+ * correct features whenever the model's arithmetic prediction was wrong, and
+ * live runs ended in false "blocked by Fusion" claims. The only requirement
+ * here is that a plan exists (checked by the session gate) with active
+ * fusion_effect completion criteria.
+ */
+export function validateFusionActionPlan(plan: Plan): string[] {
+  const planned = plan.components.flatMap((component) => component.checks ?? [])
+    .some((check) => check.kind === "fusion_effect" && check.removed !== true);
+  if (!planned) return ["the accepted Fusion plan contains no active fusion_effect checks"];
+  return [];
+}
+
 export interface ComponentEvidence {
   /** Canonical forms of the CHECKS entries run alongside the newest gate-passed run declaring the component. */
   checks: Set<string>;
   /** Tool-call id of this newest gate-passed run. */
   evidenceId?: string;
+  /** Operation-backed plan and component-criteria identity that authorized the run. */
+  planId?: string;
+  criteriaRevision?: number;
   /** Newest successful CAD execution measurements, retained even when its gate failed. */
   latestMeasurements?: ComponentMeasurements;
+}
+
+export interface PlanConformanceRecord {
+  status: "passed" | "failed";
+  planId: string;
+  componentCriteriaRevisions: Record<string, number>;
 }
 
 export interface ComponentMeasurements {
@@ -278,16 +345,107 @@ export function collectComponentEvidence(messages: readonly unknown[]): Map<stri
   const evidence = new Map<string, ComponentEvidence>();
   for (const message of messages) {
     const m = message as ToolResultLike;
-    if (m?.role !== "toolResult" || m.toolName !== "run_build123d" || m.isError) continue;
+    if (m?.role !== "toolResult" || m.toolName !== "run_build123d") continue;
     if (m.details?.gate?.status !== "passed") continue;
+    if (m.details?.shapeProof && m.details.shapeProof.status !== "passed") continue;
     const measurements = m.details?.measurements;
     const ids = runComponentIds(measurements).filter((id) => id !== PROBE_COMPONENT);
     if (ids.length === 0) continue;
+    if (m.isError) {
+      for (const id of ids) evidence.delete(id);
+      continue;
+    }
     const rawChecks = Array.isArray(measurements?.checks) ? (measurements?.checks as unknown[]) : [];
     const checks = new Set(rawChecks.map(canonical));
     const evidenceId = typeof m.toolCallId === "string" ? m.toolCallId : undefined;
-    for (const id of ids) evidence.set(id, { checks, evidenceId });
+    const conformance = m.details?.planConformance;
+    for (const id of ids) {
+      evidence.set(id, {
+        checks,
+        evidenceId,
+        planId: conformance?.status === "passed" ? conformance.planId : undefined,
+        criteriaRevision: conformance?.status === "passed"
+          ? conformance.componentCriteriaRevisions[id]
+          : undefined,
+      });
+    }
   }
+  return evidence;
+}
+
+interface FusionToolResultLike {
+  role?: unknown;
+  toolName?: unknown;
+  isError?: unknown;
+  details?: {
+    revision?: unknown;
+    inspectionId?: unknown;
+    evaluatedChecks?: Array<{ input?: unknown; status?: unknown }>;
+    bodyVolumesMm3?: unknown;
+    inspection?: { current?: { id?: unknown; revision?: unknown } };
+  };
+}
+
+/**
+ * Completion evidence for a Fusion plan, mirroring what a gate-passed
+ * run_build123d result provides in the local environment: the newest trusted
+ * inspect_fusion at the CURRENT authoritative revision, with the planned
+ * checks it evaluated and passed. A fusion_effect plan check is covered when
+ * the inspection evaluated that exact effect and it passed; a plain volume
+ * plan check is covered when the single resulting body's measured volume lies
+ * within its range. Fusion part designs are single-part by product scope, so
+ * evidence is only derivable for a plan with exactly one buildable component.
+ */
+export function collectFusionComponentEvidence(messages: readonly unknown[], plan: Plan): Map<string, ComponentEvidence> {
+  const evidence = new Map<string, ComponentEvidence>();
+  const buildable = plan.components.filter((candidate) => candidate.status !== "abandoned");
+  if (buildable.length !== 1) return evidence;
+  const component = buildable[0]!;
+  if (!(component.checks ?? []).some((check) => check.kind === "fusion_effect" && check.removed !== true)) return evidence;
+
+  // Walk from the end: the first fusion tool result seen carries the current
+  // authoritative revision; the first inspect_fusion with structured verdicts
+  // is the newest full verification. Evidence only counts when they agree -
+  // any later action makes an earlier verification stale.
+  let currentRevision: string | undefined;
+  let verification: { id: string; revision: string; evaluated: Array<{ input?: unknown; status?: unknown }>; bodyVolumes: unknown[] } | undefined;
+  for (let index = messages.length - 1; index >= 0 && !verification; index -= 1) {
+    const m = messages[index] as FusionToolResultLike;
+    if (m?.role !== "toolResult" || m.isError === true || typeof m.details !== "object" || m.details === null) continue;
+    if (m.toolName === "run_fusion_action") {
+      const current = m.details.inspection?.current;
+      if (currentRevision === undefined && typeof current?.revision === "string") currentRevision = current.revision;
+    } else if (m.toolName === "inspect_fusion") {
+      const { revision, inspectionId, evaluatedChecks, bodyVolumesMm3 } = m.details;
+      if (currentRevision === undefined && typeof revision === "string") currentRevision = revision;
+      if (typeof inspectionId === "string" && typeof revision === "string" && Array.isArray(evaluatedChecks)) {
+        verification = { id: inspectionId, revision, evaluated: evaluatedChecks,
+          bodyVolumes: Array.isArray(bodyVolumesMm3) ? bodyVolumesMm3 : [] };
+      }
+    }
+  }
+  if (!verification || verification.revision !== currentRevision) return evidence;
+
+  const passed = new Set(verification.evaluated
+    .filter((entry) => entry.status === "passed" && entry.input !== undefined)
+    .map((entry) => canonical(entry.input)));
+  const covered = new Set<string>();
+  for (const check of component.checks ?? []) {
+    if (check.removed) continue;
+    if (check.kind === "fusion_effect" && passed.has(canonical((check as { effect?: unknown }).effect))) {
+      covered.add(canonical(harnessCheckForm(check)));
+    }
+    if (check.kind === "volume" && check.target === component.id) {
+      const range = (check as { range_mm3?: unknown }).range_mm3;
+      const volume = verification.bodyVolumes.length === 1 ? verification.bodyVolumes[0] : undefined;
+      if (Array.isArray(range) && typeof volume === "number"
+        && typeof range[0] === "number" && typeof range[1] === "number"
+        && volume >= range[0] && volume <= range[1]) {
+        covered.add(canonical(harnessCheckForm(check)));
+      }
+    }
+  }
+  evidence.set(component.id, { checks: covered, evidenceId: verification.id });
   return evidence;
 }
 
@@ -330,7 +488,7 @@ function intervalWeakening(next: unknown, previous: unknown, key: string): strin
   return `${key} [${next.join(", ")}] is not within the previous [${previous.join(", ")}]`;
 }
 
-function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): string[] {
+export function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): string[] {
   const current = next as Record<string, unknown>;
   const prior = previous as Record<string, unknown>;
   if (current.removed === true) return prior.removed === true ? [] : ["was removed"];
@@ -361,7 +519,15 @@ function checkWeakeningReasons(next: PlanCheckEntry, previous: PlanCheckEntry): 
     if (newTolerance > oldTolerance) reasons.push(`${toleranceKey} raised from ${oldTolerance} to ${newTolerance}`);
   }
 
-  const freelyComparable = new Set(["id", "revision_reason", "removed", "refit_to_measurement", "kind", "target", "range_mm3", "range_mm", "tol", "tol_pct"]);
+  const freelyComparable = new Set([
+    ...PLAN_CHECK_METADATA_KEYS,
+    "kind",
+    "target",
+    "range_mm3",
+    "range_mm",
+    "tol",
+    "tol_pct",
+  ]);
   if (intervalKey === "count") freelyComparable.add("count");
   for (const key of new Set([...Object.keys(prior), ...Object.keys(current)])) {
     if (freelyComparable.has(key)) continue;
@@ -400,8 +566,8 @@ function containsEvery(interval: [number, number], measured: number[]): boolean 
   return measured.every((value) => interval[0] <= value && value <= interval[1]);
 }
 
-/** Adds deterministic audit flags without mutating the submitted snapshot. */
-export function applyPlanSnapshotEvidence(
+/** Adds deterministic audit flags without mutating the submitted plan state. */
+export function applyPlanEvidenceAnnotations(
   next: Plan,
   previous: Plan | undefined,
   evidence: Map<string, ComponentEvidence>,
@@ -431,6 +597,86 @@ export function applyPlanSnapshotEvidence(
   return annotated;
 }
 
+// Preserve the hardened snapshot-plan API name while sharing the same
+// deterministic annotation implementation with authoritative domain plans.
+export const applyPlanSnapshotEvidence = applyPlanEvidenceAnnotations;
+
+function auditReason(
+  submitted: string | undefined,
+  accepted: string | undefined,
+  requiresFreshReason: boolean,
+): string | undefined {
+  const acceptedHistory = accepted?.trim();
+  if (!acceptedHistory) return submitted;
+  const candidate = submitted?.trim();
+  if (!candidate) return acceptedHistory;
+  if (candidate === acceptedHistory || candidate.startsWith(acceptedHistory)) return candidate;
+  return requiresFreshReason ? `${acceptedHistory}\n${candidate}` : acceptedHistory;
+}
+
+function sameCheckReferences(left: PlanSpecSheetRow, right: PlanSpecSheetRow): boolean {
+  const keys = (row: PlanSpecSheetRow) => (row.check_refs ?? [])
+    .map((reference) => `${reference.component_id}\u0000${reference.check_id}`)
+    .sort();
+  const leftKeys = keys(left);
+  const rightKeys = keys(right);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index]);
+}
+
+export interface NormalizePlanArgs {
+  next: Plan;
+  previous: Plan | undefined;
+  evidence: Map<string, ComponentEvidence>;
+}
+
+/**
+ * Supplies only deterministic state Chamfer already owns before strict validation.
+ * Model-authored components, checks, dimensions, observations, and specification rows
+ * are never recreated here.
+ */
+export function normalizePlanSnapshot({ next, previous, evidence }: NormalizePlanArgs): Plan {
+  const normalized = structuredClone(next);
+
+  for (const component of normalized.components) {
+    const currentEvidenceId = evidence.get(component.id)?.evidenceId;
+    if (component.form_review && currentEvidenceId) {
+      component.form_review.evidence_id = currentEvidenceId;
+    }
+
+    if (!previous) continue;
+    const acceptedComponent = previous.components.find((candidate) => candidate.id === component.id);
+    if (!acceptedComponent) continue;
+
+    const acceptedChecks = new Map((acceptedComponent.checks ?? []).map((check) => [check.id, check]));
+    for (const check of component.checks ?? []) {
+      const acceptedCheck = acceptedChecks.get(check.id);
+      if (!acceptedCheck) continue;
+      if (acceptedCheck.removed === true) check.removed = true;
+      if (acceptedCheck.refit_to_measurement === true) check.refit_to_measurement = true;
+      check.revision_reason = auditReason(
+        check.revision_reason,
+        acceptedCheck.revision_reason,
+        checkWeakeningReasons(check, acceptedCheck).length > 0,
+      );
+    }
+  }
+
+  if (!previous) return normalized;
+
+  const acceptedRows = new Map((previous.spec_sheet ?? []).map((row) => [row.id, row]));
+  for (const row of normalized.spec_sheet ?? []) {
+    const acceptedRow = acceptedRows.get(row.id);
+    if (!acceptedRow) continue;
+    const acceptedHasReferences = (acceptedRow.check_refs?.length ?? 0) > 0;
+    const submittedHasReferences = (row.check_refs?.length ?? 0) > 0;
+    const requiresFreshReason = acceptedHasReferences &&
+      (!submittedHasReferences || !sameCheckReferences(row, acceptedRow));
+    row.revision_reason = auditReason(row.revision_reason, acceptedRow.revision_reason, requiresFreshReason);
+  }
+
+  return applyPlanSnapshotEvidence(normalized, previous, evidence);
+}
+
 export interface RunCheckMeasurements {
   component?: unknown;
   checks?: unknown;
@@ -451,7 +697,9 @@ export function validateRunChecksConformance(plan: Plan, measurements: RunCheckM
       ) as Record<string, unknown>[])
     : [];
   const errors: string[] = [];
-  const recovery = "revise the plan first with update_plan and a revision_reason, then rerun matching CHECKS";
+  const recovery = plan.domain?.format === "domain-operations-v1"
+    ? "revise the plan first with revise_plan and an explicit criteria operation, then rerun matching CHECKS"
+    : "transition the read-only legacy plan with create_plan and transition_from_legacy=true, then use revise_plan and rerun matching CHECKS";
 
   for (const componentId of componentIds) {
     const component = plan.components.find((candidate) => candidate.id === componentId);
@@ -548,7 +796,7 @@ function validateCheckMonotonicity(next: Plan, previous: Plan): string[] {
           for (const weakening of weakenings) errors.push(`component "${component.id}": check "${id}": ${weakening}; provide a non-empty revision_reason`);
         } else if (oldReason && (newReason === oldReason || !newReason.startsWith(oldReason))) {
           errors.push(
-            `component "${component.id}": check "${id}": this new weakening must append a new explanation while preserving the previous revision_reason`,
+            `component "${component.id}": check "${id}": append a new explanation while preserving the previous revision_reason; current accepted revision_reason is ${JSON.stringify(oldReason)}`,
           );
         }
       }
@@ -558,8 +806,9 @@ function validateCheckMonotonicity(next: Plan, previous: Plan): string[] {
 }
 
 /**
- * Full validation of a plan snapshot. Returns human-readable errors; an empty array
- * means the snapshot is accepted. Every rule here is part of the trust model - see
+ * Full semantic validation shared by stored legacy snapshots and reducer-produced
+ * domain plans. Returns human-readable errors; an empty array means the state is
+ * valid. Every rule here is part of the trust model - see
  * the module doc. Rules:
  *  - structural: non-empty goal and components, unique label-safe ids, known check
  *    kinds, abandon requires a reason, interface endpoints must exist.
@@ -580,6 +829,7 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
     return errors;
   }
   const interfaces = Array.isArray(next.interfaces) ? next.interfaces : [];
+  const activeInterfaces = interfaces.filter((iface) => iface.retired_revision === undefined);
 
   const ids = new Set<string>();
   for (const component of next.components) {
@@ -634,7 +884,14 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
         (check): check is PlanCheckEntry & { range_mm3?: unknown; target?: unknown } =>
           Boolean(check) && check.kind === "volume" && check.target === id,
       );
-      if (!volume) {
+      // A Fusion completion contract may carry its volume assertion as a typed
+      // fusion_effect volume check instead of the local-environment form.
+      const fusionVolume = (component.checks ?? []).some((check) =>
+        check.kind === "fusion_effect" && check.removed !== true
+        && ((check as { effect?: { kind?: unknown } }).effect?.kind === "volume"));
+      if (!volume && fusionVolume) {
+        // Covered by the fusion_effect volume assertion.
+      } else if (!volume) {
         errors.push(
           `component "${id}": checks must include a volume check targeting it, e.g. {"id": "volume", "kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
         );
@@ -656,6 +913,7 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
   if (requireSpecSheet && (!Array.isArray(next.spec_sheet) || next.spec_sheet.length === 0)) {
     errors.push("spec_sheet is required for an image-triggered plan");
   }
+
   // The spec sheet is the durable record of what the agent read off the image; once
   // the plan of record carries one, a later snapshot may not silently drop it.
   if (
@@ -717,7 +975,7 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
   // Interface coverage + connectivity (only meaningful with two or more components).
   if (next.components.length >= 2) {
     const covered = new Set<string>();
-    for (const iface of interfaces) {
+    for (const iface of activeInterfaces) {
       if (ids.has(iface?.a as string)) covered.add(iface.a);
       if (ids.has(iface?.b as string)) covered.add(iface.b);
     }
@@ -745,7 +1003,7 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       return root;
     };
     for (const id of ids) parent.set(id, id);
-    for (const iface of interfaces) {
+    for (const iface of activeInterfaces) {
       if (ids.has(iface?.a as string) && ids.has(iface?.b as string)) {
         parent.set(find(iface.a), find(iface.b));
       }
@@ -781,7 +1039,21 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       );
       continue;
     }
-    const isImagePlan = Boolean(next.spec_sheet?.length || previous?.spec_sheet?.length);
+    if (next.domain && (
+      record.planId !== next.domain.plan_id ||
+      record.criteriaRevision !== component.criteria_revision
+    )) {
+      errors.push(
+        `component "${component.id}" cannot be "done": its latest gate-passed evidence is not bound to plan ${JSON.stringify(next.domain.plan_id)} at component criteria revision ${component.criteria_revision}`,
+      );
+      continue;
+    }
+    const isImagePlan = Boolean(
+      next.domain?.requires_form_review ||
+      previous?.domain?.requires_form_review ||
+      next.spec_sheet?.length ||
+      previous?.spec_sheet?.length
+    );
     if (isImagePlan) {
       const review = component.form_review;
       const entries = Array.isArray(review?.views) ? review.views : [];
@@ -858,7 +1130,8 @@ export function describePlanStatus(plan: Plan): string {
   const parts = PLAN_COMPONENT_STATUSES.filter((s) => byStatus.has(s)).map(
     (s) => `${byStatus.get(s)} ${s}`,
   );
-  return `${plan.components.length} components (${parts.join(", ")}), ${plan.interfaces?.length ?? 0} interfaces`;
+  const activeInterfaces = (plan.interfaces ?? []).filter((candidate) => candidate.retired_revision === undefined);
+  return `${plan.components.length} components (${parts.join(", ")}), ${activeInterfaces.length} interfaces`;
 }
 
 /** Type guard used by UI and tests. */
@@ -866,7 +1139,8 @@ export function isPlanToolResult(message: unknown): message is AgentMessage & { 
   const m = message as ToolResultLike;
   return (
     m?.role === "toolResult" &&
-    m.toolName === UPDATE_PLAN_TOOL_NAME &&
+    typeof m.toolName === "string" &&
+    PLAN_TOOL_NAMES.has(m.toolName) &&
     !m.isError &&
     typeof m.details?.plan === "object" &&
     m.details?.plan !== null

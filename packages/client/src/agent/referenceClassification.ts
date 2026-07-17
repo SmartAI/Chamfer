@@ -10,7 +10,8 @@ function isUserImageReference(block: unknown): block is AttachmentReferenceBlock
 }
 
 export function referenceRecordText(record: ReferenceRecordDto): string {
-  return `[Reference ${record.referenceId}: status=${record.status}; purpose=${JSON.stringify(record.purpose ?? "")}; relationships=${JSON.stringify(record.relationships)}; specificationLinks=${JSON.stringify(record.specificationLinks)}${record.noSpecificationReason ? `; noSpecificationReason=${JSON.stringify(record.noSpecificationReason)}` : ""}; attachmentAvailable=${record.attachmentAvailable}]`;
+  const specificationIds = record.specificationIds ?? record.specificationLinks ?? [];
+  return `[Reference ${record.referenceId}: status=${record.status}; purpose=${JSON.stringify(record.purpose ?? "")}; relationships=${JSON.stringify(record.relationships)}; specificationIds=${JSON.stringify(specificationIds)}${record.legacySpecificationLinks?.length ? `; migratedLegacyLinks=${JSON.stringify(record.legacySpecificationLinks)}` : ""}${record.noSpecificationReason ? `; noSpecificationReason=${JSON.stringify(record.noSpecificationReason)}` : ""}; attachmentAvailable=${record.attachmentAvailable}]`;
 }
 
 export function projectClassifiedReferences(
@@ -49,7 +50,7 @@ export function projectClassifiedReferences(
       messageChanged = true;
       content.push({
         type: "text",
-        text: `[Pending reference images: ${pendingIds.join(", ")}. Call classify_reference for each ID before CAD execution.]`,
+        text: `[Pending reference images: ${pendingIds.join(", ")}. Record extracted evidence with record_reference_specifications, then call classify_reference with active specificationIds or an explicit noSpecificationReason before CAD execution.]`,
       });
     }
     return messageChanged ? { ...message, content } as AgentMessage : message;

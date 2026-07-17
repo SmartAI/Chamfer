@@ -24,7 +24,7 @@ function oneComponentPlan(): Plan {
 }
 
 describe("run CHECKS plan conformance", () => {
-  it("rejects a missing or weakened planned check and names the update_plan recovery", () => {
+  it("rejects a missing or weakened legacy check and names the explicit transition recovery", () => {
     const errors = validateRunChecksConformance(oneComponentPlan(), {
       component: "housing",
       checks: [
@@ -34,7 +34,8 @@ describe("run CHECKS plan conformance", () => {
 
     expect(errors.join("\n")).toContain('component "housing" planned check "holes" is missing');
     expect(errors.join("\n")).toContain('component "housing" planned check "volume" is weaker in this run');
-    expect(errors.join("\n")).toContain("revise the plan first with update_plan and a revision_reason");
+    expect(errors.join("\n")).toContain("create_plan and transition_from_legacy=true");
+    expect(errors.join("\n")).toContain("revise_plan");
   });
 
   it("accepts matching and tighter run checks, and ignores extra checks", () => {

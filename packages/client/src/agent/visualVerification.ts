@@ -1,4 +1,4 @@
-import type { VisualVerificationRecordDto } from "@chamfer/shared";
+import type { ShapeProofRecord, VisualVerificationRecordDto } from "@chamfer/shared";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ReferenceRecordDto } from "@chamfer/shared";
 
@@ -36,19 +36,44 @@ function latestPassingVisualArtifact(messages: readonly unknown[]): VisualArtifa
       isError?: unknown;
       details?: {
         code?: { artifactId?: unknown; artifactVersion?: unknown };
+        shapeProof?: ShapeProofRecord;
         inspectionSheet?: {
           attachmentId?: unknown;
           code?: { artifactId?: unknown; artifactVersion?: unknown };
           gate?: { status?: unknown };
         };
+        status?: unknown;
+        visualArtifact?: { artifactId?: unknown; artifactVersion?: unknown; inspectionSheet?: { attachmentId?: unknown } };
       };
     };
+    // A read-only rendered visual read at the then-current revision is current
+    // evidence when it is the newest visual event: visual finalization of a
+    // finished design must be satisfiable without another mutation. Non-visual
+    // inspections neither provide nor invalidate evidence.
+    if (message.role === "toolResult" && message.toolName === "inspect_fusion") {
+      if (message.isError === true) continue;
+      const artifact = (message.details as { visualArtifact?: { artifactId?: unknown; artifactVersion?: unknown; inspectionSheet?: { attachmentId?: unknown } } } | undefined)?.visualArtifact;
+      if (typeof artifact?.artifactId === "string" && typeof artifact.artifactVersion === "number" && typeof artifact.inspectionSheet?.attachmentId === "string") {
+        return { artifactId: artifact.artifactId, artifactVersion: artifact.artifactVersion, inspectionSheetId: artifact.inspectionSheet.attachmentId };
+      }
+      continue;
+    }
+    if (message.role === "toolResult" && message.toolName === "run_fusion_action") {
+      if (message.isError === true || message.details?.status === "nonconforming") return undefined;
+      if (message.details?.status === "rolled-back") continue;
+      if (message.details?.status !== "completed") return undefined;
+      const artifact = message.details.visualArtifact;
+      return typeof artifact?.artifactId === "string" && typeof artifact.artifactVersion === "number" && typeof artifact.inspectionSheet?.attachmentId === "string"
+        ? { artifactId: artifact.artifactId, artifactVersion: artifact.artifactVersion, inspectionSheetId: artifact.inspectionSheet.attachmentId }
+        : undefined;
+    }
     if (message.role !== "toolResult" || message.toolName !== "run_build123d") continue;
     const code = message.details?.code ?? message.details?.inspectionSheet?.code;
     if (typeof code?.artifactId !== "string" || typeof code.artifactVersion !== "number") continue;
 
     const sheet = message.details?.inspectionSheet;
     if (message.isError === true || sheet?.gate?.status !== "passed" ||
+        (message.details?.shapeProof && message.details.shapeProof.status !== "passed") ||
         typeof sheet.attachmentId !== "string" || sheet.code?.artifactId !== code.artifactId ||
         sheet.code.artifactVersion !== code.artifactVersion) {
       return undefined;

@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 test("a long expanded plan scrolls without displacing the conversation", async ({ page }) => {
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   await page.getByTestId("composer-input").fill("long-plan-layout: show a plan with many components");
   await page.getByTestId("composer-send").click();
 

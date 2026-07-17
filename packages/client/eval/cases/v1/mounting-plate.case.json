@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "text.mounting-plate",
+  "version": 1,
+  "title": "Four-hole mounting plate",
+  "purpose": "Measure multi-feature construction with a dimensioned plate and a positional through-hole pattern.",
+  "capability": "positioned-through-hole-pattern",
+  "modality": "text",
+  "complexity": "standard",
+  "complexityRationale": "A base extrusion plus four positioned through cuts whose count, diameter, and envelope are independently checkable.",
+  "categories": ["construction", "features", "holes"],
+  "gatingStatus": "release",
+  "capabilityStatus": "supported",
+  "inputs": {
+    "turns": [{
+      "role": "user",
+      "text": "Build a 60 by 40 by 6 mm mounting plate with four 6 mm through holes. Put each hole center 8 mm from its two nearest edges."
+    }],
+    "assets": []
+  },
+  "expectedOutcome": {
+    "kind": "completed",
+    "requirements": [
+      {
+        "id": "envelope",
+        "description": "The final plate envelope is 60 by 40 by 6 mm.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "bbox" }
+      },
+      {
+        "id": "holes",
+        "description": "Four 6 mm through holes are present at the requested edge offsets.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "gate-checks" }
+      }
+    ]
+  },
+  "requiredEvidence": [
+    { "id": "verification-gate", "kind": "verification-gate", "evaluatorId": "verification-gate" },
+    { "id": "envelope", "kind": "geometry-measurement", "evaluatorId": "bbox" },
+    { "id": "holes", "kind": "geometry-measurement", "evaluatorId": "gate-checks" }
+  ],
+  "forbiddenOutcomes": [
+    { "kind": "false-success", "reason": "A plate without all four current through-hole checks cannot be completed." }
+  ],
+  "evaluatorRefs": [
+    { "id": "verification-gate", "version": 1, "required": true, "config": {} },
+    { "id": "bbox", "version": 1, "required": true, "config": { "expectedMm": [60, 40, 6], "toleranceMm": 0.5 } },
+    { "id": "gate-checks", "version": 1, "required": true, "config": { "names": ["check:hole_through[0]"] } }
+  ],
+  "rubricRefs": [],
+  "sourceSafety": {
+    "classification": "synthetic",
+    "containsProductionData": false,
+    "notes": "Synthetic dimensions and feature positions created for deterministic evaluation."
+  }
+}

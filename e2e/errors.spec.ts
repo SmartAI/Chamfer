@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 // Runs in REAL mode (no CHAMFER_FAKE_LLM) against a fresh empty DB: delete
 // data/chamfer.db before the run so settings hold no model and no API keys.
@@ -25,7 +26,7 @@ test("with no API key configured the composer is disabled with a settings hint a
   );
 
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).click();
+  await startBuild123dConversation(page);
 
   await expect(page.getByTestId("composer-input")).toBeDisabled();
   await expect(page.getByTestId("composer-send")).toBeDisabled();

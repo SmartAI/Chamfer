@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
+import type { CadEnvironment } from "@chamfer/shared";
 import { findSkill, skillBodyText, skillNames, skillResourceText } from "../skillRegistry";
 
 const parameters = Type.Object({
@@ -16,6 +17,7 @@ const parameters = Type.Object({
 
 export interface LoadSkillDetails {
   skill: string;
+  version?: string;
   resource?: string;
   /** True when this call returned an already-in-context notice instead of the payload. */
   deduped?: boolean;
@@ -65,22 +67,24 @@ export function loadedSkillKeys(messages: readonly unknown[]): Set<string> {
  * details payload (not the text) is the contract with contextPolicy.ts.
  */
 export function createLoadSkillTool(deps: {
+  cadEnvironment?: CadEnvironment;
   getMessages: () => readonly unknown[];
 }): AgentTool<typeof parameters, LoadSkillDetails & { loaded?: boolean }> {
   return {
     name: "load_skill",
-    label: "Load modeling skill",
+    label: "Load CAD skill",
     description:
-      "Load a build123d modeling skill from the available_skills list, or one resource file it references. The content arrives once and then stays available for the whole conversation.",
+      `Load a ${deps.cadEnvironment === "fusion" ? "Fusion or shared CAD-method" : "build123d or shared CAD-method"} skill from the available_skills list, or one resource file it references. The content arrives once and then stays available for the whole conversation.`,
     parameters,
     execute: async (_toolCallId, { name, resource }) => {
-      const skill = findSkill(name.trim());
+      const environment = deps.cadEnvironment ?? "build123d";
+      const skill = findSkill(name.trim(), environment);
       if (!skill) {
         return {
           content: [
             {
               type: "text",
-              text: `Unknown skill "${name}". Available skills: ${skillNames().join(", ")}.`,
+              text: `Unknown skill "${name}". Available skills: ${skillNames(environment).join(", ")}.`,
             },
           ],
           details: { skill: name },
@@ -107,9 +111,10 @@ export function createLoadSkillTool(deps: {
         }
       }
 
+      const version = skill.version === "unversioned" ? {} : { version: skill.version };
       const details: LoadSkillDetails = resourcePath
-        ? { skill: skill.name, resource: resourcePath }
-        : { skill: skill.name };
+        ? { skill: skill.name, ...version, resource: resourcePath }
+        : { skill: skill.name, ...version };
       if (loadedSkillKeys(deps.getMessages()).has(skillLoadKey(details))) {
         const label = resourcePath ? `Resource "${resourcePath}" of skill "${skill.name}"` : `Skill "${skill.name}"`;
         return {

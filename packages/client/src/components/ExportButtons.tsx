@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Download } from "lucide-react";
-import type { ExportFormat } from "@chamfer/shared";
+import type { ExportFormat, ProofEvidenceState } from "@chamfer/shared";
 import { Button } from "@/components/ui/button";
 import { useAppState } from "@/state/appState";
 
@@ -26,7 +26,11 @@ function triggerDownload(data: Uint8Array, filename: string): void {
   }
 }
 
-export function ExportButtons() {
+export function ExportButtons({
+  proofState,
+}: {
+  proofState?: Exclude<ProofEvidenceState, "not-applicable">;
+}) {
   const { currentScript, exportModel } = useAppState();
   const [busy, setBusy] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +40,7 @@ export function ExportButtons() {
     setError(null);
     try {
       const { data, filename } = await exportModel(format);
-      triggerDownload(data, filename);
+      triggerDownload(data, `${proofState === "proven" ? "proven" : "unproven"}-${filename}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -48,7 +52,13 @@ export function ExportButtons() {
     <div className="border-t bg-muted/20 px-3 py-1.5">
       <div className="flex items-center gap-1.5">
         <Download className="mr-0.5 h-3.5 w-3.5 text-muted-foreground" />
-        <span className="mr-1 text-xs font-medium text-muted-foreground">Export</span>
+        <span
+          data-testid="export-proof-label"
+          data-proof-state={proofState ?? "unproven"}
+          className="mr-1 text-xs font-medium text-muted-foreground"
+        >
+          Export - {proofState === "proven" ? "Proven" : "Unproven"}
+        </span>
         {FORMATS.map(({ format, label }) => (
           <Button
             key={format}

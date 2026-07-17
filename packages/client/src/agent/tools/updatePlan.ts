@@ -6,32 +6,33 @@ import {
   PLAN_INTERFACE_KINDS,
   UPDATE_PLAN_TOOL_NAME,
   acceptedCheckRevisions,
-  applyPlanSnapshotEvidence,
   collectComponentEvidence,
   collectComponentMeasurements,
+  collectFusionComponentEvidence,
   describePlanStatus,
   latestPlan,
+  normalizePlanSnapshot,
   validatePlanSnapshot,
   type Plan,
 } from "../plan";
-import { PLAN_CHECK_ENTRY_SCHEMA } from "../planChecks";
-import { PLAN_SPEC_SHEET_ROW_SCHEMA } from "../planChecks";
+import { isDomainPlan } from "../domainPlan";
+import { PLAN_CHECK_ENTRY_SCHEMA, PLAN_SPEC_SHEET_ROW_SCHEMA } from "../planChecks";
 
 const component = Type.Object({
   id: Type.String({
     description:
-      'Stable lowercase slug (e.g. "lid"). Must equal the Compound child label and the script COMPONENT declaration; "probe" is reserved.',
+      'Stable lowercase slug (e.g. "lid"). Keep it aligned with the environment-native component or body identity; "probe" is reserved.',
   }),
   description: Type.String({ description: "What this component is, in one sentence." }),
   bbox_mm: Type.Array(Type.Number(), {
-      minItems: 3,
-      maxItems: 3,
-      description: "Target envelope in mm, sorted-compare semantics like EXPECT.bbox_mm.",
-    }),
+    minItems: 3,
+    maxItems: 3,
+    description: "Target envelope in mm, sorted-compare semantics like EXPECT.bbox_mm.",
+  }),
   checks: Type.Array(PLAN_CHECK_ENTRY_SCHEMA, {
-      description:
-        "CHECKS entries this component must pass, each with a stable id unique within the component. A gate-passed run declaring the component must include every one of them before the component can be marked done.",
-    }),
+    description:
+      "Typed acceptance entries this component must pass, each with a stable id unique within the component. Current trusted execution evidence must cover every entry before completion.",
+  }),
   status: StringEnum(PLAN_COMPONENT_STATUSES as unknown as string[], {
     description:
       '"done" is accepted only with gate evidence and, for an image-derived plan transition, a complete all-match form_review tied to that evidence; "blocked" requires blocked_reason when a genuine limitation prevents completion; "abandoned" requires abandon_reason and is the only legal way to shrink the plan.',
@@ -50,7 +51,10 @@ const component = Type.Object({
   ),
   form_review: Type.Optional(
     Type.Object({
-      evidence_id: Type.String({ description: "Tool-call id of the latest gate-passed run whose inspection sheet was reviewed." }),
+      evidence_id: Type.String({
+        description:
+          "Evidence id for the reviewed run. Chamfer binds this to the latest eligible gate-passed run for the component.",
+      }),
       views: Type.Array(
         Type.Object({
           view: StringEnum(FORM_REVIEW_VIEWS as unknown as string[]),
@@ -90,24 +94,55 @@ const parameters = Type.Object({
 });
 
 /**
- * The plan artifact tool. Always submits a FULL snapshot; the newest accepted
- * snapshot is the plan of record (derived from the transcript, so it survives
- * reloads and compaction). Validation implements the trust model in plan.ts;
- * a rejected snapshot throws, which pi reports to the model as a tool error.
+ * A fieldless compatibility schema accepts stale snapshot calls without
+ * advertising any writable snapshot contract to current models.
+ */
+const retiredSnapshotParameters = Type.Object({}, { additionalProperties: true });
+
+export function createRetiredUpdatePlanTool(deps: {
+  getMessages: () => readonly unknown[];
+}): AgentTool<typeof retiredSnapshotParameters, never> {
+  return {
+    name: UPDATE_PLAN_TOOL_NAME,
+    label: "Update plan",
+    description:
+      "Retired read-only compatibility endpoint for stale model calls. It never changes a plan. Use create_plan for initial creation or an explicit legacy transition, then revise_plan domain operations for every change.",
+    parameters: retiredSnapshotParameters,
+    executionMode: "sequential",
+    execute: async () => {
+      const current = latestPlan(deps.getMessages());
+      if (!current) {
+        throw new Error(
+          "update_plan is retired and no plan was changed. Call record_source_specifications for the durable requirements, then call create_plan. Use revise_plan domain operations for every later mutation.",
+        );
+      }
+      if (isDomainPlan(current)) {
+        throw new Error(
+          "update_plan is retired and no plan was changed. Call revise_plan with one atomic batch of explicit domain operations against the current authoritative plan.",
+        );
+      }
+      throw new Error(
+        "update_plan is retired and the stored legacy snapshot remains unchanged. Call create_plan once with transition_from_legacy=true and the complete normalized active legacy state; after that transition, use revise_plan domain operations for every mutation.",
+      );
+    },
+  };
+}
+
+/**
+ * The legacy plan artifact tool. It submits a full snapshot and retains the
+ * pre-domain-plan validation and evidence bookkeeping contract for older
+ * conversations that have not crossed the authoritative-plan migration.
  */
 export function createUpdatePlanTool(deps: {
-  /** Live view of the session transcript (agent.state.messages). */
   getMessages: () => readonly unknown[];
-  /** Whether the pending user turn contains an image and therefore requires a spec sheet. */
   requireSpecSheet?: () => boolean;
-  /** Notifies the session only after a snapshot has passed validation. */
   onAccepted?: (plan: Plan) => void;
 }): AgentTool<typeof parameters, { plan: Plan }> {
   return {
     name: UPDATE_PLAN_TOOL_NAME,
     label: "Update plan",
     description:
-      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_id}, or state a non-empty unverifiable_reason. Before changing an image-derived component to done, submit form_review with match verdicts and notes for all seven views, tied to the latest gate-passed run by evidence_id. Submit the complete plan every time, never a delta.",
+      "Create or revise the complete design plan: goal, components, per-component checks, interfaces, and the image spec sheet when required. Submit the complete plan every time, never a delta. For an image request, call this before run_build123d and enumerate every readable dimension, feature, note, and spec-table row in spec_sheet. Each spec row must link to an existing component check with {component_id, check_id}, or state a non-empty unverifiable_reason. Before changing an image-derived component to done, submit form_review with match verdicts and notes for all seven views; Chamfer will bind form_review evidence_id to the latest eligible gate-passed run for that component. The plan requires a volume check targeting each buildable component, with hi <= 1.5 * lo. A further weakening requires a fresh standalone revision_reason; Chamfer preserves the accepted history and appends the fresh explanation before strict validation.",
     parameters,
     execute: async (_toolCallId, args) => {
       const messages = deps.getMessages();
@@ -116,9 +151,18 @@ export function createUpdatePlanTool(deps: {
       const evidence = collectComponentEvidence(messages);
       for (const [componentId, latestMeasurements] of collectComponentMeasurements(messages)) {
         const prior = evidence.get(componentId);
-        evidence.set(componentId, { checks: prior?.checks ?? new Set<string>(), evidenceId: prior?.evidenceId, latestMeasurements });
+        evidence.set(componentId, {
+          checks: prior?.checks ?? new Set<string>(),
+          evidenceId: prior?.evidenceId,
+          latestMeasurements,
+        });
       }
-      const next = applyPlanSnapshotEvidence(submitted, previous, evidence);
+      // A Fusion conversation has no run_build123d results; its completion
+      // evidence is the newest trusted full inspection at the current revision.
+      for (const [componentId, record] of collectFusionComponentEvidence(messages, submitted)) {
+        evidence.set(componentId, record);
+      }
+      const next = normalizePlanSnapshot({ next: submitted, previous, evidence });
       const errors = validatePlanSnapshot({
         next,
         previous,
@@ -126,29 +170,30 @@ export function createUpdatePlanTool(deps: {
         requireSpecSheet: deps.requireSpecSheet?.() ?? false,
       });
       if (errors.length > 0) {
-        throw new Error(`Plan rejected:\n${errors.map((e) => `- ${e}`).join("\n")}`);
+        throw new Error(
+          `Plan rejected:\n${errors.map((error) => `- ${error}`).join("\n")}\nRevise the Chamfer plan with update_plan; do not search build123d docs for plan-contract errors.`,
+        );
       }
       const revisions = acceptedCheckRevisions(next, previous);
       const revisionText = revisions.length === 0
         ? ""
         : `\nCheck revisions recorded and shown to the user:\n${revisions.map((revision) => `- ${revision.componentId}/${revision.checkId}: ${revision.reason}`).join("\n")}`;
-      const refits = next.components.flatMap((component) =>
-        (component.checks ?? [])
+      const refits = next.components.flatMap((candidate) =>
+        (candidate.checks ?? [])
           .filter((check) => check.refit_to_measurement === true && previous?.components
-            .find((candidate) => candidate.id === component.id)?.checks?.find((prior) => prior.id === check.id)?.refit_to_measurement !== true)
-          .map((check) => `${component.id}/${check.id}`),
+            .find((priorComponent) => priorComponent.id === candidate.id)?.checks
+            ?.find((prior) => prior.id === check.id)?.refit_to_measurement !== true)
+          .map((check) => `${candidate.id}/${check.id}`),
       );
       const refitText = refits.length === 0
         ? ""
         : `\nRefit-to-measurement checks shown to the user:\n${refits.map((refit) => `- ${refit}`).join("\n")}`;
       deps.onAccepted?.(next);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Plan accepted: ${describePlanStatus(next)}.${revisionText}${refitText}\n${JSON.stringify(next)}`,
-          },
-        ],
+        content: [{
+          type: "text",
+          text: `Plan accepted: ${describePlanStatus(next)}.${revisionText}${refitText}\n${JSON.stringify(next)}`,
+        }],
         details: { plan: next },
       };
     },

@@ -19,8 +19,12 @@ docs/internal/
 
 # Local agent/session artifacts (launch configs, worktrees)
 .agent/
-.agents/
-.claude/
+# .agents and .claude are tracked in this private repo (publish-public.sh strips both
+# from the public export); ignore only worktrees and machine-local runtime files.
+.agents/worktrees/
+.claude/settings.local.json
+.claude/launch.json
+.claude/*.lock
 /.playwright-mcp
 /.playwright-cli/
 /skills-lock.json

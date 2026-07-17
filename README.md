@@ -9,8 +9,8 @@
 Chamfer is an AI CAD designer that turns text and reference images into verified, parametric 3D models.
 For complex requests, it creates an evidence-backed plan, executes it over multiple steps, retrieves build123d guidance as needed, and checks both geometry and visual fidelity before finishing.
 CAD executes locally in your browser; fine-tune dimensions with live sliders, then export STEP, STL, 3MF, or Python.
-Prompts and attached images are sent to the model provider you configure.
-CAD execution, geometry, conversations, and settings stay local.
+Prompts and attached images are sent to the model provider you configure. For Autodesk Fusion conversations, Chamfer also sends only selected normalized evidence from the bound design: necessary engineering snapshot fields, relevant installed API excerpts, selected views, and normalized action results.
+CAD execution, native geometry and Fusion files, unrelated documents and projects, credentials, raw MCP traffic, conversations, and settings stay local.
 
 ## Demos
 

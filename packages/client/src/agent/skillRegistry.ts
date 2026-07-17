@@ -1,4 +1,5 @@
 import { formatSkillInvocation, formatSkillsForSystemPrompt, type Skill } from "@earendil-works/pi-agent-core";
+import type { CadEnvironment } from "@chamfer/shared";
 
 /**
  * Registry of Chamfer's build123d modeling skills, the tier-2 layer of the
@@ -18,21 +19,37 @@ import { formatSkillInvocation, formatSkillsForSystemPrompt, type Skill } from "
  * py-tests/test_skill_snippets.py, so every inline example is pinned honest.
  */
 
-const skillFiles = import.meta.glob("./skills/*/SKILL.md", {
+const build123dSkillFiles = import.meta.glob("./skills/*/SKILL.md", {
   query: "?raw",
   import: "default",
   eager: true,
 }) as Record<string, string>;
 
-const resourceFiles = import.meta.glob("./skills/*/snippets/*.py", {
+const build123dResourceFiles = import.meta.glob("./skills/*/snippets/*.py", {
   query: "?raw",
   import: "default",
   eager: true,
+}) as Record<string, string>;
+
+const fusionSkillFiles = import.meta.glob("./fusion-skills/*/SKILL.md", {
+  query: "?raw", import: "default", eager: true,
+}) as Record<string, string>;
+const fusionResourceFiles = import.meta.glob("./fusion-skills/*/snippets/*.py", {
+  query: "?raw", import: "default", eager: true,
+}) as Record<string, string>;
+const methodSkillFiles = import.meta.glob("./method-skills/*/SKILL.md", {
+  query: "?raw", import: "default", eager: true,
+}) as Record<string, string>;
+const methodResourceFiles = import.meta.glob("./method-skills/*/snippets/*.py", {
+  query: "?raw", import: "default", eager: true,
 }) as Record<string, string>;
 
 export interface ChamferSkill extends Skill {
   /** Resource files under the skill folder, keyed by skill-relative path (e.g. "snippets/helix.py"). */
   resources: ReadonlyMap<string, string>;
+  /** Reviewed content version pinned into action/evaluation attribution. */
+  version: string;
+  scope: CadEnvironment | "cad-method";
 }
 
 /** Matches pi-agent-core's SKILL.md name rules (loadSkillFromFile validation). */
@@ -84,11 +101,19 @@ function interpolateSnippets(body: string, resources: ReadonlyMap<string, string
   });
 }
 
-function buildSkills(): ChamferSkill[] {
+interface SkillSource {
+  scope: ChamferSkill["scope"];
+  directory: "skills" | "fusion-skills" | "method-skills";
+  skillFiles: Record<string, string>;
+  resourceFiles: Record<string, string>;
+}
+
+function buildSkills(source: SkillSource): ChamferSkill[] {
+  const { scope, directory, skillFiles, resourceFiles } = source;
   const resourcesByDir = new Map<string, Map<string, string>>();
   for (const [modulePath, content] of Object.entries(resourceFiles)) {
     // "./skills/<dir>/snippets/<file>.py" -> dir + "snippets/<file>.py"
-    const match = /^\.\/skills\/([^/]+)\/(.+)$/.exec(modulePath);
+    const match = new RegExp(`^\\./${directory}/([^/]+)/(.+)$`).exec(modulePath);
     if (!match?.[1] || !match[2]) continue;
     const byPath = resourcesByDir.get(match[1]) ?? new Map<string, string>();
     byPath.set(match[2], content);
@@ -104,21 +129,39 @@ function buildSkills(): ChamferSkill[] {
       name: frontmatter.name || dir,
       description: frontmatter.description ?? "",
       content: interpolateSnippets(body, resources),
-      filePath: `skills/${dir}/SKILL.md`,
+      filePath: `${directory}/${dir}/SKILL.md`,
       resources,
+      version: frontmatter.version || "unversioned",
+      scope,
     });
   }
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export const skills: readonly ChamferSkill[] = buildSkills();
+const build123dSkills = buildSkills({
+  scope: "build123d", directory: "skills", skillFiles: build123dSkillFiles, resourceFiles: build123dResourceFiles,
+});
+const sharedMethodSkills = buildSkills({
+  scope: "cad-method", directory: "method-skills", skillFiles: methodSkillFiles, resourceFiles: methodResourceFiles,
+});
+export const skills: readonly ChamferSkill[] = [...build123dSkills, ...sharedMethodSkills].sort((a, b) => a.name.localeCompare(b.name));
+export const fusionSkills: readonly ChamferSkill[] = [
+  ...buildSkills({
+    scope: "fusion", directory: "fusion-skills", skillFiles: fusionSkillFiles, resourceFiles: fusionResourceFiles,
+  }),
+  ...sharedMethodSkills,
+].sort((a, b) => a.name.localeCompare(b.name));
 
-export function findSkill(name: string): ChamferSkill | undefined {
-  return skills.find((skill) => skill.name === name);
+function catalogSkills(environment: CadEnvironment): readonly ChamferSkill[] {
+  return environment === "fusion" ? fusionSkills : skills;
 }
 
-export function skillNames(): string[] {
-  return skills.map((skill) => skill.name);
+export function findSkill(name: string, environment: CadEnvironment = "build123d"): ChamferSkill | undefined {
+  return catalogSkills(environment).find((skill) => skill.name === name);
+}
+
+export function skillNames(environment: CadEnvironment = "build123d"): string[] {
+  return catalogSkills(environment).map((skill) => skill.name);
 }
 
 /**
@@ -126,12 +169,13 @@ export function skillNames(): string[] {
  * skill list, plus the adapter line binding it to load_skill (this runtime has
  * no file-read tool, so <location> paths are fetched through load_skill).
  */
-export function skillCatalog(): string {
-  if (skills.length === 0) return "";
+export function skillCatalog(environment: CadEnvironment = "build123d"): string {
+  const selected = catalogSkills(environment);
+  if (selected.length === 0) return "";
   return [
-    formatSkillsForSystemPrompt([...skills]),
+    formatSkillsForSystemPrompt([...selected]),
     "",
-    'Use load_skill(name) for SKILL.md and load_skill(name, resource) for referenced files. Load a matching skill before first use or after failure; loaded skills persist, so do not reload them.',
+    "Use load_skill(name) and load_skill(name, resource) for its files. Load before first use; content persists.",
   ].join("\n");
 }
 
@@ -163,7 +207,9 @@ export function proseWordCount(body: string): number {
  */
 export function validateSkillRegistry(): string[] {
   const problems: string[] = [];
-  for (const [modulePath, content] of Object.entries(skillFiles)) {
+  const everySkillFile = { ...build123dSkillFiles, ...fusionSkillFiles, ...methodSkillFiles };
+  const everySkill = [...build123dSkills, ...fusionSkills.filter((skill) => skill.scope === "fusion")];
+  for (const [modulePath, content] of Object.entries(everySkillFile)) {
     const dir = skillDirName(modulePath);
     const { frontmatter } = parseFrontmatter(content);
     if ((frontmatter.name || dir) !== dir) {
@@ -171,12 +217,12 @@ export function validateSkillRegistry(): string[] {
     }
   }
   const rawBodies = new Map<string, string>(
-    Object.entries(skillFiles).map(([modulePath, content]) => [
+    Object.entries(everySkillFile).map(([modulePath, content]) => [
       skillDirName(modulePath),
       parseFrontmatter(content).body,
     ]),
   );
-  for (const skill of skills) {
+  for (const skill of everySkill) {
     const label = skill.name;
     if (!NAME_PATTERN.test(skill.name) || skill.name.length > MAX_NAME_LENGTH) {
       problems.push(`${label}: invalid name (lowercase a-z, 0-9, single hyphens, max ${MAX_NAME_LENGTH})`);
@@ -193,7 +239,7 @@ export function validateSkillRegistry(): string[] {
     }
     // Discoverability is judged on the raw authored body, where an interpolated
     // {{snippet:...}} marker still names its file.
-    const rawBody = rawBodies.get(skill.filePath.split("/")[1] ?? "") ?? skill.content;
+    const rawBody = rawBodies.get(skill.name) ?? skill.content;
     for (const path of skill.resources.keys()) {
       if (!rawBody.includes(path)) {
         problems.push(`${label}: resource "${path}" is never referenced from the body, so the model cannot discover it`);

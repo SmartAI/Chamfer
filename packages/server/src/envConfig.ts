@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Provider, SettingsDto } from "@chamfer/shared";
+import { validateFusionMcpEndpoint } from "./fusion/mcpClient";
 
 const DOTENV_FILES = [".env", ".env.local"] as const;
 const ENV_PROVIDERS: Provider[] = ["anthropic", "openai", "google"];
@@ -82,6 +83,13 @@ export function envSettings(env: Env = process.env, lookup: ModelLookup = defaul
   pick("openaiBaseUrl", "OPENAI_BASE_URL");
   pick("googleApiKey", "GOOGLE_API_KEY", "GEMINI_API_KEY");
   pick("googleBaseUrl", "GOOGLE_BASE_URL");
+  if (env.CHAMFER_FUSION_MCP_ENDPOINT) {
+    try {
+      settings.fusionMcpEndpoint = validateFusionMcpEndpoint(env.CHAMFER_FUSION_MCP_ENDPOINT).href;
+    } catch (error) {
+      console.warn(`${error instanceof Error ? error.message : String(error)}; ignoring CHAMFER_FUSION_MCP_ENDPOINT`);
+    }
+  }
   const modelJson = resolveEnvModelJson(env, lookup);
   if (modelJson) settings.modelJson = modelJson;
   const maxCadRuns = env.CHAMFER_MAX_CAD_RUNS;

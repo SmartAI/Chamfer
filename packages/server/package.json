@@ -5,22 +5,33 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "fusion:integrity": "tsx src/fusion/runIntegrityProbe.ts",
+    "fusion:gate": "tsx src/fusion/runReleaseIntegrityGate.ts",
+    "fusion:evaluate": "tsx src/fusion/runEvaluation.ts",
+    "eval:sync": "tsx src/evaluation/syncOfflineExperimentCommand.ts",
+    "eval:sync-reviews": "tsx src/evaluation/syncOnlineReviewQueueCommand.ts",
     "start": "tsx src/index.ts",
     "test": "vitest --run",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"
   },
   "dependencies": {
+    "@chamfer/fusion-fixtures": "*",
     "@chamfer/shared": "*",
     "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.3",
     "@hono/node-server": "^1.13.0",
+    "@langfuse/client": "5.9.1",
+    "@langfuse/core": "5.9.1",
     "@langfuse/otel": "^5.9.1",
     "@langfuse/tracing": "^5.9.1",
+    "@lezer/python": "^1.1.19",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
     "hono": "^4.6.0",
     "sharp": "^0.35.3",
-    "tsx": "^4.19.0"
+    "tsx": "^4.19.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

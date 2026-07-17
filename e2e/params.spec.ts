@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import sharp from "sharp";
+import { startBuild123dConversation } from "./helpers";
 
 async function maxChannelDeviation(png: Buffer): Promise<number> {
   const stats = await sharp(png).removeAlpha().stats();
@@ -42,7 +43,7 @@ async function dragSlider(page: Page, name: string, fraction: number): Promise<v
 test("param slider re-runs locally without a new chat message", async ({ page }) => {
   test.setTimeout(600_000);
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();
   await composer.fill("make a box 10 by 20 by 30");
@@ -86,7 +87,7 @@ test("param slider re-runs locally without a new chat message", async ({ page })
 
   // A new conversation owns a fresh CAD workspace. The prior model and all
   // model-scoped controls must disappear immediately.
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   await expect(rightPanel.getByTestId("viewer")).toHaveAttribute("data-has-geometry", "false");
   await expect(rightPanel.getByTestId("params-panel")).toHaveCount(0);
   await expect(rightPanel.getByTestId("export-step")).toBeDisabled();
@@ -97,11 +98,7 @@ test("pointer dragging accepts responsive geometry and rejects an ineffective pa
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
 
-  const created = page.waitForResponse(
-    (response) => response.url().includes("/api/conversations") && response.request().method() === "POST",
-  );
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
-  const conversation = (await (await created).json()) as { id: string };
+  const conversation = (await (await startBuild123dConversation(page)).json()) as { id: string };
 
   const rightPanel = page.getByTestId("right-panel");
   await rightPanel.getByTestId("script-panel-toggle").click();

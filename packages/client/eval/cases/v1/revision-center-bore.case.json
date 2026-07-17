@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "revision.center-bore",
+  "version": 1,
+  "title": "Intent-preserving flange bore revision",
+  "purpose": "Measure whether a feature revision retains the flange envelope, thickness, and unaffected bolt pattern.",
+  "capability": "intent-preserving-feature-revision",
+  "modality": "multi-turn",
+  "complexity": "standard",
+  "complexityRationale": "A second turn changes one cut feature while a concentric envelope and six-hole polar pattern must remain current and verified.",
+  "categories": ["revision", "features", "retention"],
+  "gatingStatus": "release",
+  "capabilityStatus": "supported",
+  "inputs": {
+    "turns": [
+      { "role": "user", "text": "Create a 12 mm thick, 90 mm diameter flange with a 40 mm center bore and six 8 mm bolt holes on a 70 mm bolt circle." },
+      { "role": "user", "text": "Increase only the center bore to 46 mm. Retain the flange envelope, thickness, and all six bolt holes." }
+    ],
+    "assets": []
+  },
+  "expectedOutcome": {
+    "kind": "completed",
+    "requirements": [
+      {
+        "id": "retained-envelope",
+        "description": "The current artifact retains the 90 by 90 by 12 mm flange envelope.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "bbox" }
+      },
+      {
+        "id": "revised-and-retained-holes",
+        "description": "The center bore is 46 mm while all six 8 mm bolt holes remain on the 70 mm bolt circle.",
+        "evaluation": { "kind": "deterministic", "evaluatorId": "gate-checks" }
+      }
+    ]
+  },
+  "requiredEvidence": [
+    { "id": "verification-gate", "kind": "verification-gate", "evaluatorId": "verification-gate" },
+    { "id": "retained-envelope", "kind": "geometry-measurement", "evaluatorId": "bbox" },
+    { "id": "revised-and-retained-holes", "kind": "geometry-measurement", "evaluatorId": "gate-checks" }
+  ],
+  "forbiddenOutcomes": [
+    { "kind": "requirement-weakening", "reason": "The bolt pattern and outer dimensions remain active requirements." },
+    { "kind": "stale-evidence-success", "reason": "The original 40 mm bore evidence is stale after the revision." }
+  ],
+  "evaluatorRefs": [
+    { "id": "verification-gate", "version": 1, "required": true, "config": {} },
+    { "id": "bbox", "version": 1, "required": true, "config": { "expectedMm": [90, 90, 12], "toleranceMm": 0.5 } },
+    { "id": "gate-checks", "version": 1, "required": true, "config": { "names": ["check:hole_through[0]", "check:hole_through[1]"] } }
+  ],
+  "rubricRefs": [],
+  "sourceSafety": {
+    "classification": "synthetic",
+    "containsProductionData": false,
+    "notes": "Synthetic multi-turn flange revision with explicit retained requirements."
+  }
+}

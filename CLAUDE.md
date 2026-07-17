@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues and specs are tracked as local Markdown under `.scratch/`.
+Issues and specs are tracked as GitHub issues on the private development repo (`origin`).
 See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
@@ -31,7 +31,7 @@ npm workspaces monorepo:
   - `src/cad/` - CAD execution: `cad.worker.ts` runs Pyodide, `cadClient.ts` is the main-thread API.
   - `public/py/harness.py` + `bootstrap.py` - the Python harness that executes build123d scripts, measures geometry, and enforces the verify gate. This is plain Python served as a static asset; it is tested natively by `py-tests/`.
   - `src/viewer/` - three.js viewer; `src/state/` - app state; `src/components/` - UI.
-- `packages/server` - thin Hono server: LLM streaming proxy, settings/conversation stores (SQLite), `.env` loading. No CAD logic.
+- `packages/server` - thin Hono server: LLM streaming proxy, settings/conversation stores (SQLite), `.env` loading, and the loopback Autodesk Fusion connector. Build123d CAD execution remains client-side.
 - `packages/cli` - the publishable `chamfer` npm package; esbuild bundles server + built client into `dist/`.
 
 `docs/internal/` is git-ignored and holds local working notes. Never commit anything into it or move its contents into tracked paths; this repo is public.

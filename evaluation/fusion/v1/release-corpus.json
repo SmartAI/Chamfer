@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "composed-corpus",
+  "purpose": "autodesk-assistant-superiority",
+  "version": "fusion-superiority-release-v1",
+  "slices": [
+    {
+      "path": "evaluation/fusion/v1/corpus.json",
+      "version": "fusion-tracers-v1",
+      "sha256": "99e127e860672b4e42443a8de94abf8762cd919f8215b1fa165d49aec7f8347a"
+    },
+    {
+      "path": "evaluation/fusion/v1/foundational.json",
+      "version": "fusion-foundational-v1",
+      "sha256": "b33f365017becf4049bee327d16592a2bbd147c7dbf4b152bd928c48267e6093"
+    },
+    {
+      "path": "evaluation/fusion/v1/multimodal-manual.json",
+      "version": "fusion-multimodal-manual-v1",
+      "sha256": "a8d73679ae0ca3ff506a584c6e9173f1deae08d695ce79e748ab7332f8d64d31"
+    },
+    {
+      "path": "evaluation/fusion/v1/industrial-recovery.json",
+      "version": "fusion-industrial-recovery-v1",
+      "sha256": "8aae65e9ecfe0a4c0c54a6f099b7562897bdfb22565f2827669f52fbf785e610"
+    }
+  ]
+}

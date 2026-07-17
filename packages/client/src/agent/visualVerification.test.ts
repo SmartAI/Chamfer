@@ -137,6 +137,88 @@ describe("visual finalization validation", () => {
     ])).toBeUndefined();
   });
 
+  it("uses the completed Fusion action's persisted inspection sheet as current visual evidence", () => {
+    const fusionRun = {
+      role: "toolResult",
+      toolName: "run_fusion_action",
+      isError: false,
+      details: {
+        status: "completed",
+        visualArtifact: {
+          artifactId: "fusion-inspection-1",
+          artifactVersion: 1,
+          revision: "fusion-revision-1",
+          inspectionSheet: { attachmentId: "fusion-sheet-1" },
+        },
+      },
+    };
+    const evidence = currentVisualEvidence("conversation-a", [fusionRun] as never[], []);
+
+    expect(evidence).toEqual({
+      conversationId: "conversation-a",
+      artifactId: "fusion-inspection-1",
+      artifactVersion: 1,
+      inspectionSheetId: "fusion-sheet-1",
+      activeReferenceIds: [],
+    });
+    expect(currentVisualVerification([
+      fusionRun,
+      {
+        role: "toolResult",
+        toolName: "record_visual_verification_batch",
+        isError: false,
+        details: { finalVerification: { ...accepted, artifactId: "fusion-inspection-1", artifactVersion: 1, inspectionSheetId: "fusion-sheet-1" } },
+      },
+    ])).toMatchObject({ artifactId: "fusion-inspection-1", inspectionSheetId: "fusion-sheet-1" });
+  });
+
+  it("accepts a read-only inspect_fusion view sheet as current visual evidence", () => {
+    const completedWithoutSheet = {
+      role: "toolResult", toolName: "run_fusion_action", isError: false,
+      details: { status: "completed" },
+    };
+    const scalarInspection = {
+      role: "toolResult", toolName: "inspect_fusion", isError: false,
+      details: { mutated: false, revision: "fusion-revision-2", inspectionId: "fusion-inspection-2", viewSheet: false },
+    };
+    const visualInspection = {
+      role: "toolResult", toolName: "inspect_fusion", isError: false,
+      details: { mutated: false, revision: "fusion-revision-2", inspectionId: "fusion-inspection-2", viewSheet: true,
+        visualArtifact: { artifactId: "fusion-inspection-2", artifactVersion: 3, revision: "fusion-revision-2",
+          inspectionSheet: { attachmentId: "fusion-sheet-2" } } },
+    };
+
+    // Without a visual read, a completed mutation without a sheet leaves no current evidence.
+    expect(currentVisualEvidence("conversation-a", [completedWithoutSheet] as never[], [])).toBeUndefined();
+    // A scalar inspection neither provides nor invalidates evidence; the visual read does.
+    expect(currentVisualEvidence(
+      "conversation-a",
+      [completedWithoutSheet, visualInspection, scalarInspection] as never[],
+      [],
+    )).toEqual({
+      conversationId: "conversation-a",
+      artifactId: "fusion-inspection-2",
+      artifactVersion: 3,
+      inspectionSheetId: "fusion-sheet-2",
+      activeReferenceIds: [],
+    });
+  });
+
+  it("invalidates a completed Fusion sheet when a newer nonconforming revision is retained", () => {
+    const completed = {
+      role: "toolResult", toolName: "run_fusion_action", isError: false,
+      details: { status: "completed", visualArtifact: {
+        artifactId: "fusion-inspection-1", artifactVersion: 1, inspectionSheet: { attachmentId: "fusion-sheet-1" },
+      } },
+    };
+    const nonconforming = {
+      role: "toolResult", toolName: "run_fusion_action", isError: false,
+      details: { status: "nonconforming", finalRevision: "fusion-revision-2" },
+    };
+
+    expect(currentVisualEvidence("conversation-a", [completed, nonconforming] as never[], [])).toBeUndefined();
+  });
+
   it("hides a matching artifact verdict when the active reference set has changed", () => {
     const currentRun = {
       role: "toolResult",

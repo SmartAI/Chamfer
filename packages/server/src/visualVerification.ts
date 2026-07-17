@@ -12,7 +12,7 @@ export class VisualVerificationError extends Error {
   constructor(message: string, readonly code: "invalid" | "conflict" = "invalid") { super(message); }
 }
 
-interface ArtifactRow { id: string; conversation_id: string; version: number }
+interface ArtifactRow { id: string; conversation_id: string; version: number; sheetId?: string }
 interface MessageRow { content_json: string }
 interface VerificationRow {
   id: string;
@@ -66,6 +66,57 @@ function currentSheetId(db: DatabaseSync, conversationId: string, artifact: Arti
     }
   }
   return undefined;
+}
+
+function validatedFusionTarget(
+  db: DatabaseSync,
+  conversationId: string,
+  artifactId: string,
+  artifactVersion: number,
+  sheetId: string,
+): ArtifactRow | undefined {
+  const inspection = db.prepare("SELECT 1 FROM fusion_inspections WHERE id = ? AND conversation_id = ?")
+    .get(artifactId, conversationId);
+  const artifact = db.prepare("SELECT id, conversation_id, version FROM artifacts WHERE id = ? AND conversation_id = ? AND version = ?")
+    .get(artifactId, conversationId, artifactVersion) as unknown as ArtifactRow | undefined;
+  return inspection && artifact ? { ...artifact, sheetId } : undefined;
+}
+
+function currentVisualTarget(db: DatabaseSync, conversationId: string): ArtifactRow | undefined {
+  const environment = db.prepare("SELECT cad_environment FROM conversations WHERE id = ?").get(conversationId) as { cad_environment?: string } | undefined;
+  if (environment?.cad_environment === "fusion") {
+    const rows = db.prepare("SELECT content_json FROM messages WHERE conversation_id = ? ORDER BY seq DESC")
+      .all(conversationId) as unknown as MessageRow[];
+    for (const row of rows) {
+      try {
+        const message = JSON.parse(row.content_json) as { role?: unknown; toolName?: unknown; isError?: unknown; details?: {
+          status?: unknown; visualArtifact?: { artifactId?: unknown; artifactVersion?: unknown; inspectionSheet?: { attachmentId?: unknown } } } };
+        const visual = message.details?.visualArtifact;
+        if (message.role !== "toolResult") continue;
+        // A read-only visual read at the current revision is current evidence;
+        // a non-visual inspection neither provides nor invalidates evidence.
+        if (message.toolName === "inspect_fusion") {
+          if (message.isError === true || !nonEmpty(visual?.artifactId)
+            || typeof visual?.artifactVersion !== "number" || !nonEmpty(visual.inspectionSheet?.attachmentId)) continue;
+          return validatedFusionTarget(db, conversationId, visual.artifactId, visual.artifactVersion, visual.inspectionSheet.attachmentId);
+        }
+        if (message.toolName !== "run_fusion_action") continue;
+        if (message.isError === true || message.details?.status === "nonconforming") return undefined;
+        if (message.details?.status === "rolled-back") continue;
+        if (message.details?.status !== "completed") return undefined;
+        if (!nonEmpty(visual?.artifactId) || typeof visual?.artifactVersion !== "number" || !nonEmpty(visual.inspectionSheet?.attachmentId)) return undefined;
+        return validatedFusionTarget(db, conversationId, visual.artifactId, visual.artifactVersion, visual.inspectionSheet.attachmentId);
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+  const artifact = db.prepare("SELECT id, conversation_id, version FROM artifacts WHERE conversation_id = ? ORDER BY version DESC LIMIT 1")
+    .get(conversationId) as unknown as ArtifactRow | undefined;
+  if (!artifact) return undefined;
+  const sheetId = currentSheetId(db, conversationId, artifact);
+  return sheetId ? { ...artifact, sheetId } : undefined;
 }
 
 function validateObservations(observations: unknown): observations is VisualVerificationObservation[] {
@@ -150,12 +201,11 @@ export function recordVisualVerificationBatch(
       return batchToDto(existing, final ? toDto(final) : undefined);
     }
   }
-  const artifact = db.prepare("SELECT id, conversation_id, version FROM artifacts WHERE conversation_id = ? ORDER BY version DESC LIMIT 1")
-    .get(conversationId) as unknown as ArtifactRow | undefined;
+  const artifact = currentVisualTarget(db, conversationId);
   if (!artifact || artifact.id !== input.artifactId || artifact.version !== input.artifactVersion) {
     throw new VisualVerificationError(`verification must target latest artifact${artifact ? ` ${artifact.id} version ${artifact.version}` : " belonging to this conversation"}`);
   }
-  const sheetId = currentSheetId(db, conversationId, artifact);
+  const sheetId = artifact.sheetId;
   if (!sheetId || sheetId !== input.inspectionSheetId) {
     throw new VisualVerificationError(`verification must target current inspection sheet${sheetId ? ` ${sheetId}` : ""}`);
   }
@@ -269,13 +319,12 @@ function persistVisualVerification(
       throw new VisualVerificationError("idempotency key conflicts with an existing visual verification", "conflict");
     }
   }
-  const artifact = db.prepare("SELECT id, conversation_id, version FROM artifacts WHERE conversation_id = ? ORDER BY version DESC LIMIT 1")
-    .get(conversationId) as unknown as ArtifactRow | undefined;
+  const artifact = currentVisualTarget(db, conversationId);
   if (!artifact) throw new VisualVerificationError(`artifact ${input.artifactId} does not belong to this conversation`);
   if (artifact.id !== input.artifactId || artifact.version !== input.artifactVersion) {
     throw new VisualVerificationError(`verification must target latest artifact ${artifact.id} version ${artifact.version}`);
   }
-  const sheetId = currentSheetId(db, conversationId, artifact);
+  const sheetId = artifact.sheetId;
   if (!sheetId || sheetId !== input.inspectionSheetId) {
     throw new VisualVerificationError(`verification must target current inspection sheet${sheetId ? ` ${sheetId}` : ""}`);
   }

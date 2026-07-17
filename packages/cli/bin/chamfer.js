@@ -2,6 +2,8 @@
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 
 const major = Number(process.versions.node.split(".")[0]);
 if (major < 22) {
@@ -29,8 +31,27 @@ if (portFlag !== -1 && !Number.isInteger(port)) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
+const serverArtifact = join(here, "../dist/server.mjs");
+const packageRoot = join(here, "..");
+const releaseFiles = ["package.json", "bin/chamfer.js", "dist/server.mjs"];
+const visit = (relativePath) => {
+  const absolutePath = join(packageRoot, relativePath);
+  if (statSync(absolutePath).isFile()) return [relativePath];
+  return readdirSync(absolutePath).flatMap((entry) => visit(join(relativePath, entry)));
+};
+releaseFiles.push(...visit("dist/client"));
+const releaseHash = createHash("sha256");
+for (const relativePath of [...new Set(releaseFiles)].sort()) {
+  releaseHash.update(relativePath.replaceAll("\\", "/"));
+  releaseHash.update("\0");
+  releaseHash.update(readFileSync(join(packageRoot, relativePath)));
+  releaseHash.update("\0");
+}
+// Never trust an inherited value: normal-user access is tied to the bytes this
+// launcher is actually about to serve.
+process.env.CHAMFER_RELEASE_ARTIFACT_SHA256 = releaseHash.digest("hex");
 
-const { startServer, loadDotenv } = await import(pathToFileURL(join(here, "../dist/server.mjs")).href);
+const { startServer, loadDotenv } = await import(pathToFileURL(serverArtifact).href);
 for (const file of loadDotenv().files) {
   console.log(`chamfer: loaded environment from ${file}`);
 }

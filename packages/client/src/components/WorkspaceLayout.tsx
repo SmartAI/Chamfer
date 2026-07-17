@@ -11,7 +11,8 @@ const STORAGE_KEY = "chamfer.workspace-layout.v1";
 interface WorkspaceLayoutProps {
   sidebar: ReactNode;
   chat: ReactNode;
-  viewer: ReactNode;
+  /** Omit for chat-only workspaces (Fusion conversations render no right panel). */
+  viewer?: ReactNode;
 }
 
 interface LayoutWidths {
@@ -104,14 +105,16 @@ export function WorkspaceLayout({ sidebar, chat, viewer }: WorkspaceLayoutProps)
     </div>
   );
 
+  const hasViewer = viewer !== undefined && viewer !== null;
+  const viewerColumns = hasViewer ? ` 4px ${widths.viewer}px` : "";
   return (
     <div
       ref={containerRef}
       className="relative grid h-screen overflow-hidden bg-background text-foreground"
       style={{
         gridTemplateColumns: widths.sidebarCollapsed
-          ? `0 0 minmax(${MIN_CHAT_WIDTH}px, 1fr) 4px ${widths.viewer}px`
-          : `${widths.sidebar}px 4px minmax(${MIN_CHAT_WIDTH}px, 1fr) 4px ${widths.viewer}px`,
+          ? `0 0 minmax(${MIN_CHAT_WIDTH}px, 1fr)${viewerColumns}`
+          : `${widths.sidebar}px 4px minmax(${MIN_CHAT_WIDTH}px, 1fr)${viewerColumns}`,
       }}
     >
       <aside
@@ -136,10 +139,12 @@ export function WorkspaceLayout({ sidebar, chat, viewer }: WorkspaceLayoutProps)
       <main data-testid="chat-panel" className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         {chat}
       </main>
-      {separator("viewer", "Resize 3D panel")}
-      <aside data-testid="right-panel" className="min-w-0 overflow-hidden">
-        {viewer}
-      </aside>
+      {hasViewer && separator("viewer", "Resize 3D panel")}
+      {hasViewer && (
+        <aside data-testid="right-panel" className="min-w-0 overflow-hidden">
+          {viewer}
+        </aside>
+      )}
     </div>
   );
 }

@@ -8,7 +8,7 @@ describe("artifacts routes", () => {
     const conversation = await app.request("/api/conversations", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Bracket" }),
+      body: JSON.stringify({ title: "Bracket", cadEnvironment: "build123d" }),
     });
     const { id } = (await conversation.json()) as { id: string };
 
@@ -35,7 +35,7 @@ describe("artifacts routes", () => {
     const conversation = await app.request("/api/conversations", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Bracket" }),
+      body: JSON.stringify({ title: "Bracket", cadEnvironment: "build123d" }),
     });
     const { id } = (await conversation.json()) as { id: string };
 

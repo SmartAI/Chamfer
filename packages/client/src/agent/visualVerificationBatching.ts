@@ -92,7 +92,7 @@ function compactReferenceRecords(ids: readonly string[], records: readonly Refer
     const relationships = [...record.relationships]
       .sort((a, b) => `${a.type}:${a.referenceId}`.localeCompare(`${b.type}:${b.referenceId}`))
       .map((item) => `${item.type}:${item.referenceId}`).join("+") || "none";
-    return `${id}{status=${record.status};available=${record.attachmentAvailable};purpose=${JSON.stringify(record.purpose ?? "")};relationships=${relationships};specs=${[...record.specificationLinks].sort().join("+") || "none"};noSpec=${JSON.stringify(record.noSpecificationReason ?? "")}}`;
+    return `${id}{status=${record.status};available=${record.attachmentAvailable};purpose=${JSON.stringify(record.purpose ?? "")};relationships=${relationships};specs=${[...(record.specificationIds ?? record.specificationLinks ?? [])].sort().join("+") || "none"};noSpec=${JSON.stringify(record.noSpecificationReason ?? "")}}`;
   }).join("|");
 }
 

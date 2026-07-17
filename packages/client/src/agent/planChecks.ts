@@ -1,4 +1,5 @@
 import { Type, type Static } from "@earendil-works/pi-ai";
+import { FusionExpectedEffectSchema, isFusionExpectedEffect } from "@chamfer/shared";
 
 const positive = Type.Number({ exclusiveMinimum: 0 });
 const nonNegative = Type.Number({ minimum: 0 });
@@ -41,6 +42,17 @@ const count = Type.Union([
 ]);
 
 export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
+  Type.Object(
+    {
+      id: checkId,
+      revision_reason: revisionReason,
+      removed,
+      refit_to_measurement: refitToMeasurement,
+      kind: Type.Literal("fusion_effect"),
+      effect: FusionExpectedEffectSchema,
+    },
+    { additionalProperties: false },
+  ),
   Type.Object(
     {
       id: checkId,
@@ -136,6 +148,37 @@ export const PLAN_CHECK_ENTRY_SCHEMA = Type.Union([
 
 export type PlanCheckEntry = Static<typeof PLAN_CHECK_ENTRY_SCHEMA>;
 
+type WithoutCheckAudit<T> = T extends unknown
+  ? Omit<T, "revision_reason" | "removed" | "refit_to_measurement">
+  : never;
+type DomainPlanCheckInput = WithoutCheckAudit<PlanCheckEntry>;
+type DomainPlanCheckRevisionInput = DomainPlanCheckInput extends infer Check
+  ? Check extends unknown ? Omit<Check, "id"> : never
+  : never;
+
+function checkSchemaWithout(properties: readonly string[]) {
+  const schema = structuredClone(PLAN_CHECK_ENTRY_SCHEMA) as unknown as {
+    anyOf: Array<{ properties: Record<string, unknown>; required?: string[] }>;
+  };
+  for (const variant of schema.anyOf) {
+    for (const property of properties) delete variant.properties[property];
+    if (Array.isArray(variant.required)) {
+      variant.required = variant.required.filter((property) => !properties.includes(property));
+    }
+  }
+  return schema as unknown as typeof PLAN_CHECK_ENTRY_SCHEMA;
+}
+
+/** New check definition. Audit flags and retirement metadata are reducer-owned. */
+export const DOMAIN_PLAN_CHECK_INPUT_SCHEMA = Type.Unsafe<DomainPlanCheckInput>(
+  checkSchemaWithout(["revision_reason", "removed", "refit_to_measurement"]),
+);
+
+/** Check replacement semantics. The reducer preserves the stable check id. */
+export const DOMAIN_PLAN_CHECK_REVISION_INPUT_SCHEMA = Type.Unsafe<DomainPlanCheckRevisionInput>(
+  checkSchemaWithout(["id", "revision_reason", "removed", "refit_to_measurement"]),
+);
+
 export const PLAN_CHECK_REF_SCHEMA = Type.Object(
   {
     component_id: Type.String({ minLength: 1 }),
@@ -183,6 +226,7 @@ export interface PlanSpecSheetRow {
 }
 
 const CHECK_KEYS: Record<string, { required: string[]; optional: string[] }> = {
+  fusion_effect: { required: ["effect"], optional: [] },
   hole_through: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
   hole_blind: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
   hole_internal: { required: ["diameter", "count"], optional: ["at_mm", "tol", "target"] },
@@ -217,7 +261,13 @@ export const CHECK_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
  * Keys that exist only on plan checks (identity and audit metadata); run CHECKS
  * entries never carry them, so they are stripped before any plan-to-run comparison.
  */
-export const PLAN_CHECK_METADATA_KEYS: readonly string[] = ["id", "revision_reason", "removed", "refit_to_measurement"];
+export const PLAN_CHECK_METADATA_KEYS: readonly string[] = [
+  "id",
+  "revision_reason",
+  "removed",
+  "refit_to_measurement",
+  "retired_revision",
+];
 
 /**
  * Runtime mirror of the harness CHECKS contract plus the plan-only metadata
@@ -248,7 +298,9 @@ export function validatePlanCheck(value: unknown): string[] {
   if (unknown.length > 0) errors.push(`unknown keys: ${JSON.stringify(unknown)}`);
   if (missing.length > 0) return errors;
 
-  if (kind.startsWith("hole_")) {
+  if (kind === "fusion_effect") {
+    if (!isFusionExpectedEffect(check.effect)) errors.push("effect must be a supported typed Fusion action effect");
+  } else if (kind.startsWith("hole_")) {
     if (!isNumber(check.diameter) || check.diameter <= 0) errors.push("diameter must be a positive number");
     if (!validCount(check.count, false)) errors.push("count must be an integer >= 0");
     if (check.at_mm !== undefined && (!Array.isArray(check.at_mm) || check.at_mm.length !== 3 || check.at_mm.some((v) => !isNumber(v)))) errors.push("at_mm must be three numbers");
@@ -274,7 +326,7 @@ export function validatePlanCheck(value: unknown): string[] {
   return errors;
 }
 
-/** Runtime mirror for spec-sheet rows so update_plan can return row-level errors. */
+/** Runtime mirror for validating spec-sheet rows in stored legacy snapshots. */
 export function validatePlanSpecSheetRow(value: unknown): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return ["must be an object"];
   const row = value as Record<string, unknown>;

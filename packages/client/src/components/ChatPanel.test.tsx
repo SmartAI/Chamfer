@@ -71,7 +71,7 @@ function makeContextValue(overrides: Partial<ChatContextValue>): ChatContextValu
     loading: false,
     error: null,
     selectConversation: vi.fn(),
-    newConversation: vi.fn(async () => "conv-1"),
+    newConversation: vi.fn(),
     removeConversation: vi.fn(async () => {}),
     refreshSettings: vi.fn(async () => {}),
     clearError: vi.fn(),
@@ -79,6 +79,7 @@ function makeContextValue(overrides: Partial<ChatContextValue>): ChatContextValu
     queuePaused: false,
     sendMessage: vi.fn(),
     stopAgent: vi.fn(),
+    resumeAfterFusionReconciliation: vi.fn(),
     removeQueued: vi.fn(),
     sendQueuedNow: vi.fn(),
     modelName: "Test Model",
@@ -109,6 +110,74 @@ function renderWithContext(overrides: Partial<ChatContextValue>, onOpenSettings?
 }
 
 describe("ChatPanel", () => {
+  it("renders durable source requirements separately from plan progress", () => {
+    renderWithContext({
+      session: makeFakeSession(),
+      sessionState: {
+        messages: [{
+          role: "toolResult",
+          toolName: "update_plan",
+          details: {
+            plan: {
+              goal: "plate",
+              components: [{ id: "plate", description: "plate", bbox_mm: [30, 20, 4], checks: [], status: "todo", free_floating_reason: "single" }],
+              interfaces: [],
+            },
+          },
+        }],
+        sourceSpecifications: [{
+          id: "plate-width",
+          conversationId: "conv-1",
+          requirement: "The plate must be 30 mm wide.",
+          source: { messageId: "message-1", text: "30 mm plate", start: 8, end: 19 },
+          actor: "agent",
+          status: "active",
+          timestamp: 1,
+        }, {
+          id: "front-orientation-v1",
+          conversationId: "conv-1",
+          requirement: "Use the original front orientation.",
+          source: {
+            attachmentId: "reference-1",
+            observation: "The original front orientation is shown here.",
+            region: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 },
+          },
+          actor: "agent",
+          status: "superseded",
+          supersededBySpecificationId: "front-orientation-v2",
+          timestamp: 2,
+        }, {
+          id: "front-orientation-v2",
+          conversationId: "conv-1",
+          requirement: "Use the corrected front orientation.",
+          source: {
+            attachmentId: "reference-2",
+            observation: "The corrected front orientation is authoritative.",
+            region: { x: 0.2, y: 0.1, width: 0.6, height: 0.5 },
+          },
+          supersedesSpecificationId: "front-orientation-v1",
+          actor: "agent",
+          status: "active",
+          timestamp: 3,
+        }],
+        streaming: false,
+      },
+    });
+
+    expect(screen.getByTestId("source-specifications-card")).toBeTruthy();
+    expect(screen.getByTestId("plan-card")).toBeTruthy();
+    expect(screen.getByTestId("source-specifications-card").textContent).toContain("2 active · 1 history");
+    expect(screen.queryByTestId("source-specification")).toBeNull();
+    fireEvent.click(screen.getByTestId("source-specifications-toggle"));
+    const sourceRows = screen.getAllByTestId("source-specification");
+    expect(sourceRows).toHaveLength(3);
+    expect(sourceRows[0]?.textContent).toContain("The plate must be 30 mm wide.");
+    expect(sourceRows[0]?.textContent).toContain("30 mm plate");
+    expect(sourceRows[1]?.textContent).toContain("superseded");
+    expect(sourceRows[2]?.textContent).toContain("Attachment reference-2");
+    expect(screen.getAllByTestId("source-specification-region")).toHaveLength(2);
+  });
+
   it("renders the user bubble, streams assistant markdown in, and keeps the composer usable while streaming", async () => {
     const session = makeFakeSession();
 
@@ -402,111 +471,32 @@ describe("ChatPanel", () => {
 });
 
 describe("ChatPanel preset prompts", () => {
-  const EASY = PRESET_PROMPTS.find((p) => p.id === "easy")!;
   const INTERMEDIATE = PRESET_PROMPTS.find((p) => p.id === "intermediate")!;
 
-  it("creates a conversation from the no-conversation state, then sends the preset once the session exists", async () => {
-    const newConversation = vi.fn(async () => "conv-1");
-    const { rerender } = renderWithContext({
-      activeConversationId: undefined,
-      session: null,
-      newConversation,
-    });
-
-    expect(screen.getByText("No conversation selected")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("preset-easy"));
-    expect(newConversation).toHaveBeenCalledTimes(1);
-    // Let newConversation resolve so the pending preset learns the created id.
-    await act(async () => {});
-
-    // As the real ChatProvider would after newConversation(): an active id appears first,
-    // then the async switch produces the session.
-    rerender(panelWithContext({ activeConversationId: "conv-1", session: null, newConversation }));
-    const session = makeFakeSession("conv-1");
-    rerender(panelWithContext({ activeConversationId: "conv-1", session, newConversation }));
-
-    await waitFor(() => {
-      expect(session.send).toHaveBeenCalledWith(EASY.prompt, []);
-    });
-    expect(session.send).toHaveBeenCalledTimes(1);
-  });
-
-  it("only creates one conversation when a preset is double-clicked on the homepage", async () => {
-    const newConversation = vi.fn(async () => "conv-1");
+  it("hides build123d presets until a conversation has an explicit environment", () => {
     renderWithContext({
       activeConversationId: undefined,
       session: null,
-      newConversation,
     });
 
-    const card = screen.getByTestId("preset-easy");
-    fireEvent.click(card);
-    fireEvent.click(card);
-    fireEvent.click(screen.getByTestId("preset-hard"));
-    await act(async () => {});
-
-    expect(newConversation).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("No conversation selected")).toBeTruthy();
+    expect(screen.queryByTestId("preset-prompts")).toBeNull();
   });
 
-  it("does not fire the preset into the next conversation when creation fails", async () => {
-    const newConversation = vi.fn(async (): Promise<string> => {
-      throw new Error("boom");
-    });
-    const { rerender } = renderWithContext({
-      activeConversationId: undefined,
-      session: null,
-      newConversation,
-    });
-
-    fireEvent.click(screen.getByTestId("preset-easy"));
-    await act(async () => {});
-    expect(newConversation).toHaveBeenCalledTimes(1);
-
-    // User later opens some other conversation; the stale preset must not be sent into it.
-    const session = makeFakeSession("conv-other");
-    rerender(
-      panelWithContext({ activeConversationId: "conv-other", session, newConversation }),
-    );
-    await act(async () => {});
-
-    expect(session.send).not.toHaveBeenCalled();
-    // And the cards are re-armed: clicking again retries the create.
-    rerender(
-      panelWithContext({ activeConversationId: undefined, session: null, newConversation }),
-    );
-    fireEvent.click(screen.getByTestId("preset-easy"));
-    expect(newConversation).toHaveBeenCalledTimes(2);
-  });
-
-  it("drops the preset when the user opens another conversation during the create window", async () => {
-    const newConversation = vi.fn(async () => "conv-new");
-    const { rerender } = renderWithContext({
-      activeConversationId: undefined,
-      session: null,
-      newConversation,
+  it("does not expose build123d presets in a Fusion conversation", () => {
+    renderWithContext({
+      conversations: [{
+        id: "conv-1",
+        title: "Fusion design",
+        cadEnvironment: "fusion",
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+      session: makeFakeSession(),
     });
 
-    fireEvent.click(screen.getByTestId("preset-easy"));
-    await act(async () => {});
-
-    // Before conv-new's session is built, the user clicks an existing conversation and its
-    // session appears; the preset must not be sent into that old conversation.
-    const oldSession = makeFakeSession("conv-old");
-    rerender(
-      panelWithContext({ activeConversationId: "conv-old", session: oldSession, newConversation }),
-    );
-    await act(async () => {});
-
-    expect(oldSession.send).not.toHaveBeenCalled();
-
-    // Even if conv-new's session shows up afterwards, the preset stays dropped.
-    const newSession = makeFakeSession("conv-new");
-    rerender(
-      panelWithContext({ activeConversationId: "conv-new", session: newSession, newConversation }),
-    );
-    await act(async () => {});
-
-    expect(newSession.send).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("preset-prompts")).toBeNull();
+    expect(screen.getByText(/bound Autodesk Fusion environment/)).toBeTruthy();
   });
 
   it("sends only once when a preset is double-clicked in an active-but-empty conversation", () => {
@@ -529,15 +519,15 @@ describe("ChatPanel preset prompts", () => {
     expect(session.send).toHaveBeenCalledWith(INTERMEDIATE.prompt, []);
   });
 
-  it("disables the presets with a hint when settings are not configured", () => {
+  it("disables the presets and shows the shared settings hint when settings are not configured", () => {
     renderWithContext({
-      activeConversationId: undefined,
       session: null,
       settingsPresent: false,
     });
 
     expect((screen.getByTestId("preset-easy") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("preset-disabled-hint").textContent).toMatch(/settings/i);
+    expect(screen.queryByTestId("preset-disabled-hint")).toBeNull();
+    expect(screen.getByText(/configure a model and api key in settings/i)).toBeTruthy();
   });
 
   it("hides the presets once the conversation has messages", () => {

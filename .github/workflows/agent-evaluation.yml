@@ -1,0 +1,237 @@
+name: Agent evaluation
+
+on:
+  workflow_call:
+    inputs:
+      depth:
+        type: string
+        required: true
+      cases:
+        type: string
+        required: false
+        default: ""
+      control_ref:
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      depth:
+        description: Evaluation depth
+        type: choice
+        options: [scripted, targeted, release]
+        default: targeted
+      cases:
+        description: Comma-separated case paths, or blank for the depth default
+        type: string
+        default: ""
+      control_ref:
+        description: Trusted control tag or commit for paired live runs
+        type: string
+        default: "v0.2.1"
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scripted-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run secret-free browser smoke
+        run: npm run eval:agent -- --depth=scripted --output="$RUNNER_TEMP/chamfer-agent-smoke"
+      - name: Retain local smoke verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chamfer-agent-smoke-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/chamfer-agent-smoke/*.json
+            ${{ runner.temp }}/chamfer-agent-smoke/*.md
+
+  trusted-live:
+    if: >-
+      (inputs.depth != '' && inputs.depth != 'scripted') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'agent-evaluation'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: agent-evaluation
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CHAMFER_MODEL: ${{ vars.CHAMFER_MODEL }}
+      CHAMFER_PROVIDER: ${{ vars.CHAMFER_PROVIDER }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      LANGFUSE_BASE_URL: ${{ vars.LANGFUSE_BASE_URL }}
+      REQUESTED_DEPTH: ${{ inputs.depth }}
+      REQUESTED_CASES: ${{ inputs.cases }}
+      CONTROL_REF: ${{ inputs.control_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Prepare trusted control
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CONTROL_REF" ]]; then
+            while IFS= read -r TAG; do
+              if [[ "$TAG" != "$GITHUB_REF_NAME" ]]; then
+                CONTROL_REF="$TAG"
+                break
+              fi
+            done < <(git tag --list 'v*' --sort=-version:refname)
+          fi
+          if [[ -z "$CONTROL_REF" ]]; then
+            echo "No preceding accepted release tag is available" >&2
+            exit 1
+          fi
+          if [[ ! "$CONTROL_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$CONTROL_REF" == *..* ]]; then
+            echo "Unsafe control ref" >&2
+            exit 1
+          fi
+          CONTROL_ROOT="$RUNNER_TEMP/chamfer-control"
+          git worktree add --detach "$CONTROL_ROOT" "$CONTROL_REF"
+          npm ci --prefix "$CONTROL_ROOT"
+          DEPTH="${REQUESTED_DEPTH:-targeted}"
+          if [[ "$DEPTH" != "targeted" && "$DEPTH" != "release" ]]; then DEPTH=targeted; fi
+          CASES="$REQUESTED_CASES"
+          if [[ -z "$CASES" && "$DEPTH" == "release" ]]; then
+            CASES=$(find packages/client/eval/cases/v1 -name '*.case.json' -type f | sort | paste -sd, -)
+          elif [[ -z "$CASES" ]]; then
+            CASES=packages/client/eval/cases/v1/precise-box.case.json
+          fi
+          IFS=',' read -ra CASE_PATHS <<< "$CASES"
+          for CASE_PATH in "${CASE_PATHS[@]}"; do
+            if [[ ! "$CASE_PATH" =~ ^packages/client/eval/cases/v[0-9]+/[A-Za-z0-9._/-]+\.case\.json$ ]] || [[ ! -f "$CASE_PATH" ]]; then
+              echo "Unsafe or missing case path" >&2
+              exit 1
+            fi
+          done
+          echo "control_root=$CONTROL_ROOT" >> "$GITHUB_OUTPUT"
+          echo "control_commit=$(git -C "$CONTROL_ROOT" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "control_ref=$CONTROL_REF" >> "$GITHUB_OUTPUT"
+          echo "candidate_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "depth=$DEPTH" >> "$GITHUB_OUTPUT"
+          echo "cases=$CASES" >> "$GITHUB_OUTPUT"
+      - name: Run canonical paired cohort and comparison
+        id: evaluation
+        shell: bash
+        run: |
+          set +e
+          REPETITIONS=1
+          if [[ "${{ steps.prepare.outputs.depth }}" == "release" ]]; then REPETITIONS=3; fi
+          OUTPUT="$RUNNER_TEMP/chamfer-agent-evaluation"
+          npm run eval:paired -- \
+            --depth="${{ steps.prepare.outputs.depth }}" \
+            --cases="${{ steps.prepare.outputs.cases }}" \
+            --repetitions="$REPETITIONS" \
+            --candidate-root="$GITHUB_WORKSPACE" \
+            --control-root="${{ steps.prepare.outputs.control_root }}" \
+            --candidate-commit="${{ steps.prepare.outputs.candidate_commit }}" \
+            --control-commit="${{ steps.prepare.outputs.control_commit }}" \
+            --output="$OUTPUT"
+          PAIR_STATUS=$?
+          npm run eval:compare -- \
+            --candidate="$OUTPUT/candidate" \
+            --control="$OUTPUT/control" \
+            --output="$OUTPUT/comparison"
+          COMPARE_STATUS=$?
+          if [[ $PAIR_STATUS -ne 0 || $COMPARE_STATUS -ne 0 ]]; then exit 1; fi
+      - name: Synchronize the local-authoritative candidate cohort
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          COHORT="$RUNNER_TEMP/chamfer-agent-evaluation/candidate/offline-cohort.json"
+          if [[ -f "$COHORT" ]]; then
+            npm run eval:sync -- --cohort="$COHORT" --report="$RUNNER_TEMP/chamfer-agent-evaluation/langfuse-sync.json"
+          else
+            echo "No privacy-passing cohort is available for synchronization."
+          fi
+      - name: Publish concise evaluation summary
+        if: always()
+        shell: bash
+        env:
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CONTROL_REF: ${{ steps.prepare.outputs.control_ref }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = path.join(process.env.RUNNER_TEMP, 'chamfer-agent-evaluation');
+          const comparisonPath = path.join(root, 'comparison', 'comparison.json');
+          const syncPath = path.join(root, 'langfuse-sync.json');
+          const lines = [
+            '# Chamfer agent evaluation',
+            '',
+            `Workflow: ${process.env.WORKFLOW_URL}`,
+            `Preceding-release control: ${process.env.CONTROL_REF}`,
+            `Configured model: ${process.env.CHAMFER_PROVIDER}/${process.env.CHAMFER_MODEL}`,
+            'Release runs include every v1 case. Other provider/model configurations are excluded because the protected environment defines one supported production default.',
+            '',
+          ];
+          if (fs.existsSync(comparisonPath)) {
+            const comparison = JSON.parse(fs.readFileSync(comparisonPath, 'utf8'));
+            lines.push(
+              `Canonical verdict: ${comparison.status}`,
+              `Candidate expected-outcome rate: ${comparison.summary.candidateExpectedOutcomeRate}`,
+              `Control expected-outcome rate: ${comparison.summary.controlExpectedOutcomeRate}`,
+              `Candidate provider cost: $${comparison.summary.candidateProviderCost.toFixed(4)}`,
+              `Control provider cost: $${comparison.summary.controlProviderCost.toFixed(4)}`,
+              `Regressed cases: ${comparison.cases.filter((item) => item.classification === 'regressed').map((item) => item.caseId).join(', ') || 'none'}`,
+              `Improved cases: ${comparison.cases.filter((item) => item.classification === 'improved').map((item) => item.caseId).join(', ') || 'none'}`,
+              `Incomplete evidence: ${comparison.summary.incomplete + comparison.summary.infrastructureFailed}`,
+              '',
+            );
+          } else {
+            lines.push('Canonical verdict: unavailable because the paired evaluation did not produce a comparison.', '');
+          }
+          if (fs.existsSync(syncPath)) {
+            const sync = JSON.parse(fs.readFileSync(syncPath, 'utf8'));
+            lines.push(sync.result.status === 'synced'
+              ? `Langfuse comparison: ${sync.result.references.cohort}`
+              : `Langfuse synchronization: ${sync.result.status}`);
+          } else {
+            lines.push('Langfuse synchronization: unavailable');
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+          NODE
+      - name: Retain privacy-passing summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chamfer-agent-evaluation-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/chamfer-agent-evaluation/candidate/*.json
+            ${{ runner.temp }}/chamfer-agent-evaluation/candidate/*.md
+            ${{ runner.temp }}/chamfer-agent-evaluation/control/*.json
+            ${{ runner.temp }}/chamfer-agent-evaluation/control/*.md
+            ${{ runner.temp }}/chamfer-agent-evaluation/comparison/*.json
+            ${{ runner.temp }}/chamfer-agent-evaluation/comparison/*.md
+            ${{ runner.temp }}/chamfer-agent-evaluation/langfuse-sync.json

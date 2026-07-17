@@ -59,7 +59,7 @@ async function setup(
   const created = await app.request("/api/conversations", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: DEFAULT_CONVERSATION_TITLE }),
+    body: JSON.stringify({ title: DEFAULT_CONVERSATION_TITLE, cadEnvironment: "build123d" }),
   });
   const conversation = (await created.json()) as { id: string };
   if (opts?.messages !== false) {

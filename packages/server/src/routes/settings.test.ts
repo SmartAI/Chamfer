@@ -8,6 +8,27 @@ function makeApp() {
 }
 
 describe("settings routes", () => {
+  it("rejects an unsafe Fusion endpoint instead of storing it", async () => {
+    const app = makeApp();
+    const response = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fusionMcpEndpoint: "https://example.com/mcp" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Fusion MCP endpoint must be exactly http://127.0.0.1:<port>/mcp",
+    });
+  });
+
+  it("reports the Fusion experimental flag without allowing it to be persisted", async () => {
+    vi.stubEnv("CHAMFER_EXPERIMENTAL_FUSION", "1");
+    const app = makeApp();
+    const got = (await (await app.request("/api/settings")).json()) as SettingsResponseDto;
+    expect(got.experimentalFusionEnabled).toBe(true);
+    expect(got.fusionIntegrity).toMatchObject({ access: "experimental", verdict: "no-go" });
+  });
+
   it("round-trips keys and masks them on read", async () => {
     const app = makeApp();
     const put = await app.request("/api/settings", {

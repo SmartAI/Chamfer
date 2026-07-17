@@ -3,14 +3,42 @@ import { LoaderCircle } from "lucide-react";
 import { Viewer } from "@/viewer/Viewer";
 import { meshToGeometry } from "@/viewer/meshToGeometry";
 import { useAppState } from "@/state/appState";
+import { useChatState } from "@/state/chatState";
+import { latestPlan } from "@/agent/plan";
+import { currentProofContract } from "@/agent/proofContract";
+import { effectiveProofReport } from "@/agent/proofReport";
+import { currentVisualVerification } from "@/agent/visualVerification";
 import { DraggableOverlay } from "./DraggableOverlay";
 import { ExportButtons } from "./ExportButtons";
 import { ConnectedParamsPanel } from "./ParamsPanel";
 import { ScriptPanel } from "./ScriptPanel";
 
 export function RightPanel() {
-  const { bootStatus, mesh, params, isRendering } = useAppState();
+  const { bootStatus, mesh, params, isRendering, currentArtifact } = useAppState();
+  const { sessionState } = useChatState();
   const geometry = useMemo(() => (mesh ? meshToGeometry(mesh) : null), [mesh]);
+
+  const plan = latestPlan(sessionState.messages);
+  const contract = currentProofContract(
+    sessionState.proofContracts ?? [],
+    plan,
+    sessionState.referenceRegistrations ?? [],
+  );
+  const visualVerification = currentVisualVerification(
+    sessionState.messages,
+    sessionState.referenceRecords ?? [],
+  );
+  const proofReport = effectiveProofReport(sessionState.proofReports ?? [], {
+    plan,
+    contract,
+    sourceSpecifications: sessionState.sourceSpecifications ?? [],
+    referenceRegistrations: sessionState.referenceRegistrations ?? [],
+    activeReferenceIds: (sessionState.referenceRecords ?? [])
+      .filter((record) => record.status === "active" || record.status === "complementary")
+      .map((record) => record.referenceId),
+    visualVerification,
+    artifact: currentArtifact,
+  });
 
   // BufferGeometry allocates GPU-side buffers that are not garbage collected;
   // dispose the outgoing geometry whenever a new mesh replaces it and on unmount.
@@ -54,7 +82,7 @@ export function RightPanel() {
           </DraggableOverlay>
         )}
       </div>
-      <ExportButtons />
+      <ExportButtons proofState={proofReport?.status} />
       <ScriptPanel />
     </div>
   );

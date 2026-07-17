@@ -27,7 +27,7 @@ test("proves the complete retrievable evidence lifecycle", async ({ page }, test
     },
   });
   const conversation = await (await page.request.post("/api/conversations", {
-    data: { title: "Retrievable evidence workflow" },
+    data: { title: "Retrievable evidence workflow", cadEnvironment: "build123d" },
   })).json() as { id: string };
   const referenceBytes = new Map<string, Buffer>();
   for (const [index, reference] of REFERENCES.entries()) {
@@ -56,6 +56,26 @@ test("proves the complete retrievable evidence lifecycle", async ({ page }, test
     expect(upload.ok()).toBe(true);
   }
 
+  const specifications = await page.request.post(`/api/conversations/${conversation.id}/source-specifications`, {
+    headers: { "Idempotency-Key": "workflow-reference-specifications" },
+    data: {
+      specifications: [{
+        id: "visual.primary",
+        requirement: "Preserve the primary silhouette.",
+        source: { attachmentId: "workflow-ref-primary", observation: "The primary attachment defines the silhouette." },
+      }, {
+        id: "visual.detail",
+        requirement: "Preserve the visible surface detail.",
+        source: { attachmentId: "workflow-ref-detail", observation: "The detail attachment defines the visible surface feature." },
+      }, {
+        id: "visual.profile",
+        requirement: "Preserve the side profile.",
+        source: { attachmentId: "workflow-ref-profile", observation: "The profile attachment defines the side silhouette." },
+      }],
+    },
+  });
+  expect(specifications.ok()).toBe(true);
+
   await page.goto("/");
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();
@@ -63,12 +83,13 @@ test("proves the complete retrievable evidence lifecycle", async ({ page }, test
   await composer.fill("Build from the active evidence, retrieve the earlier reference, and finish only after batched visual verification.");
   await page.getByTestId("composer-send").click();
   await expect(page.getByText("Premature CAD rejected until every uploaded reference is classified.")).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText("Was this result helpful?")).toBeVisible({ timeout: 120_000 });
 
   const classificationInputs = [
-    { referenceId: "workflow-ref-primary", status: "active", purpose: "Primary silhouette", relationships: [], specificationLinks: ["visual.primary"] },
-    { referenceId: "workflow-ref-detail", status: "complementary", purpose: "Surface detail", relationships: [{ type: "complements", referenceId: "workflow-ref-primary" }], specificationLinks: ["visual.detail"] },
-    { referenceId: "workflow-ref-profile", status: "complementary", purpose: "Side profile", relationships: [{ type: "complements", referenceId: "workflow-ref-primary" }], specificationLinks: ["visual.profile"] },
-    { referenceId: "workflow-ref-old", status: "superseded", purpose: "Earlier silhouette", relationships: [{ type: "superseded-by", referenceId: "workflow-ref-primary" }], specificationLinks: ["visual.primary"] },
+    { referenceId: "workflow-ref-primary", status: "active", purpose: "Primary silhouette", relationships: [], specificationIds: ["visual.primary"] },
+    { referenceId: "workflow-ref-detail", status: "complementary", purpose: "Surface detail", relationships: [{ type: "complements", referenceId: "workflow-ref-primary" }], specificationIds: ["visual.detail"] },
+    { referenceId: "workflow-ref-profile", status: "complementary", purpose: "Side profile", relationships: [{ type: "complements", referenceId: "workflow-ref-primary" }], specificationIds: ["visual.profile"] },
+    { referenceId: "workflow-ref-old", status: "superseded", purpose: "Earlier silhouette", relationships: [{ type: "superseded-by", referenceId: "workflow-ref-primary" }], specificationIds: ["visual.primary"] },
   ];
   for (const input of classificationInputs) {
     const response = await page.request.post(`/api/conversations/${conversation.id}/reference-classifications`, {
@@ -92,7 +113,7 @@ test("proves the complete retrievable evidence lifecycle", async ({ page }, test
 
   await composer.fill("workflow-classify-ready workflow-retrieve workflow-build-first: retrieve the earlier evidence, then build revision one");
   await page.getByTestId("composer-send").click();
-  await expect(page.getByRole("button", { name: "record_inspection_observation Complete", exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByTestId("tool-call-card").filter({ hasText: /Recorded observation\s*Complete/ })).toBeVisible({ timeout: 120_000 });
   const leases = await (await page.request.get(`/api/conversations/${conversation.id}/inspection-leases`)).json() as Array<{
     status: string; evidence: Array<{ attachmentId: string }>; observation?: { facts: string[] };
   }>;
@@ -104,6 +125,7 @@ test("proves the complete retrievable evidence lifecycle", async ({ page }, test
   await page.screenshot({ path: testInfo.outputPath("earlier-reference-retrieval-and-observation.png"), fullPage: true });
 
   await expect(page.getByText("Mismatch recovery paused with the first revision still current.").last()).toBeVisible({ timeout: 600_000 });
+  await expect(page.getByText("Was this result helpful?")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("mismatch-recovery.png"), fullPage: true });
   await composer.fill("workflow-revise: correct the mismatch and repeat complete batched verification");
   await page.getByTestId("composer-send").click();

@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 test("historical inspection sheets survive a multi-revision run and reload", async ({ page }, testInfo) => {
   test.setTimeout(600_000);
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
+  await startBuild123dConversation(page);
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();
   await composer.fill("sheet-lifecycle: render two CAD revisions");

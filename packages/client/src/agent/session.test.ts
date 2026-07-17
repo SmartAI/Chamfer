@@ -2,20 +2,33 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { ReferenceRegistrationDto } from "@chamfer/shared";
 import * as rest from "../api/rest";
 import {
   classifySessionError,
+  isResumableSessionError,
   createSession,
   buildPlanNudgePrompt,
+  MAX_ERROR_RESUMES,
   PLAN_NUDGE_MARKER,
   SELF_CHECK_MARKER,
   VISUAL_NUDGE_MARKER,
   normalizeInspectionEvidenceMessage,
   materializeAttachmentReferences,
+  referenceSpecificationGateError,
+  planSourceCoverageGateError,
   type SessionError,
   type SessionState,
 } from "./session";
 import { systemPrompt } from "./prompt";
+import { latestPlan } from "./plan";
+import type { Plan } from "./plan";
+import {
+  BOOKKEEPING_CURRENT_EVIDENCE,
+  BOOKKEEPING_PREVIOUS_PLAN,
+  BOOKKEEPING_PRIOR_REASON,
+  BOOKKEEPING_STALE_EVIDENCE_PLAN,
+} from "./fixtures/planBookkeepingRegression";
 
 vi.mock("../api/rest", () => ({
   postMessage: vi.fn(async (_conversationId: string, message: { id: string; seq: number; role: string; contentJson: string }) => ({
@@ -49,6 +62,26 @@ vi.mock("../api/rest", () => ({
   recordInspectionObservation: vi.fn(),
   recordVisualVerification: vi.fn(),
   recordVisualVerificationBatch: vi.fn(),
+  recordSourceSpecifications: vi.fn(),
+  freezeProofContract: vi.fn(async (conversationId: string, input: {
+    derivation: { shapeProof?: { status?: string } };
+  }) => {
+    if (input.derivation.shapeProof?.status === "not-applicable") {
+      throw new Error("proof-contract endpoint unavailable in session unit tests");
+    }
+    return {
+      contractId: "proof-contract-1",
+      conversationId,
+      revision: 1,
+      status: "current" as const,
+      proofStatus: "pending" as const,
+      frozenAt: 1,
+      derivation: input.derivation,
+    };
+  }),
+  createProofReport: vi.fn(async () => ({ reportId: "report-test", createdAt: Date.now(), status: "proven" })),
+  openDesignEscalation: vi.fn(),
+  postAgentRunEvents: vi.fn(async () => ({})),
 }));
 
 const FAKE_MODEL: Model<Api> = {
@@ -72,6 +105,110 @@ const ZERO_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+function eligibleReferenceRegistration(
+  referenceId: string,
+  specificationId = "plan.spec_sheet.envelope",
+): ReferenceRegistrationDto {
+  return {
+    registrationId: `registration-${referenceId}`,
+    conversationId: "conv-1",
+    revision: 1,
+    status: "current",
+    referenceId,
+    sourceRegion: { x: 0, y: 0, width: 1, height: 1 },
+    projection: "orthographic",
+    direction: "front",
+    scaleAnchor: {
+      specificationId,
+      start: { x: 0.1, y: 0.9 },
+      end: { x: 0.9, y: 0.9 },
+      physicalLengthMm: 10,
+    },
+    visibleLandmarks: [],
+    uncertainty: { level: "low", notes: "Clear dimensioned view.", occluded: false },
+    geometry: {
+      sourceSizePx: { width: 100, height: 100 },
+      regionPx: { x: 0, y: 0, width: 100, height: 100 },
+      extraction: { status: "succeeded", extractor: { id: "opencv-js-contour", version: 1 } },
+      mask: { width: 100, height: 100, rle: [0, 10_000] },
+      contour: { points: [[1, 1], [98, 1], [98, 98], [1, 98]], areaPx2: 9_409 },
+      scaleTransform: {
+        specificationId,
+        physicalLengthMm: 10,
+        pixelLength: 80,
+        mmPerPixel: 0.125,
+      },
+    },
+    eligibility: { status: "eligible", reasons: [] },
+    timestamp: 1,
+  };
+}
+
+it("blocks active references whose durable specification link is missing or superseded", () => {
+  const record = {
+    referenceId: "ref-a",
+    conversationId: "conv-1",
+    attachmentAvailable: true,
+    status: "active" as const,
+    purpose: "Dimensioned drawing",
+    relationships: [],
+    rationale: "Defines width.",
+    specificationIds: ["width-v1"],
+    specificationLinks: ["width-v1"],
+    history: [],
+  };
+  expect(referenceSpecificationGateError([record], [])).toContain("missing specification width-v1");
+  expect(referenceSpecificationGateError([record], [{
+    id: "width-v1",
+    conversationId: "conv-1",
+    requirement: "The width is 30 mm.",
+    source: { attachmentId: "ref-a", observation: "Width callout reads 30 mm." },
+    actor: "agent",
+    status: "superseded",
+    supersededBySpecificationId: "width-v2",
+    timestamp: 1,
+  }])).toContain("superseded specification width-v1");
+  expect(referenceSpecificationGateError([record], [{
+    id: "width-v1",
+    conversationId: "conv-1",
+    requirement: "The width is 30 mm.",
+    source: { attachmentId: "ref-a", observation: "Width callout reads 30 mm." },
+    actor: "agent",
+    status: "active",
+    timestamp: 1,
+  }])).toBeUndefined();
+});
+
+it("rejects a domain plan whose source identities no longer match the active set", () => {
+  const plan = {
+    goal: "spacer",
+    components: [],
+    interfaces: [],
+    domain: {
+      format: "domain-operations-v1" as const,
+      plan_id: "plan-1",
+      revision: 1,
+      criteria_revision: 1,
+      source_specification_ids: ["width-v1"],
+      requires_form_review: false,
+      actor: "agent" as const,
+      created_at: 1,
+      history: [],
+    },
+  };
+  const active = [{
+    id: "width-v2",
+    conversationId: "conv-1",
+    requirement: "The corrected width is 12 mm.",
+    source: { messageId: "message-1", text: "12 mm", start: 0, end: 5 },
+    actor: "agent" as const,
+    status: "active" as const,
+    timestamp: 2,
+  }];
+  expect(planSourceCoverageGateError(plan, active)).toContain("missing current identities: width-v2");
+  expect(planSourceCoverageGateError(plan, active)).toContain("retired identities still linked: width-v1");
+});
 
 it("never leaves native inspection pixels in durable content when lease details are malformed", () => {
   const malformed = {
@@ -142,6 +279,202 @@ describe("createSession", () => {
     vi.clearAllMocks();
   });
 
+  it("exposes only the tool catalog for the bound CAD environment", async () => {
+    const fusionStream = makeFakeStreamFn();
+    const fusionTool = {
+      name: "inspect_fusion",
+      label: "Inspect Fusion",
+      description: "Test-only Fusion catalog marker",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} })),
+    };
+    const fusionSession = createSession({
+      conversationId: "fusion-conversation",
+      cadEnvironment: "fusion",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt: "Fusion prompt",
+      tools: [fusionTool],
+      priorMessages: [],
+      __streamFn: fusionStream,
+    });
+    await fusionSession.send("Inspect the design");
+
+    const fusionCalls = fusionStream.mock.calls as unknown as Array<[
+      unknown,
+      { tools: Array<{ name: string }> },
+    ]>;
+    const fusionContext = fusionCalls[0]![1];
+    expect(fusionContext.tools.map((tool) => tool.name)).toEqual([
+      "inspect_fusion", "classify_reference", "inspect_evidence", "record_inspection_observation",
+      "record_visual_verification_batch", "update_plan", "load_skill",
+    ]);
+    expect(fusionContext.tools.map((tool) => tool.name)).not.toContain("run_build123d");
+
+    const localStream = makeFakeStreamFn();
+    const localTool = { ...fusionTool, name: "run_build123d", label: "Run build123d" };
+    const localSession = createSession({
+      conversationId: "local-conversation",
+      cadEnvironment: "build123d",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [localTool],
+      priorMessages: [],
+      __streamFn: localStream,
+    });
+    await localSession.send("Build a box");
+
+    const localCalls = localStream.mock.calls as unknown as Array<[
+      unknown,
+      { tools: Array<{ name: string }> },
+    ]>;
+    const localContext = localCalls[0]![1];
+    expect(localContext.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      "run_build123d",
+      "update_plan",
+      "load_skill",
+    ]));
+    expect(localContext.tools.map((tool) => tool.name)).not.toContain("inspect_fusion");
+  });
+
+  it("adds Fusion's scoped skill loader without exposing build123d skills or tools", async () => {
+    const stream = makeFakeStreamFn();
+    const docsTool = {
+      name: "search_fusion_docs",
+      label: "Search installed Fusion API",
+      description: "Test marker",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} })),
+    };
+    const session = createSession({
+      conversationId: "fusion-skills",
+      cadEnvironment: "fusion",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt: "Fusion prompt",
+      tools: [docsTool],
+      priorMessages: [],
+      __streamFn: stream,
+    });
+
+    await session.send("How do I create an extrusion?");
+    const context = (stream.mock.calls as unknown as Array<[unknown, { tools: Array<{ name: string }> }]>)[0]![1];
+    expect(context.tools.map((tool) => tool.name)).toEqual([
+      "search_fusion_docs", "classify_reference", "inspect_evidence", "record_inspection_observation",
+      "record_visual_verification_batch", "update_plan", "load_skill",
+    ]);
+    expect(context.tools.map((tool) => tool.name)).not.toContain("run_build123d");
+    expect(context.tools.map((tool) => tool.name)).not.toContain("search_docs");
+  });
+
+  it("adds only Chamfer-owned Fusion inspection and action capabilities on the production action path", async () => {
+    const stream = makeFakeStreamFn();
+    const session = createSession({
+      conversationId: "fusion-action-tools", cadEnvironment: "fusion",
+      modelJson: JSON.stringify(FAKE_MODEL), systemPrompt: "Fusion prompt", priorMessages: [],
+      tools: [{ name: "inspect_fusion", label: "Inspect", description: "read-only", parameters: Type.Object({}),
+        execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "revision" }], details: { mutated: false } })) }],
+      executeFusionAction: vi.fn(), __streamFn: stream,
+    });
+    await session.send("Create a cube");
+    const context = (stream.mock.calls as unknown as Array<[unknown, { tools: Array<{ name: string }> }]>)[0]![1];
+    expect(context.tools.map((tool) => tool.name)).toEqual([
+      "inspect_fusion", "run_fusion_action", "classify_reference", "inspect_evidence",
+      "record_inspection_observation", "record_visual_verification_batch", "update_plan", "load_skill",
+    ]);
+    expect(JSON.stringify(context)).not.toContain("fusion_mcp_execute");
+    expect(JSON.stringify(context)).not.toContain("fusion_mcp_update");
+  });
+
+  it("drops injected raw MCP and non-reviewed tools from a Fusion model context", async () => {
+    const stream = makeFakeStreamFn();
+    const tool = (name: string) => ({ name, label: name, description: "hostile", parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "should not run" }], details: {} })) });
+    const session = createSession({
+      conversationId: "fusion-tool-policy", cadEnvironment: "fusion",
+      modelJson: JSON.stringify(FAKE_MODEL), systemPrompt: "Fusion prompt", priorMessages: [],
+      tools: [tool("inspect_fusion"), tool("fusion_mcp_execute"), tool("fusion_mcp_read"),
+        tool("fusion_mcp_update"), tool("fusion_mcp_electronics_read"), tool("fetch_anything")],
+      __streamFn: stream,
+    });
+    await session.send("Inspect safely");
+    const context = (stream.mock.calls as unknown as Array<[unknown, { tools: Array<{ name: string }> }]>)[0]![1];
+    expect(context.tools.map((candidate) => candidate.name)).toEqual([
+      "inspect_fusion", "classify_reference", "inspect_evidence", "record_inspection_observation",
+      "record_visual_verification_batch", "update_plan", "load_skill",
+    ]);
+  });
+
+  it("projects Fusion history to normalized provider evidence without local metadata", async () => {
+    const stream = makeFakeStreamFn();
+    const session = createSession({
+      conversationId: "fusion-context-policy", cadEnvironment: "fusion",
+      modelJson: JSON.stringify(FAKE_MODEL), systemPrompt: "Fusion prompt", tools: [],
+      priorMessages: [
+        { role: "toolResult", toolCallId: "safe", toolName: "inspect_fusion", isError: false,
+          content: [{ type: "text", text: "Revision: rev-1" }],
+          details: { endpoint: "http://127.0.0.1:27182/mcp", nativeToken: "private-token" }, timestamp: 1 },
+        { role: "toolResult", toolCallId: "raw", toolName: "fusion_mcp_read", isError: false,
+          content: [{ type: "text", text: "unrelated-project.f3d" }], details: { credential: "secret" }, timestamp: 2 },
+      ],
+      __streamFn: stream,
+    });
+    await session.send("Continue");
+    const context = (stream.mock.calls as unknown as Array<[unknown, { messages: unknown[] }]>)[0]![1];
+    const serialized = JSON.stringify(context.messages);
+    expect(serialized).toContain("Revision: rev-1");
+    expect(serialized).not.toContain("127.0.0.1");
+    expect(serialized).not.toContain("private-token");
+    expect(serialized).not.toContain("fusion_mcp_read");
+    expect(serialized).not.toContain("unrelated-project.f3d");
+    expect(serialized).not.toContain("secret");
+  });
+
+  it("pins exact skill attribution into every persisted Fusion tool record", async () => {
+    let turn = 0;
+    const streamFn = vi.fn(() => {
+      const stream = createAssistantMessageEventStream();
+      const response: AssistantMessage = turn++ === 0
+        ? {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "docs", name: "search_fusion_docs", arguments: {} }],
+            api: FAKE_MODEL.api, provider: FAKE_MODEL.provider, model: FAKE_MODEL.id,
+            usage: ZERO_USAGE, stopReason: "toolUse", timestamp: Date.now(),
+          }
+        : {
+            role: "assistant", content: [{ type: "text", text: "done" }],
+            api: FAKE_MODEL.api, provider: FAKE_MODEL.provider, model: FAKE_MODEL.id,
+            usage: ZERO_USAGE, stopReason: "stop", timestamp: Date.now(),
+          };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: response });
+        stream.push({ type: "done", reason: response.stopReason === "toolUse" ? "toolUse" : "stop", message: response });
+        stream.end(response);
+      });
+      return stream;
+    });
+    const tool = {
+      name: "search_fusion_docs", label: "Search installed Fusion API", description: "test",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "guidance" }], details: { mutated: false } })),
+    };
+    const session = createSession({
+      conversationId: "fusion-attribution", cadEnvironment: "fusion",
+      modelJson: JSON.stringify(FAKE_MODEL), systemPrompt: "Fusion prompt", tools: [tool], priorMessages: [],
+      __streamFn: streamFn,
+    });
+    let latest: SessionState | undefined;
+    session.subscribe((state) => { latest = state; });
+
+    await session.send("Look it up");
+
+    const result = latest?.messages.find((message) =>
+      (message as { role?: string; toolName?: string }).role === "toolResult" &&
+      (message as { toolName?: string }).toolName === "search_fusion_docs") as { details?: unknown } | undefined;
+    expect(result?.details).toEqual({
+      mutated: false,
+      skillAttribution: { foundation: { name: "fusion-foundation", version: "1.9.0" }, loaded: [] },
+    });
+  });
+
   it("persists the user message then the completed assistant message in order, and streams a partial before completion", async () => {
     const streamFn = makeFakeStreamFn();
     const session = createSession({
@@ -190,6 +523,18 @@ describe("createSession", () => {
     const finalState = states[states.length - 1];
     expect(finalState?.streaming).toBe(false);
     expect(finalState?.messages).toHaveLength(2);
+
+    const lifecycleEvents = vi.mocked(rest.postAgentRunEvents).mock.calls.flatMap((call) => call[2].events);
+    expect(lifecycleEvents.map((event) => event.type).at(0)).toBe("run.started");
+    expect(lifecycleEvents.map((event) => event.type).at(-1)).toBe("run.completed");
+    expect(lifecycleEvents.map((event) => event.type)).toEqual(expect.arrayContaining([
+      "turn.started",
+      "turn.completed",
+      "persistence.completed",
+    ]));
+    expect(lifecycleEvents.filter((event) => event.type === "persistence.completed")).toHaveLength(2);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("Hi there");
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("Hello world");
   });
 
   it("consumes a user correction in the active pi run before the original send settles", async () => {
@@ -646,6 +991,27 @@ describe("createSession", () => {
     })();
 
     expect(latest?.messages).toEqual(prior);
+  });
+
+  it("persists the first post-reload message at the explicit sequence after a durable gap", async () => {
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [
+        { role: "user", content: "zero", timestamp: 0 },
+        { role: "assistant", content: [{ type: "text", text: "two" }], stopReason: "stop", timestamp: 2 },
+        { role: "user", content: "seven", timestamp: 7 },
+      ],
+      nextMessageSeq: 8,
+      __streamFn: makeFakeStreamFn(),
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    await session.send("after reload");
+
+    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    const calls = postMessage.mock.calls.filter((call) => call[1].role === "user" || call[1].role === "assistant");
+    expect(calls.map((call) => call[1].seq)).toEqual([8, 9]);
   });
 
   it("restores the error state of an interrupted persisted assistant response", () => {
@@ -1364,6 +1730,10 @@ describe("createSession", () => {
           { type: "text", text: "Measurements: volume 1" },
           { type: "attachment-reference", attachmentId: "final-sheet", kind: "view-sheet", mimeType: "image/png" },
         ],
+        details: {
+          code: { toolCallId: "successful-run", artifactId: "final-artifact", artifactVersion: 1 },
+          measurements: { bboxMm: [1, 1, 1], volumeMm3: 1, areaMm2: 6, children: [] },
+        },
         isError: false,
         timestamp: 1,
       },
@@ -1452,6 +1822,7 @@ describe("createSession", () => {
       systemPrompt,
       priorMessages: [],
       __streamFn: streamFn,
+      __autoResumeOptions: { sleep: () => Promise.resolve() },
     } as unknown as Parameters<typeof createSession>[0]);
 
     let latest: { error?: SessionError } | undefined;
@@ -1484,6 +1855,17 @@ describe("classifySessionError", () => {
   it("classifies everything else as generic, preserving the message", () => {
     const error = classifySessionError("Agent is already processing a prompt");
     expect(error).toEqual({ kind: "generic", message: "Agent is already processing a prompt" });
+  });
+
+  it("classifies provider window-overflow failure text as context-overflow", () => {
+    expect(classifySessionError("Your input exceeds the context window of this model. Please adjust your input and try again.").kind)
+      .toBe("context-overflow");
+    expect(classifySessionError("This model's maximum context length is 128000 tokens").kind).toBe("context-overflow");
+    expect(classifySessionError("prompt is too long: 250134 tokens > 200000 maximum").kind).toBe("context-overflow");
+  });
+
+  it("never auto-retries a context overflow as-is: the compaction branch owns recovery", () => {
+    expect(isResumableSessionError({ kind: "context-overflow", message: "input exceeds the context window" })).toBe(false);
   });
 });
 
@@ -1555,6 +1937,138 @@ describe("createSession agent-loop policies", () => {
       execute,
     };
   }
+
+  it("creates a proof report only after the versioned run result is durably persisted", async () => {
+    const specification = {
+      id: "plate-size",
+      conversationId: "conv-1",
+      requirement: "Build one plate.",
+      source: { messageId: "source-1", text: "plate", start: 0, end: 5 },
+      actor: "agent" as const,
+      status: "active" as const,
+      timestamp: 1,
+    };
+    const plan = {
+      goal: "Build one plate",
+      components: [{
+        id: "plate",
+        description: "one plate",
+        bbox_mm: [10, 10, 2],
+        status: "done",
+        criteria_revision: 1,
+        checks: [],
+      }],
+      interfaces: [],
+      domain: {
+        format: "domain-operations-v1" as const,
+        plan_id: "plan-1",
+        revision: 2,
+        criteria_revision: 1,
+        source_specification_ids: ["plate-size"],
+        actor: "agent" as const,
+        created_at: 1,
+        history: [],
+      },
+    };
+    const contract = {
+      contractId: "contract-1",
+      conversationId: "conv-1",
+      revision: 1,
+      status: "current" as const,
+      proofStatus: "pending" as const,
+      frozenAt: 1,
+      derivation: {
+        planId: "plan-1",
+        planRevision: 1,
+        criteriaRevision: 1,
+        sourceSpecificationIds: ["plate-size"],
+        component: { id: "plate", description: "one plate" },
+        criteria: [],
+        plannedChecks: [],
+        unavailableEvidence: [],
+        invalidatedEvidenceIds: [],
+        proofPolicy: { id: "proven-single-part-text", version: 1 },
+        shapeProof: { status: "not-applicable" as const, reason: "text only" },
+      },
+    };
+    const priorMessages = [{
+      role: "toolResult",
+      toolCallId: "plan-ready",
+      toolName: "revise_plan",
+      content: [],
+      details: { plan },
+      isError: false,
+      timestamp: 1,
+    }];
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ran" }],
+      details: {
+        code: { toolCallId: "report-run", artifactId: "artifact-1", artifactVersion: 1 },
+        gate: { status: "passed" as const, checks: [] },
+        measurements: {
+          bboxMm: [10, 10, 2],
+          volumeMm3: 200,
+          areaMm2: 280,
+          children: [],
+          component: "plate",
+          checks: [],
+          integrity: {
+            status: "conforming" as const,
+            componentId: "plate",
+            resultLabel: "plate",
+            solidCount: 1,
+            valid: true,
+            issues: [],
+          },
+        },
+      },
+    }));
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute,
+    };
+    const runCall = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall" as const,
+        id: "report-run",
+        name: "run_build123d",
+        arguments: { code: 'COMPONENT = "plate"\nresult = Box(10, 10, 2)' },
+      }],
+    };
+    const { streamFn } = makeScriptedStreamFn([runCall, textMessage("done"), textMessage("checked")]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages,
+      sourceSpecifications: [specification],
+      proofContracts: [contract],
+      __streamFn: streamFn as never,
+    });
+
+    await session.send("Create the current artifact.");
+
+    expect(vi.mocked(rest.createProofReport)).toHaveBeenCalledWith("conv-1", {
+      proofContractId: "contract-1",
+      proofContractRevision: 1,
+      planId: "plan-1",
+      planRevision: 2,
+      criteriaRevision: 1,
+      artifactId: "artifact-1",
+      artifactVersion: 1,
+      engineeringEvidenceId: "report-run",
+    }, "proof-report:report-run");
+    const persistedRunIndex = vi.mocked(rest.postMessage).mock.calls.findIndex((call) => call[1].role === "toolResult");
+    expect(persistedRunIndex).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(rest.createProofReport).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(rest.postMessage).mock.invocationCallOrder[persistedRunIndex]!,
+    );
+  });
 
   it("blocks terminal completion when a newer failed artifact invalidates an older visual approval", async () => {
     const olderRun = {
@@ -1852,7 +2366,7 @@ describe("createSession agent-loop policies", () => {
     expect(rest.recordInspectionObservation).toHaveBeenCalledWith("conv-1", lease.id, expect.any(Object), "observe-open");
   });
 
-  it("blocks run_build123d for an image turn until update_plan accepts a spec-sheet plan", async () => {
+  it("blocks run_build123d for an image turn until a compatible plan is accepted", async () => {
     const { tool, execute } = gateTool("failed");
     const plan = {
       goal: "single image-derived spacer",
@@ -1861,24 +2375,24 @@ describe("createSession agent-loop policies", () => {
           id: "spacer",
           description: "10 mm cube spacer shown in the image",
           bbox_mm: [10, 10, 10],
-          status: "todo",
           free_floating_reason: "single component",
           checks: [{ id: "volume", kind: "volume", range_mm3: [900, 1100], target: "spacer" }],
         },
       ],
       interfaces: [],
-      spec_sheet: [
-        {
-          id: "cube-size",
-          text: "The image shows a 10 mm cube.",
-          source: "image",
-          check_refs: [{ component_id: "spacer", check_id: "volume" }],
-        },
-      ],
     };
-    const updatePlanCall: AssistantMessage = {
+    const createPlanCall: AssistantMessage = {
       ...textMessage("", "toolUse"),
-      content: [{ type: "toolCall", id: "plan-1", name: "update_plan", arguments: plan }],
+      content: [{
+        type: "toolCall",
+        id: "plan-1",
+        name: "create_plan",
+        arguments: {
+          mutation_id: "create-image-plan",
+          reason: "Create the plan from the durable reference requirement.",
+          ...plan,
+        },
+      }],
     };
     const classificationCall: AssistantMessage = {
       ...textMessage("", "toolUse"),
@@ -1892,7 +2406,7 @@ describe("createSession agent-loop policies", () => {
           purpose: "Dimensioned spacer drawing",
           relationships: [],
           rationale: "Defines the requested spacer.",
-          specificationLinks: ["plan.spec_sheet.cube-size"],
+          specificationIds: ["plan.spec_sheet.cube-size"],
         },
       }],
     };
@@ -1900,7 +2414,7 @@ describe("createSession agent-loop policies", () => {
       toolCallMessage("run-before-classification"),
       classificationCall,
       toolCallMessage("run-before-plan"),
-      updatePlanCall,
+      createPlanCall,
       toolCallMessage("run-after-plan"),
       textMessage("The planned CAD run completed."),
       textMessage("No more work this turn."),
@@ -1911,14 +2425,28 @@ describe("createSession agent-loop policies", () => {
       systemPrompt,
       tools: [tool],
       priorMessages: [],
+      sourceSpecifications: [{
+        id: "plan.spec_sheet.cube-size",
+        conversationId: "conv-1",
+        requirement: "The spacer must match the dimensioned cube.",
+        source: { attachmentId: "ref-plan", observation: "The drawing defines a 10 mm cube." },
+        actor: "agent",
+        status: "active",
+        timestamp: 1,
+      }],
+      referenceRegistrations: [eligibleReferenceRegistration("ref-plan", "plan.spec_sheet.cube-size")],
       __streamFn: streamFn as never,
     } as unknown as Parameters<typeof createSession>[0]);
 
     let latest: SessionState | undefined;
     session.subscribe((state) => (latest = state));
-    vi.spyOn(crypto, "randomUUID").mockReturnValueOnce("ref-plan" as `${string}-${string}-${string}-${string}-${string}`);
+    vi.spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce("11111111-1111-4111-8111-111111111111")
+      .mockReturnValueOnce("ref-plan" as `${string}-${string}-${string}-${string}-${string}`);
     vi.mocked(rest.classifyReference).mockImplementation(async (conversationId, input) => ({
       ...input,
+      specificationIds: input.specificationIds ?? input.specificationLinks ?? [],
+      specificationLinks: input.specificationIds ?? input.specificationLinks ?? [],
       id: "classification-plan",
       conversationId,
       actor: "agent",
@@ -1932,9 +2460,8 @@ describe("createSession agent-loop policies", () => {
       return result.role === "toolResult" && result.toolCallId === "run-before-plan";
     }) as { isError?: boolean; content?: Array<{ text?: string }> } | undefined;
     expect(rejectedRun?.isError).toBe(true);
-    expect(rejectedRun?.content?.[0]?.text).toContain("update_plan");
-    expect(rejectedRun?.content?.[0]?.text).toContain("spec sheet");
-    expect(rejectedRun?.content?.[0]?.text).toContain("every readable dimension, feature, and spec-table row");
+    expect(rejectedRun?.content?.[0]?.text).toContain("create_plan");
+    expect(rejectedRun?.content?.[0]?.text).toContain("stable identities");
   });
 
   it("keeps pixels through CAD rejection, then evicts them only after durable classification", async () => {
@@ -1951,7 +2478,7 @@ describe("createSession agent-loop policies", () => {
           purpose: "Primary drawing",
           relationships: [],
           rationale: "Defines the requested geometry.",
-          specificationLinks: ["plan.spec_sheet.envelope"],
+          specificationIds: ["plan.spec_sheet.envelope"],
         },
       }],
     };
@@ -1968,6 +2495,8 @@ describe("createSession agent-loop policies", () => {
     });
     vi.mocked(rest.classifyReference).mockImplementation(async (conversationId, input) => ({
       ...input,
+      specificationIds: input.specificationIds ?? input.specificationLinks ?? [],
+      specificationLinks: input.specificationIds ?? input.specificationLinks ?? [],
       id: "classification-1",
       conversationId,
       actor: "agent",
@@ -1996,6 +2525,16 @@ describe("createSession agent-loop policies", () => {
         specificationLinks: [],
         history: [],
       }],
+      sourceSpecifications: [{
+        id: "plan.spec_sheet.envelope",
+        conversationId: "conv-1",
+        requirement: "Honor the drawing envelope.",
+        source: { attachmentId: "ref-a", observation: "The drawing defines the envelope." },
+        actor: "agent",
+        status: "active",
+        timestamp: 1,
+      }],
+      referenceRegistrations: [eligibleReferenceRegistration("ref-a")],
       __streamFn: streamFn as never,
     } as unknown as Parameters<typeof createSession>[0]);
 
@@ -2036,7 +2575,7 @@ describe("createSession agent-loop policies", () => {
           purpose: "Primary drawing",
           relationships: [],
           rationale: "Defines the requested geometry.",
-          specificationLinks: ["plan.spec_sheet.envelope"],
+          specificationIds: ["plan.spec_sheet.envelope"],
         },
       }],
     };
@@ -2223,6 +2762,204 @@ describe("createSession agent-loop policies", () => {
     expect(finalAssistant?.content?.[0]?.text).toBe("recovered");
   });
 
+  it("auto-resumes the whole run after stream retries are exhausted on a transient failure", async () => {
+    let calls = 0;
+    const streamFn = vi.fn(() => {
+      calls += 1;
+      if (calls <= 2) {
+        const stream = createAssistantMessageEventStream();
+        const failed: AssistantMessage = {
+          ...textMessage(""),
+          content: [],
+          stopReason: "error",
+          errorMessage: "Proxy error: 503 service unavailable",
+        };
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: failed });
+          stream.push({ type: "error", reason: "error", error: failed });
+          stream.end(failed);
+        });
+        return stream;
+      }
+      return pushCompleted(textMessage("recovered after outage"));
+    });
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+      // Stream-level retry disabled: this exercises the run-level resume that
+      // takes over once in-stream attempts are spent.
+      __retryOptions: { sleep: () => Promise.resolve(), maxAttempts: 1 },
+      __autoResumeOptions: { sleep: () => Promise.resolve() },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    const notices: unknown[] = [];
+    let latest: SessionState | undefined;
+    session.subscribe((state) => {
+      if (state.notice) notices.push(state.notice);
+      latest = state;
+    });
+    await session.send("build a box");
+
+    expect(calls).toBe(3);
+    expect(latest?.error).toBeUndefined();
+    expect(notices).toContainEqual({ kind: "retrying", attempt: 1, maxAttempts: MAX_ERROR_RESUMES, delaySeconds: 5 });
+    const finalAssistant = (latest?.messages ?? []).at(-1) as { content?: { text?: string }[] };
+    expect(finalAssistant?.content?.[0]?.text).toBe("recovered after outage");
+  });
+
+  it("compacts and resumes after a provider context overflow instead of dying", async () => {
+    // Enough history for a forced compaction cut (>= 4 messages before the
+    // ~20k-token kept tail) while staying below pi's proactive threshold, so
+    // only the overflow branch triggers the summarization.
+    const bigText = "x".repeat(25_000 * 4);
+    const priorMessages = [
+      { role: "user", content: [{ type: "text", text: "Housing must be 80x60x30mm." }], timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 2 },
+      { role: "user", content: [{ type: "text", text: "Wall thickness 3mm." }], timestamp: 3 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 4 },
+      { role: "user", content: [{ type: "text", text: `Reference dump. ${bigText}` }], timestamp: 5 },
+      { role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: 6 },
+      { role: "user", content: [{ type: "text", text: "recent question" }], timestamp: 7 },
+      { role: "assistant", content: [{ type: "text", text: "recent answer" }], timestamp: 8 },
+    ];
+    let turnCalls = 0;
+    const summaryContexts: unknown[] = [];
+    const streamFn = vi.fn((_model: unknown, context: { systemPrompt?: string; messages: unknown[] }) => {
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        summaryContexts.push(context);
+        return pushCompleted(textMessage("- Housing 80x60x30mm, walls 3mm."));
+      }
+      turnCalls += 1;
+      if (turnCalls === 1) {
+        const stream = createAssistantMessageEventStream();
+        const failed: AssistantMessage = {
+          ...textMessage(""),
+          content: [],
+          stopReason: "error",
+          errorMessage: "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        };
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: failed });
+          stream.push({ type: "error", reason: "error", error: failed });
+          stream.end(failed);
+        });
+        return stream;
+      }
+      return pushCompleted(textMessage("recovered after compaction"));
+    });
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages,
+      __streamFn: streamFn as never,
+      __retryOptions: { sleep: () => Promise.resolve(), maxAttempts: 1 },
+      __autoResumeOptions: { sleep: () => Promise.resolve() },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("continue the build");
+
+    // Turn 1 overflows; turn 2 runs on the compacted context; turn 3 consumes
+    // the durable recovery marker (pi drains follow-ups at the next boundary).
+    expect(turnCalls).toBe(3);
+    expect(summaryContexts).toHaveLength(1);
+    expect(latest?.error).toBeUndefined();
+    const finalAssistant = (latest?.messages ?? []).at(-1) as { content?: { text?: string }[] };
+    expect(finalAssistant?.content?.[0]?.text).toBe("recovered after compaction");
+    // The post-overflow requests actually shrank: the summary replaced the head.
+    const secondTurn = (streamFn.mock.calls[2]?.[1] as { messages: { role?: string; content?: { text?: string }[] }[] }).messages;
+    expect(secondTurn[0]?.content?.[0]?.text).toContain("Summary of earlier work");
+    // The recovery is durable: a compaction row and a marker user message.
+    const postMessage = rest.postMessage as unknown as ReturnType<typeof vi.fn>;
+    expect(postMessage.mock.calls.some((call) => call[1].role === "compaction")).toBe(true);
+    const markers = (latest?.messages ?? []).filter((message) =>
+      JSON.stringify(message).includes("older history was summarized"));
+    expect(markers).toHaveLength(1);
+  });
+
+  it("surfaces the overflow to the user when there is nothing left to compact", async () => {
+    const streamFn = vi.fn((_model: unknown, context: { systemPrompt?: string }) => {
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        return pushCompleted(textMessage("unused"));
+      }
+      const stream = createAssistantMessageEventStream();
+      const failed: AssistantMessage = {
+        ...textMessage(""),
+        content: [],
+        stopReason: "error",
+        errorMessage: "Your input exceeds the context window of this model.",
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: failed });
+        stream.push({ type: "error", reason: "error", error: failed });
+        stream.end(failed);
+      });
+      return stream;
+    });
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+      __retryOptions: { sleep: () => Promise.resolve(), maxAttempts: 1 },
+      __autoResumeOptions: { sleep: () => Promise.resolve() },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("hi");
+
+    // Fresh two-message history: forced compaction has nothing to cut, so the
+    // loop breaks instead of spinning, and the error reaches the user.
+    expect(latest?.error?.kind).toBe("context-overflow");
+  });
+
+  it("never auto-resumes an authentication failure", async () => {
+    let calls = 0;
+    const streamFn = vi.fn(() => {
+      calls += 1;
+      const stream = createAssistantMessageEventStream();
+      const failed: AssistantMessage = {
+        ...textMessage(""),
+        content: [],
+        stopReason: "error",
+        errorMessage: "401 unauthorized: invalid x-api-key",
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: failed });
+        stream.push({ type: "error", reason: "error", error: failed });
+        stream.end(failed);
+      });
+      return stream;
+    });
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      __streamFn: streamFn as never,
+      __retryOptions: { sleep: () => Promise.resolve(), maxAttempts: 1 },
+      __autoResumeOptions: { sleep: () => Promise.resolve() },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build a box");
+
+    expect(calls).toBe(1);
+    expect(latest?.error?.kind).toBe("invalid-key");
+  });
+
   it("compacts an oversized history into a persisted compaction row before the turn", async () => {
     const bigText = "x".repeat(50_000 * 4);
     const priorMessages = [
@@ -2286,6 +3023,10 @@ describe("createSession agent-loop policies", () => {
         { type: "text", text: `Measurements run ${i}` },
         { type: "image", data: `png-${i}`, mimeType: "image/png" },
       ],
+      details: {
+        code: { toolCallId: `call-${i}`, artifactId: `artifact-${i}`, artifactVersion: i },
+        measurements: { bboxMm: [i, i, i], volumeMm3: i, areaMm2: i, children: [] },
+      },
       isError: false,
       timestamp: i,
     }));
@@ -2460,8 +3201,98 @@ describe("createSession agent-loop policies", () => {
     expect(run?.isError).toBe(true);
     expect(run?.content?.[0]?.text).toContain('planned check "holes" is missing');
     expect(run?.content?.[0]?.text).toContain('planned check "volume" is weaker');
-    expect(run?.content?.[0]?.text).toContain("update_plan");
+    expect(run?.content?.[0]?.text).toContain("transition_from_legacy=true");
     expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(0);
+  });
+
+  it("atomically persists a rendered plan-nonconforming run as failed diagnostic evidence", async () => {
+    const plan = {
+      goal: "checked housing",
+      components: [{
+        id: "housing",
+        description: "single housing",
+        bbox_mm: [100, 80, 30],
+        status: "building",
+        free_floating_reason: "single part",
+        checks: [
+          { id: "volume", kind: "volume", range_mm3: [5000, 6000], target: "housing" },
+          { id: "holes", kind: "hole_through", diameter: 6, count: 4, target: "housing" },
+        ],
+      }],
+      interfaces: [],
+    };
+    const tool = {
+      name: "run_build123d",
+      label: "Run build123d",
+      description: "fake run tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: vi.fn(async () => ({
+        content: [
+          { type: "text" as const, text: "Measurements and verification complete" },
+          { type: "image" as const, data: "cG5n", mimeType: "image/png" },
+        ],
+        details: {
+          gate: { status: "passed", checks: [] },
+          code: { toolCallId: "nonconforming-run", artifactId: "artifact-8", artifactVersion: 8 },
+          measurements: {
+            bboxMm: [100, 80, 30], volumeMm3: 5500, areaMm2: 1000, children: [],
+            component: "housing",
+            checks: [{ kind: "volume", range_mm3: [4500, 6500], target: "housing" }],
+          },
+        },
+      })),
+    };
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      toolCallWithCode("nonconforming-run", 'COMPONENT = "housing"\nresult = Box(1, 1, 1)'),
+      textMessage("I will revise the plan or CAD code."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [{
+        role: "toolResult",
+        toolCallId: "plan-1",
+        toolName: "update_plan",
+        content: [{ type: "text", text: "Plan accepted" }],
+        details: { plan },
+        isError: false,
+        timestamp: 1,
+      }],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    const atomicPost = rest.postMessageWithAttachments as unknown as ReturnType<typeof vi.fn>;
+    const persistedCall = atomicPost.mock.calls.find((call) => call[1].role === "toolResult");
+    if (!persistedCall) throw new Error("expected persisted nonconforming CAD result");
+    const persisted = JSON.parse(persistedCall[1].contentJson);
+    const reference = persisted.content.find((block: { type?: string }) => block.type === "attachment-reference");
+    expect(persisted.isError).toBe(true);
+    expect(persisted.content[0].text).toContain("Plan conformance: FAILED");
+    expect(persisted.details.inspectionSheet).toEqual({
+      attachmentId: reference.attachmentId,
+      code: { toolCallId: "nonconforming-run", artifactId: "artifact-8", artifactVersion: 8 },
+      measurements: persisted.details.measurements,
+      gate: { status: "passed", checks: [] },
+    });
+    expect(atomicPost.mock.calls.filter((call) => call[1].role === "toolResult")).toHaveLength(1);
+    expect(latest?.error?.message).not.toContain("attachment-persist-failed");
+
+    const failedContextResult = (turnContexts[1]?.messages as Array<{
+      role?: string;
+      toolCallId?: string;
+      isError?: boolean;
+      content: Array<{ type?: string }>;
+    }> | undefined)?.find((message) =>
+      message.role === "toolResult" && message.toolCallId === "nonconforming-run"
+    );
+    expect(failedContextResult?.isError).toBe(true);
+    expect(failedContextResult?.content.every((block) => block.type === "text")).toBe(true);
   });
 
   it("names both honest exits and forbids weakening checks in the plan nudge", () => {
@@ -2490,7 +3321,8 @@ describe("createSession agent-loop policies", () => {
     session.subscribe((state) => (latest = state));
     await session.send("continue");
 
-    expect(turnContexts).toHaveLength(2);
+    // The idle stop drains the whole nudge budget before surfacing.
+    expect(turnContexts).toHaveLength(4);
     const nudge = (latest?.messages ?? []).find((message) => {
       const candidate = message as { role?: string; content?: { text?: string }[] };
       return candidate.role === "user" && candidate.content?.[0]?.text?.startsWith(PLAN_NUDGE_MARKER);
@@ -2522,7 +3354,7 @@ describe("createSession agent-loop policies", () => {
     expect(latest?.error).toBeUndefined();
   });
 
-  it("pressure-loop regression: marking the stuck component blocked ends without another nudge or stop error", async () => {
+  it("pressure-loop regression: a fresh block is challenged exactly once, then accepted without a stop error", async () => {
     const buildingPlan = {
       goal: "organic device shell",
       components: [
@@ -2537,22 +3369,43 @@ describe("createSession agent-loop policies", () => {
       ],
       interfaces: [],
     };
-    const blockedPlan = {
-      ...buildingPlan,
-      components: [
-        {
-          ...buildingPlan.components[0],
-          status: "blocked",
-          blocked_reason: "The curved shell repeatedly fails tessellation after alternative loft and sweep strategies.",
+    const transitionCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "transition-plan",
+        name: "create_plan",
+        arguments: {
+          mutation_id: "transition-shell-plan",
+          reason: "Transition the read-only legacy plan without changing its criteria.",
+          transition_from_legacy: true,
+          goal: buildingPlan.goal,
+          components: buildingPlan.components.map(({ status: _status, ...component }) => component),
+          interfaces: buildingPlan.interfaces,
         },
-      ],
+      }],
     };
     const blockCall: AssistantMessage = {
       ...textMessage("", "toolUse"),
-      content: [{ type: "toolCall", id: "block-plan", name: "update_plan", arguments: blockedPlan }],
+      content: [{
+        type: "toolCall",
+        id: "block-plan",
+        name: "revise_plan",
+        arguments: {
+          mutation_id: "block-shell-plan",
+          reason: "Alternative loft and sweep strategies both failed tessellation.",
+          operations: [{
+            kind: "set_component_status",
+            component_id: "shell",
+            status: "blocked",
+            blocked_reason: "The curved shell repeatedly fails tessellation after alternative loft and sweep strategies.",
+          }],
+        },
+      }],
     };
     const { streamFn, turnContexts } = makeScriptedStreamFn([
       textMessage("The curved construction is still failing."),
+      transitionCall,
       blockCall,
       textMessage("The shell is blocked because the attempted curved constructions fail tessellation."),
     ]);
@@ -2571,6 +3424,15 @@ describe("createSession agent-loop policies", () => {
           timestamp: 1,
         },
       ],
+      sourceSpecifications: [{
+        id: "shell-form",
+        conversationId: "conv-1",
+        requirement: "The design must include the curved outer shell.",
+        source: { messageId: "request-1", text: "organic device shell", start: 0, end: 20 },
+        actor: "agent",
+        status: "active",
+        timestamp: 1,
+      }],
       __streamFn: streamFn as never,
     } as unknown as Parameters<typeof createSession>[0]);
 
@@ -2578,14 +3440,16 @@ describe("createSession agent-loop policies", () => {
     session.subscribe((state) => (latest = state));
     await session.send("finish the shell");
 
-    expect(turnContexts).toHaveLength(3);
-    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    // t1 stop -> plan nudge; transition; block; t4 stop -> ONE blocked challenge
+    // (the automated "continue"); t5 reaffirms -> accepted cleanly, no more pressure.
+    expect(turnContexts).toHaveLength(5);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(2);
     expect(latest?.error).toBeUndefined();
     const accepted = (latest?.messages ?? []).find(
       (message) =>
         (message as { role?: string; toolName?: string; details?: { plan?: { components?: { status?: string }[] } } }).role ===
           "toolResult" &&
-        (message as { toolName?: string }).toolName === "update_plan" &&
+        (message as { toolName?: string }).toolName === "revise_plan" &&
         (message as { details?: { plan?: { components?: { status?: string }[] } } }).details?.plan?.components?.[0]
           ?.status === "blocked",
     ) as { details?: { plan?: { components?: { blocked_reason?: string }[] } } } | undefined;
@@ -2610,10 +3474,12 @@ describe("createSession agent-loop policies", () => {
     }).length;
   }
 
-  it("reports an incomplete plan when the one allowed nudge is ignored", async () => {
+  it("reports an incomplete plan after every allowed nudge is ignored", async () => {
     const { streamFn, turnContexts } = makeScriptedStreamFn([
       textMessage("planned enough, stopping."),
       textMessage("still stopping without running anything."),
+      textMessage("ignoring the continuation order."),
+      textMessage("ignoring the continuation order again."),
     ]);
 
     const session = createSession({
@@ -2628,19 +3494,23 @@ describe("createSession agent-loop policies", () => {
     session.subscribe((state) => (latest = state));
     await session.send("build it");
 
-    // stop -> nudge -> stop; the second stop must NOT nudge again (no run in between).
-    expect(turnContexts).toHaveLength(2);
-    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    // stop -> nudge -> stop -> continue-order -> stop -> continue-order -> stop ->
+    // give-up. The budget only drains on stops with no run in between.
+    expect(turnContexts).toHaveLength(4);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(3);
     expect(countMarker(latest, SELF_CHECK_MARKER)).toBe(0);
     expect(latest?.error?.message).toMatch(/stopped with unfinished plan work/i);
   });
 
-  it("re-arms the plan nudge after an intervening run_build123d call", async () => {
+  it("re-arms the full plan nudge budget after an intervening run_build123d call", async () => {
     const { tool } = gateTool("passed");
     const { streamFn, turnContexts } = makeScriptedStreamFn([
       textMessage("stopping early."),
+      textMessage("stopping again without a run."),
       toolCallMessage("call-1"),
       textMessage("ran once, stopping again."),
+      textMessage("still stopping."),
+      textMessage("still stopping again."),
       textMessage("final stop."),
     ]);
 
@@ -2657,9 +3527,48 @@ describe("createSession agent-loop policies", () => {
     session.subscribe((state) => (latest = state));
     await session.send("build it");
 
-    // stop -> nudge -> run+stop -> nudge -> stop (no third nudge).
-    expect(turnContexts).toHaveLength(4);
-    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(2);
+    // Two nudges drain before the run; the run resets the budget, so three more
+    // drain after it before the session surfaces the stop.
+    expect(turnContexts).toHaveLength(7);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(5);
+    expect(latest?.error?.message).toMatch(/stopped with unfinished plan work/i);
+  });
+
+  it("renews the per-turn CAD budget and continues while the plan is incomplete and productive", async () => {
+    const { tool, execute } = gateTool("passed");
+    const { streamFn, turnContexts } = makeScriptedStreamFn([
+      toolCallMessage("call-1"),
+      toolCallMessage("call-2"),
+      toolCallMessage("call-3"),
+      textMessage("stopping after the renewed window."),
+      textMessage("still stopping."),
+      textMessage("still stopping again."),
+      textMessage("final stop."),
+    ]);
+
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [tool],
+      priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
+      maxCadRuns: 2,
+      __streamFn: streamFn as never,
+      __autoResumeOptions: { sleep: () => Promise.resolve(), maxBudgetContinues: 1 },
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("build it");
+
+    // Two runs fit the bucket; the third aborts the window. The productive,
+    // still-incomplete build renews the budget once and continues by itself.
+    expect(execute).toHaveBeenCalledTimes(2);
+    const budgetMessages = (latest?.messages ?? []).filter((message) => JSON.stringify(message).includes("Budget window 1/1 renewed"));
+    expect(budgetMessages).toHaveLength(1);
+    expect(turnContexts.length).toBeGreaterThan(3);
+    // After the renewed window idles through its nudges, the stop surfaces normally.
+    expect(latest?.error?.message).toMatch(/stopped with unfinished plan work/i);
   });
 
   it("falls back to the prose self-check when the plan is complete", async () => {
@@ -2691,6 +3600,8 @@ describe("createSession agent-loop policies", () => {
     const { streamFn, turnContexts } = makeScriptedStreamFn([
       textMessage("both components done, wrapping up."),
       textMessage("still not running the assembly."),
+      textMessage("still not running it."),
+      textMessage("final refusal."),
     ]);
 
     const session = createSession({
@@ -2713,8 +3624,8 @@ describe("createSession agent-loop policies", () => {
     session.subscribe((state) => (latest = state));
     await session.send("finish it");
 
-    expect(turnContexts).toHaveLength(2);
-    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+    expect(turnContexts).toHaveLength(4);
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(3);
     const nudge = (latest?.messages ?? []).find((m) =>
       JSON.stringify(m).includes("interfaces are unverified"),
     );
@@ -2790,6 +3701,8 @@ describe("createSession agent-loop policies", () => {
       priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
       maxCadRuns: 2,
       __streamFn: streamFn as never,
+      // Budget enforcement under test; autonomous budget renewal is exercised separately.
+      __autoResumeOptions: { sleep: () => Promise.resolve(), maxBudgetContinues: 0 },
     } as unknown as Parameters<typeof createSession>[0]);
 
     let latest: SessionState | undefined;
@@ -2817,6 +3730,8 @@ describe("createSession agent-loop policies", () => {
       priorMessages: [acceptedPlanResult([{ id: "base", status: "todo" }])],
       maxCadRuns: 1,
       __streamFn: streamFn as never,
+      // Budget enforcement under test; autonomous budget renewal is exercised separately.
+      __autoResumeOptions: { sleep: () => Promise.resolve(), maxBudgetContinues: 0 },
     } as unknown as Parameters<typeof createSession>[0]);
 
     let latest: SessionState | undefined;
@@ -2828,7 +3743,7 @@ describe("createSession agent-loop policies", () => {
     expect(latest?.error?.message).toContain('plan component "base"');
   });
 
-  it("registers update_plan so the agent can create a plan, and the accepted snapshot persists in the tool result", async () => {
+  it("keeps update_plan as a non-mutating recovery sentinel for stale model calls", async () => {
     const plan = {
       goal: "single spacer",
       components: [
@@ -2848,8 +3763,7 @@ describe("createSession agent-loop policies", () => {
         ...textMessage("", "toolUse"),
         content: [{ type: "toolCall", id: "plan-call", name: "update_plan", arguments: plan }],
       },
-      textMessage("planned, stopping."),
-      textMessage("continuing after nudge."),
+      textMessage("I will use create_plan instead."),
     ]);
 
     const session = createSession({
@@ -2857,6 +3771,7 @@ describe("createSession agent-loop policies", () => {
       modelJson: JSON.stringify(FAKE_MODEL),
       systemPrompt,
       priorMessages: [],
+      sourceSpecificationsRequired: true,
       __streamFn: streamFn as never,
     } as unknown as Parameters<typeof createSession>[0]);
 
@@ -2864,14 +3779,385 @@ describe("createSession agent-loop policies", () => {
     session.subscribe((state) => (latest = state));
     await session.send("make a spacer");
 
-    const planResults = (latest?.messages ?? []).filter((m) => {
-      const message = m as { role?: string; toolName?: string; isError?: boolean; details?: { plan?: unknown } };
-      return message.role === "toolResult" && message.toolName === "update_plan" && !message.isError;
+    const result = resultFor(latest, "plan-call");
+    expect(result?.isError).toBe(true);
+    expect(result?.content?.[0]?.text).toContain("record_source_specifications");
+    expect(result?.content?.[0]?.text).toContain("create_plan");
+    expect(result?.details).toEqual({});
+    expect(latestPlan(latest?.messages ?? [])).toBeUndefined();
+    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(0);
+  });
+
+  it("keeps a legacy snapshot readable but rejects replacement writes", async () => {
+    const legacyPlan = {
+      goal: "legacy spacer",
+      components: [{
+        id: "spacer",
+        description: "a legacy spacer",
+        bbox_mm: [30, 30, 10],
+        free_floating_reason: "single part",
+        checks: [{ id: "volume", kind: "volume", range_mm3: [8100, 9900], target: "spacer" }],
+      }],
+      interfaces: [],
+    };
+    const priorMessages = [{
+      role: "toolResult",
+      toolCallId: "legacy-plan-v1",
+      toolName: "update_plan",
+      content: [{ type: "text", text: "Plan accepted" }],
+      details: { plan: legacyPlan },
+      isError: false,
+      timestamp: 1,
+    }];
+    const { streamFn } = makeScriptedStreamFn([
+      {
+        ...textMessage("", "toolUse"),
+        content: [{
+          type: "toolCall",
+          id: "legacy-plan-v2",
+          name: "update_plan",
+          arguments: { ...legacyPlan, components: [] },
+        }],
+      },
+      textMessage("I will transition the legacy plan before changing it."),
+      textMessage("Continuing after plan check."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages,
+      sourceSpecificationsRequired: true,
+      __streamFn: streamFn as never,
     });
-    expect(planResults).toHaveLength(1);
-    expect((planResults[0] as { details: { plan: { goal: string } } }).details.plan.goal).toBe("single spacer");
-    // The new plan is live immediately: stopping with a todo component draws the nudge.
-    expect(countMarker(latest, PLAN_NUDGE_MARKER)).toBe(1);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Continue the legacy design");
+
+    const result = resultFor(latest, "legacy-plan-v2");
+    expect(result?.isError).toBe(true);
+    expect(result?.content?.[0]?.text).toContain("stored legacy snapshot remains unchanged");
+    expect(result?.content?.[0]?.text).toContain("transition_from_legacy=true");
+    expect(latestPlan(latest?.messages ?? [])).toEqual(legacyPlan);
+  });
+
+  it("blocks the first text plan in a new conversation until durable source specifications exist", async () => {
+    const plan = {
+      goal: "single spacer",
+      components: [{
+        id: "spacer",
+        description: "a spacer",
+        bbox_mm: [30, 30, 10],
+        free_floating_reason: "single part",
+        checks: [{ id: "volume", kind: "volume", range_mm3: [8100, 9900], target: "spacer" }],
+      }],
+      interfaces: [],
+    };
+    const { streamFn } = makeScriptedStreamFn([
+      {
+        ...textMessage("", "toolUse"),
+        content: [{ type: "toolCall", id: "premature-plan", name: "update_plan", arguments: plan }],
+      },
+      textMessage("I need to record the source requirements first."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      sourceSpecificationsRequired: true,
+      __streamFn: streamFn as never,
+    });
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Make a 30 mm spacer");
+
+    const result = resultFor(latest, "premature-plan");
+    expect(result?.isError).toBe(true);
+    expect(result?.content?.[0]?.text).toContain("record_source_specifications");
+    expect((latest?.messages ?? []).some((message) =>
+      (message as { role?: string; toolName?: string; isError?: boolean }).role === "toolResult" &&
+      (message as { toolName?: string }).toolName === "update_plan" &&
+      !(message as { isError?: boolean }).isError)).toBe(false);
+  });
+
+  it("records exact source requirements before accepting the first text plan and exposes them in state", async () => {
+    const plan = {
+      goal: "single spacer",
+      components: [{
+        id: "spacer",
+        description: "a spacer",
+        bbox_mm: [30, 30, 10],
+        free_floating_reason: "single part",
+        checks: [{ id: "volume", kind: "volume", range_mm3: [8100, 9900], target: "spacer" }],
+      }],
+      interfaces: [],
+    };
+    vi.mocked(rest.recordSourceSpecifications).mockImplementation(async (conversationId, input) =>
+      input.specifications.map((specification) => ({
+        ...specification,
+        conversationId,
+        actor: "agent" as const,
+        status: "active" as const,
+        timestamp: 10,
+      })));
+    const { streamFn } = makeScriptedStreamFn([
+      {
+        ...textMessage("", "toolUse"),
+        content: [{
+          type: "toolCall",
+          id: "source-specifications",
+          name: "record_source_specifications",
+          arguments: {
+            specifications: [{
+              id: "spacer-width",
+              requirement: "The spacer must be 30 mm wide.",
+              sourceQuote: "30 mm spacer",
+            }],
+          },
+        }],
+      },
+      {
+        ...textMessage("", "toolUse"),
+        content: [{
+          type: "toolCall",
+          id: "accepted-plan",
+          name: "create_plan",
+          arguments: {
+            mutation_id: "create-spacer-plan",
+            reason: "Create the plan from the recorded source requirement.",
+            ...plan,
+          },
+        }],
+      },
+      textMessage("Planned, stopping."),
+      textMessage("Continuing after plan check."),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [],
+      sourceSpecificationsRequired: true,
+      __streamFn: streamFn as never,
+    });
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Make a 30 mm spacer");
+
+    expect(latest?.sourceSpecifications).toHaveLength(1);
+    expect(latest?.sourceSpecifications?.[0]).toMatchObject({
+      id: "spacer-width",
+      requirement: "The spacer must be 30 mm wide.",
+      source: { text: "30 mm spacer", start: 7, end: 19 },
+    });
+    const sourceIndex = (latest?.messages ?? []).findIndex((message) =>
+      (message as { toolName?: string }).toolName === "record_source_specifications");
+    const planIndex = (latest?.messages ?? []).findIndex((message) =>
+      (message as { toolName?: string; isError?: boolean }).toolName === "create_plan" &&
+      !(message as { isError?: boolean }).isError);
+    expect(sourceIndex).toBeGreaterThanOrEqual(0);
+    expect(planIndex).toBeGreaterThan(sourceIndex);
+  });
+
+  it("blocks autonomous explicit-requirement weakening, asks one focused question, and keeps CAD blocked while unanswered", async () => {
+    const explicit = {
+      id: "holes-four",
+      conversationId: "conv-1",
+      requirement: "The plate must have four through holes.",
+      source: { messageId: "source", text: "four through holes", start: 0, end: 18 },
+      actor: "agent" as const,
+      status: "active" as const,
+      timestamp: 1,
+    };
+    const plan = {
+      goal: "plate with four through holes",
+      components: [{
+        id: "plate",
+        description: "plate with four through holes",
+        status: "blocked" as const,
+        blocked_reason: "Waiting for the explicit requirement decision.",
+        bbox_mm: [30, 20, 4],
+        free_floating_reason: "single part",
+        checks: [
+          { id: "holes", kind: "hole_through", diameter: 4, count: 4, target: "plate" },
+          { id: "volume", kind: "volume", range_mm3: [2100, 2300], target: "plate" },
+        ],
+      }],
+      interfaces: [],
+      domain: {
+        format: "domain-operations-v1" as const,
+        plan_id: "plan-1",
+        revision: 1,
+        criteria_revision: 1,
+        source_specification_ids: [explicit.id],
+        requires_form_review: false,
+        actor: "agent" as const,
+        created_at: 1,
+        history: [],
+      },
+    };
+    const contract = {
+      contractId: "contract-1",
+      conversationId: "conv-1",
+      revision: 1,
+      status: "current" as const,
+      proofStatus: "pending" as const,
+      frozenAt: 1,
+      derivation: {
+        planId: "plan-1",
+        planRevision: 1,
+        criteriaRevision: 1,
+        sourceSpecificationIds: [explicit.id],
+        component: { id: "plate", description: "plate with four through holes" },
+        criteria: [{
+          id: "specification:holes-four",
+          category: "explicit-requirement" as const,
+          statement: explicit.requirement,
+          sourceSpecificationId: explicit.id,
+        }],
+        plannedChecks: [],
+        unavailableEvidence: [],
+        invalidatedEvidenceIds: [],
+        proofPolicy: { id: "proven-single-part-text", version: 1 },
+        shapeProof: { status: "not-applicable" as const, reason: "Text request." },
+      },
+    };
+    const escalation = {
+      escalationId: "hole-count-change",
+      conversationId: "conv-1",
+      kind: "explicit-requirement-change" as const,
+      question: "May I reduce the requested four through holes to two?",
+      affectedSpecificationIds: [explicit.id],
+      basis: "The proposed revision would reduce an explicit hole count.",
+      status: "pending" as const,
+      openedAt: 2,
+      resolutionSpecificationIds: [],
+    };
+    vi.mocked(rest.openDesignEscalation).mockResolvedValue(escalation);
+    const cad = vi.fn(async () => ({ content: [{ type: "text" as const, text: "must not execute" }] }));
+    const cadTool = {
+      name: "run_build123d",
+      label: "Run CAD",
+      description: "test CAD tool",
+      parameters: Type.Object({ code: Type.String() }),
+      execute: cad,
+    };
+    const priorMessages = [{
+      role: "toolResult",
+      toolCallId: "initial-plan",
+      toolName: "create_plan",
+      content: [{ type: "text", text: "Plan accepted" }],
+      details: { plan },
+      isError: false,
+      timestamp: 1,
+    }];
+    const { streamFn } = makeScriptedStreamFn([
+      {
+        ...textMessage("", "toolUse"),
+        content: [{
+          type: "toolCall",
+          id: "silent-weaken",
+          name: "revise_plan",
+          arguments: {
+            mutation_id: "silent-weaken",
+            reason: "Make the design easier to build.",
+            operations: [{
+              kind: "revise_check",
+              component_id: "plate",
+              check_id: "holes",
+              check: { kind: "hole_through", diameter: 4, count: 2, target: "plate" },
+            }],
+          },
+        }],
+      },
+      {
+        ...textMessage("", "toolUse"),
+        content: [{
+          type: "toolCall",
+          id: "focused-question",
+          name: "request_design_clarification",
+          arguments: {
+            escalationId: escalation.escalationId,
+            kind: escalation.kind,
+            question: escalation.question,
+            affectedSpecificationIds: escalation.affectedSpecificationIds,
+            basis: escalation.basis,
+          },
+        }],
+      },
+      {
+        ...textMessage("", "toolUse"),
+        content: [{ type: "toolCall", id: "blocked-cad", name: "run_build123d", arguments: { code: "result = Box(1, 1, 1)" } }],
+      },
+      textMessage(escalation.question),
+    ]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      tools: [cadTool],
+      priorMessages,
+      sourceSpecifications: [explicit],
+      proofContracts: [contract],
+      __streamFn: streamFn as never,
+    });
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("Continue autonomously.");
+
+    expect(resultFor(latest, "silent-weaken")?.content?.[0]?.text).toContain("explicit user requirement");
+    expect(resultFor(latest, "focused-question")?.isError).toBeFalsy();
+    expect(resultFor(latest, "blocked-cad")?.content?.[0]?.text).toContain("blocked pending the user's answer");
+    expect(cad).not.toHaveBeenCalled();
+    expect(latest?.designEscalations).toEqual([escalation]);
+    expect(latestPlan(latest?.messages ?? [])).toEqual(plan);
+  });
+
+  it("normalizes system-owned plan evidence and accepted audit history through the live session tool", async () => {
+    const updateCall: AssistantMessage = {
+      ...textMessage("", "toolUse"),
+      content: [{
+        type: "toolCall",
+        id: "normalize-bookkeeping",
+        name: "update_plan",
+        arguments: BOOKKEEPING_STALE_EVIDENCE_PLAN as unknown as Record<string, unknown>,
+      }],
+    };
+    const { streamFn } = makeScriptedStreamFn([updateCall, textMessage("The synthetic component is complete.")]);
+    const session = createSession({
+      conversationId: "conv-1",
+      modelJson: JSON.stringify(FAKE_MODEL),
+      systemPrompt,
+      priorMessages: [{
+        role: "toolResult",
+        toolCallId: "accepted-bookkeeping-plan",
+        toolName: "update_plan",
+        content: [{ type: "text", text: "Plan accepted" }],
+        details: { plan: BOOKKEEPING_PREVIOUS_PLAN },
+        isError: false,
+        timestamp: 1,
+      }, BOOKKEEPING_CURRENT_EVIDENCE],
+      __streamFn: streamFn as never,
+    } as unknown as Parameters<typeof createSession>[0]);
+
+    let latest: SessionState | undefined;
+    session.subscribe((state) => (latest = state));
+    await session.send("finish the synthetic fixture");
+
+    const accepted = (latest?.messages ?? []).find((message) => {
+      const candidate = message as { role?: string; toolCallId?: string; isError?: boolean };
+      return candidate.role === "toolResult" && candidate.toolCallId === "normalize-bookkeeping" && !candidate.isError;
+    }) as { details?: { plan?: Plan } } | undefined;
+    expect(accepted?.details?.plan?.components[0]?.form_review?.evidence_id).toBe("current-widget-evidence");
+    expect(accepted?.details?.plan?.components[0]?.checks?.[0]).toMatchObject({
+      revision_reason: BOOKKEEPING_PRIOR_REASON,
+      refit_to_measurement: true,
+    });
   });
 
   function loadSkillCall(id: string, name = "sweep-and-loft"): AssistantMessage {

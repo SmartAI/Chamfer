@@ -4,10 +4,15 @@ import { createClassifyReferenceTool } from "./classifyReference";
 it("passes the classify tool call ID as the idempotency key", async () => {
   const input = {
     referenceId: "ref-1", status: "active" as const, purpose: "Primary",
-    relationships: [], rationale: "Defines form.", specificationLinks: ["spec.form"],
+    relationships: [], rationale: "Defines form.", specificationIds: ["spec.form"],
   };
   const classification = {
-    ...input, id: "classify-call", conversationId: "conv-1", actor: "agent" as const, timestamp: 1,
+    ...input,
+    specificationLinks: input.specificationIds,
+    id: "classify-call",
+    conversationId: "conv-1",
+    actor: "agent" as const,
+    timestamp: 1,
   };
   const classify = vi.fn(async () => classification);
   const tool = createClassifyReferenceTool({ persistPending: async () => {}, classify, onAccepted: vi.fn() });

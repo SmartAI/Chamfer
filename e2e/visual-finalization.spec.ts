@@ -6,10 +6,10 @@ const REFERENCE = readFileSync("packages/client/public/brand/chamfer-mark-512.pn
 test("blocks stale or mismatched visual finalization until current evidence matches", async ({ page }, testInfo) => {
   test.setTimeout(600_000);
   const conversation = await (await page.request.post("/api/conversations", {
-    data: { title: "Visual finalization evidence" },
+    data: { title: "Visual finalization evidence", cadEnvironment: "build123d" },
   })).json() as { id: string };
-  const referenceId = "visual-reference-e2e";
-  const messageId = "visual-reference-message-e2e";
+  const referenceId = `visual-reference-${conversation.id}`;
+  const messageId = `visual-reference-message-${conversation.id}`;
   await page.request.post(`/api/conversations/${conversation.id}/messages`, {
     data: {
       id: messageId,
@@ -36,7 +36,8 @@ test("blocks stale or mismatched visual finalization until current evidence matc
       purpose: "Primary form reference",
       relationships: [],
       rationale: "The image defines the requested visible proportions.",
-      specificationLinks: ["visual.body-form"],
+      specificationIds: [],
+      noSpecificationReason: "This fixture provides qualitative form guidance without a calibrated dimension.",
     },
   });
   await page.goto("/");

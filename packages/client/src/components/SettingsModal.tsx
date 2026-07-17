@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useOptionalFusionReadiness } from "@/state/fusionReadiness";
+import { FusionReadinessBadge } from "./FusionReadinessBadge";
 import {
   Select,
   SelectContent,
@@ -29,7 +31,7 @@ const PROVIDER_LABELS: Record<Provider, string> = {
 
 /** Free-text settings fields: per-provider credentials plus agent limits.
  * All ride the same diff-on-save / badge / reset machinery. */
-interface ProviderFieldState {
+interface EditableSettingsState {
   anthropicApiKey: string;
   anthropicBaseUrl: string;
   openaiApiKey: string;
@@ -37,10 +39,11 @@ interface ProviderFieldState {
   googleApiKey: string;
   googleBaseUrl: string;
   maxCadRuns: string;
+  fusionMcpEndpoint: string;
 }
 
 const PROVIDERS: Provider[] = ["anthropic", "openai", "google"];
-const PROVIDER_FIELDS: Array<keyof ProviderFieldState> = [
+const EDITABLE_SETTINGS_FIELDS: Array<keyof EditableSettingsState> = [
   "anthropicApiKey",
   "anthropicBaseUrl",
   "openaiApiKey",
@@ -48,6 +51,7 @@ const PROVIDER_FIELDS: Array<keyof ProviderFieldState> = [
   "googleApiKey",
   "googleBaseUrl",
   "maxCadRuns",
+  "fusionMcpEndpoint",
 ];
 
 function findCurrentModelId(settingsModelJson: string | undefined, models: ModelInfoDto[]): string | undefined {
@@ -107,9 +111,10 @@ export interface SettingsModalProps {
 }
 
 export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProps) {
+  const fusion = useOptionalFusionReadiness();
   const [loaded, setLoaded] = useState(false);
   const [initial, setInitial] = useState<SettingsDto>({});
-  const [providerFields, setProviderFields] = useState<ProviderFieldState>({
+  const [editableSettings, setEditableSettings] = useState<EditableSettingsState>({
     anthropicApiKey: "",
     anthropicBaseUrl: "",
     openaiApiKey: "",
@@ -117,6 +122,7 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
     googleApiKey: "",
     googleBaseUrl: "",
     maxCadRuns: "",
+    fusionMcpEndpoint: "",
   });
   const [models, setModels] = useState<ModelInfoDto[]>([]);
   const [sources, setSources] = useState<SettingsSources>({});
@@ -138,7 +144,7 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
         if (cancelled) return;
         const defaultBaseUrl = (provider: Provider) =>
           getModelBaseUrl(modelList.find((model) => model.provider === provider));
-        const loadedProviderFields: ProviderFieldState = {
+        const loadedEditableSettings: EditableSettingsState = {
           anthropicApiKey: settings.anthropicApiKey ?? "",
           anthropicBaseUrl: settings.anthropicBaseUrl || defaultBaseUrl("anthropic"),
           openaiApiKey: settings.openaiApiKey ?? "",
@@ -146,9 +152,10 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
           googleApiKey: settings.googleApiKey ?? "",
           googleBaseUrl: settings.googleBaseUrl || defaultBaseUrl("google"),
           maxCadRuns: settings.maxCadRuns ?? "",
+          fusionMcpEndpoint: settings.fusionMcpEndpoint ?? "http://127.0.0.1:27182/mcp",
         };
-        setInitial({ ...settings, ...loadedProviderFields });
-        setProviderFields(loadedProviderFields);
+        setInitial({ ...settings, ...loadedEditableSettings });
+        setEditableSettings(loadedEditableSettings);
         setModels(modelList);
         setSources(settings.sources ?? {});
         const currentModelId = findCurrentModelId(settings.modelJson, modelList);
@@ -185,20 +192,20 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
   );
 
   const providerModels = modelsByProvider.get(selectedProvider) ?? [];
-  const apiKeyField = `${selectedProvider}ApiKey` as keyof ProviderFieldState;
-  const baseUrlField = `${selectedProvider}BaseUrl` as keyof ProviderFieldState;
+  const apiKeyField = `${selectedProvider}ApiKey` as keyof EditableSettingsState;
+  const baseUrlField = `${selectedProvider}BaseUrl` as keyof EditableSettingsState;
 
   function handleProviderChange(provider: Provider) {
     setSelectedProvider(provider);
     setSelectedModelId(modelsByProvider.get(provider)?.[0]?.id);
   }
 
-  function handleProviderFieldChange(field: keyof ProviderFieldState, value: string) {
-    setProviderFields((prev) => ({ ...prev, [field]: value }));
+  function handleEditableSettingChange(field: keyof EditableSettingsState, value: string) {
+    setEditableSettings((prev) => ({ ...prev, [field]: value }));
   }
 
-  function isPristine(field: keyof ProviderFieldState): boolean {
-    return providerFields[field] === (initial[field] ?? "");
+  function isPristine(field: keyof EditableSettingsState): boolean {
+    return editableSettings[field] === (initial[field] ?? "");
   }
 
   /** Deletes a stored override so the key falls back to its env value, then
@@ -219,9 +226,9 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
     setSaving(true);
     try {
       const patch: SettingsDto = {};
-      for (const field of PROVIDER_FIELDS) {
-        if (providerFields[field] !== (initial[field] ?? "")) {
-          patch[field] = providerFields[field];
+      for (const field of EDITABLE_SETTINGS_FIELDS) {
+        if (editableSettings[field] !== (initial[field] ?? "")) {
+          patch[field] = editableSettings[field];
         }
       }
       // Only persist the model when actually changed, so an env-sourced
@@ -230,6 +237,7 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
         patch.modelJson = selectedModel.modelJson;
       }
       await putSettings(patch);
+      await fusion?.refreshConfiguration();
       onSaved?.();
       onOpenChange(false);
     } catch (err) {
@@ -303,8 +311,8 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
                 id="provider-api-key"
                 type="password"
                 autoComplete="off"
-                value={providerFields[apiKeyField]}
-                onChange={(event) => handleProviderFieldChange(apiKeyField, event.target.value)}
+                value={editableSettings[apiKeyField]}
+                onChange={(event) => handleEditableSettingChange(apiKeyField, event.target.value)}
               />
             </div>
 
@@ -320,8 +328,8 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
               <Input
                 id="provider-base-url"
                 type="url"
-                value={providerFields[baseUrlField]}
-                onChange={(event) => handleProviderFieldChange(baseUrlField, event.target.value)}
+                value={editableSettings[baseUrlField]}
+                onChange={(event) => handleEditableSettingChange(baseUrlField, event.target.value)}
               />
               <p className="text-xs text-muted-foreground">Change this only when using a compatible custom endpoint.</p>
             </div>
@@ -341,14 +349,31 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
                 min={1}
                 step={1}
                 placeholder="10"
-                value={providerFields.maxCadRuns}
-                onChange={(event) => handleProviderFieldChange("maxCadRuns", event.target.value)}
+                value={editableSettings.maxCadRuns}
+                onChange={(event) => handleEditableSettingChange("maxCadRuns", event.target.value)}
               />
               <p className="text-xs text-muted-foreground">
                 Safety cap: the agent stops after this many build123d executions in one turn. Empty uses the default
                 of 10.
               </p>
             </div>
+
+            {fusion?.enabled && (
+              <div className="flex flex-col gap-2 rounded-md border p-3" data-testid="fusion-settings-status">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="fusion-mcp-endpoint">Autodesk Fusion MCP</Label>
+                  <FusionReadinessBadge readiness={fusion.endpointReadiness} className="text-xs" />
+                </div>
+                <Input
+                  id="fusion-mcp-endpoint"
+                  type="url"
+                  value={editableSettings.fusionMcpEndpoint}
+                  onChange={(event) => handleEditableSettingChange("fusionMcpEndpoint", event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">Only http://127.0.0.1:&lt;port&gt;/mcp is accepted.</p>
+                <p className="text-xs text-muted-foreground">{fusion.readiness?.diagnosis}</p>
+              </div>
+            )}
           </div>
         )}
 

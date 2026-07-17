@@ -22,7 +22,7 @@ test("exports the current script as a STEP file", async ({ page }) => {
   await page.getByTestId("export-step").click();
   const download = await downloadPromise;
 
-  expect(download.suggestedFilename()).toBe("model.step");
+  expect(download.suggestedFilename()).toBe("unproven-model.step");
   const path = await download.path();
   expect(statSync(path).size).toBeGreaterThan(1024);
 });

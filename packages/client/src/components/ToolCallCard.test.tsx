@@ -16,6 +16,56 @@ const call = {
 };
 
 describe("ToolCallCard status", () => {
+  it("shows independent shape metrics and the evaluator policy on a nonconforming CAD result", () => {
+    render(
+      <ToolCallCard
+        call={call}
+        result={{
+          content: [],
+          isError: false,
+          details: {
+            shapeProof: {
+              status: "failed",
+              evaluator: { id: "orthographic-mask-and-landmark-comparison", version: 1 },
+              policy: { id: "multi-view-shape-proof", version: 1 },
+              contract: { id: "contract-1", revision: 1, criteriaRevision: 1 },
+              coverage: {
+                activeReferenceIds: ["reference-1"],
+                requiredRegistrationIds: ["registration-1"],
+                batches: [["registration-1"]],
+              },
+              views: [],
+              registration: { id: "registration-1", revision: 1, referenceId: "reference-1", direction: "front" },
+              artifact: { id: "artifact-1", version: 1 },
+              render: {},
+              thresholds: {
+                silhouetteIouMin: 0.99,
+                symmetricContourDistanceMmMax: 0.15,
+                landmarkPositionErrorMmMax: 0.25,
+                sourceResolutionMm: 0.04,
+              },
+              metrics: {
+                silhouetteIou: 0.9855,
+                symmetricContourDistanceMm: 0.05,
+                landmarks: [],
+              },
+              worst: {
+                metric: "silhouette-iou",
+                detail: "Silhouette IoU 0.9855 is below the required 0.9900.",
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    const proof = screen.getByTestId("tool-shape-proof");
+    expect(proof.dataset.status).toBe("failed");
+    expect(proof.textContent).toContain("0.9855 / 0.9900 min");
+    expect(proof.textContent).toContain("0.050 / 0.150 mm max");
+    expect(proof.textContent).toContain("orthographic-mask-and-landmark-comparison v1");
+  });
+
   it("shows a friendly label instead of the raw build123d tool name, keeping the raw name in the tooltip", () => {
     render(<ToolCallCard call={call} />);
 
@@ -217,7 +267,44 @@ describe("ToolCallCard status", () => {
     expect(gate.dataset.status).toBe("failed");
     expect(gate.textContent).toContain("bodies: expected 1, found 2");
     expect(gate.textContent).toContain("B-rep validity");
-    expect(gate.textContent).toContain("GATE FAILED — 1 of 2 checks failed");
+    expect(gate.textContent).toContain("GATE FAILED - 1 of 2 checks failed");
+  });
+
+  it("keeps a nonconforming component integrity diagnosis visible", () => {
+    render(
+      <ToolCallCard
+        call={call}
+        result={{
+          content: [],
+          isError: false,
+          details: {
+            measurements: {
+              bboxMm: [30, 20, 4],
+              volumeMm3: 2072,
+              areaMm2: 1,
+              children: [],
+              integrity: {
+                status: "nonconforming",
+                componentId: "plate",
+                resultLabel: "plate",
+                solidCount: 2,
+                valid: true,
+                issues: [{
+                  code: "disconnected-solid",
+                  detail: 'Component "plate" has disconnected geometry.',
+                }],
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    const integrity = screen.getByTestId("tool-integrity");
+    expect(integrity.dataset.status).toBe("nonconforming");
+    expect(integrity.textContent).toContain("2 connected solids");
+    expect(integrity.textContent).toContain("Valid");
+    expect(integrity.textContent).toContain("disconnected geometry");
   });
 
   it("renders an errored gate as unavailable with the evaluator detail", () => {

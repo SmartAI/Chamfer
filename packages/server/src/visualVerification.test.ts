@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RecordVisualVerificationBatchInput } from "@chamfer/shared";
 import { openDb } from "./db";
 import { createAttachment, createConversation, createMessage } from "./conversationStore";
 import { classifyReference } from "./referenceClassification";
@@ -19,7 +20,8 @@ function fixture() {
       purpose: "Design evidence",
       relationships: [],
       rationale: "Defines visible form.",
-      specificationLinks: [`plan.${id}`],
+      specificationIds: [],
+      noSpecificationReason: "Qualitative test reference without an extractable dimension.",
     });
   }
   db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, created_at) VALUES (?, ?, ?, ?, ?)")
@@ -130,6 +132,104 @@ describe("batched visual verification store", () => {
       finalVerification: { verdict: "match", coveredReferenceIds: ["ref-a"] },
     });
     expect(listVisualVerificationBatches(db, conversation.id)).toHaveLength(1);
+  });
+
+  it("accepts the current revision-bound Fusion inspection sheet", () => {
+    const db = openDb(":memory:");
+    const conversation = createConversation(db, "Fusion visual verification", "fusion");
+    createMessage(db, conversation.id, { id: "fusion-user", seq: 0, role: "user", contentJson: "{}" });
+    createAttachment(db, "fusion-user", "user-image", {
+      mime: "image/png", contentHash: "f".repeat(64), byteSize: 1, blobPath: "blobs/fusion-reference.png",
+    }, "fusion-ref");
+    classifyReference(db, conversation.id, {
+      referenceId: "fusion-ref", status: "active", purpose: "Bracket drawing", relationships: [],
+      rationale: "Defines the requested Fusion part.", specificationIds: [],
+      noSpecificationReason: "Fusion references are verified against native inspection sheets without durable source specifications.",
+    });
+    db.prepare(`INSERT INTO fusion_inspections
+      (id, conversation_id, revision, snapshot_json, checks_json, screenshots_json, camera_restored, captured_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run("fusion-inspection", conversation.id, "fusion-revision", "{}", "[]", "[]", 1, 1);
+    db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run("fusion-inspection", conversation.id, 1, "fusion-revision:fusion-revision", 1);
+    createMessage(db, conversation.id, {
+      id: "fusion-result", seq: 1, role: "toolResult", contentJson: JSON.stringify({
+        role: "toolResult", toolName: "run_fusion_action", isError: false,
+        details: { status: "completed", visualArtifact: {
+          artifactId: "fusion-inspection", artifactVersion: 1, revision: "fusion-revision",
+          inspectionSheet: { attachmentId: "fusion-sheet" },
+        } },
+      }),
+    });
+    createAttachment(db, "fusion-result", "view-sheet", {
+      mime: "image/png", contentHash: "v".repeat(64), byteSize: 1, blobPath: "blobs/fusion-sheet.png",
+    }, "fusion-sheet");
+
+    const input = {
+      artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet",
+      imageLimit: 3, activeReferenceIds: ["fusion-ref"], batchIndex: 0, batchCount: 1,
+      coveredReferenceIds: ["fusion-ref"],
+      observations: [{ referenceId: "fusion-ref", relevantViews: ["front", "top", "right"], findings: ["Matches."], affectedComponents: [] }],
+      finalVerdict: "match", synthesis: "The Fusion bracket matches the active reference.",
+    } satisfies RecordVisualVerificationBatchInput;
+    expect(recordVisualVerificationBatch(db, conversation.id, input)).toMatchObject({ finalVerification: {
+      artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet", verdict: "match",
+    } });
+    createMessage(db, conversation.id, {
+      id: "fusion-nonconforming", seq: 2, role: "toolResult", contentJson: JSON.stringify({
+        role: "toolResult", toolName: "run_fusion_action", isError: false,
+        details: { status: "nonconforming", finalRevision: "fusion-revision-2" },
+      }),
+    });
+    expect(() => recordVisualVerificationBatch(db, conversation.id, input)).toThrow(/latest artifact/);
+  });
+
+  it("accepts a read-only inspect_fusion view sheet captured after a sheetless completed action", () => {
+    const db = openDb(":memory:");
+    const conversation = createConversation(db, "Fusion read-only recapture", "fusion");
+    createMessage(db, conversation.id, { id: "fusion-user", seq: 0, role: "user", contentJson: "{}" });
+    createAttachment(db, "fusion-user", "user-image", {
+      mime: "image/png", contentHash: "f".repeat(64), byteSize: 1, blobPath: "blobs/fusion-reference.png",
+    }, "fusion-ref");
+    classifyReference(db, conversation.id, {
+      referenceId: "fusion-ref", status: "active", purpose: "Bracket drawing", relationships: [],
+      rationale: "Defines the requested Fusion part.", specificationIds: [],
+      noSpecificationReason: "Fusion references are verified against native inspection sheets without durable source specifications.",
+    });
+    db.prepare(`INSERT INTO fusion_inspections
+      (id, conversation_id, revision, snapshot_json, checks_json, screenshots_json, camera_restored, captured_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run("fusion-inspection", conversation.id, "fusion-revision", "{}", "[]", "[]", 1, 1);
+    db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run("fusion-inspection", conversation.id, 1, "fusion-revision:fusion-revision", 1);
+    // The finished design's last mutation carried no sheet - previously a dead end.
+    createMessage(db, conversation.id, {
+      id: "fusion-action", seq: 1, role: "toolResult", contentJson: JSON.stringify({
+        role: "toolResult", toolName: "run_fusion_action", isError: false,
+        details: { status: "completed" },
+      }),
+    });
+    createMessage(db, conversation.id, {
+      id: "fusion-visual-read", seq: 2, role: "toolResult", contentJson: JSON.stringify({
+        role: "toolResult", toolName: "inspect_fusion", isError: false,
+        details: { mutated: false, revision: "fusion-revision", inspectionId: "fusion-inspection", viewSheet: true,
+          visualArtifact: { artifactId: "fusion-inspection", artifactVersion: 1, revision: "fusion-revision",
+            inspectionSheet: { attachmentId: "fusion-sheet" } } },
+      }),
+    });
+    createAttachment(db, "fusion-visual-read", "view-sheet", {
+      mime: "image/png", contentHash: "v".repeat(64), byteSize: 1, blobPath: "blobs/fusion-sheet.png",
+    }, "fusion-sheet");
+
+    expect(recordVisualVerificationBatch(db, conversation.id, {
+      artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet",
+      imageLimit: 3, activeReferenceIds: ["fusion-ref"], batchIndex: 0, batchCount: 1,
+      coveredReferenceIds: ["fusion-ref"],
+      observations: [{ referenceId: "fusion-ref", relevantViews: ["front", "top", "right"], findings: ["Matches."], affectedComponents: [] }],
+      finalVerdict: "match", synthesis: "The Fusion bracket matches the active reference.",
+    } satisfies RecordVisualVerificationBatchInput)).toMatchObject({ finalVerification: {
+      artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet", verdict: "match",
+    } });
   });
 
   it("replays a keyed final batch with the same final verdict and rejects changed reuse", () => {

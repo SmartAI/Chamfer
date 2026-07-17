@@ -45,6 +45,15 @@ function gateText(gate: Gate | undefined): string {
   return `Verify gate: FAILED\n${failures.join("\n")}\nFix every failing check before declaring success.\n`;
 }
 
+export interface RunBuild123dDetails {
+  measurements: Measurements;
+  gate?: Gate;
+  code: CadCodeVersion;
+  /** In-memory handoff to the session's independent evaluator.
+   * The afterToolCall hook always removes this before transcript persistence. */
+  evaluationMesh?: MeshPayload;
+}
+
 export function createRunBuild123dTool(deps: {
   cad: CadClient;
   onSuccess: (args: {
@@ -53,7 +62,7 @@ export function createRunBuild123dTool(deps: {
     measurements: Measurements;
     sheetPng: Blob;
   }) => Promise<Pick<CadCodeVersion, "artifactId" | "artifactVersion"> | void>;
-}): AgentTool<typeof parameters, { measurements: Measurements; gate?: Gate; code: CadCodeVersion }> {
+}): AgentTool<typeof parameters, RunBuild123dDetails> {
   return {
     name: "run_build123d",
     label: "Run build123d",
@@ -78,6 +87,7 @@ export function createRunBuild123dTool(deps: {
           measurements,
           ...(gate ? { gate } : {}),
           code: { toolCallId, ...(artifact ?? {}) },
+          evaluationMesh: mesh,
         },
       };
     },

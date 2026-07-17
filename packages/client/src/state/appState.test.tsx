@@ -152,4 +152,39 @@ describe("AppState parameter transaction", () => {
     expect(state.measurements).toEqual(NEW_MEASUREMENTS);
     expect(state.mesh).toEqual(NEW_MESH);
   });
+
+  it("reports a superseded restore run so stale artifact identity cannot overwrite newer CAD", async () => {
+    const worker = await renderReadyState();
+    const restore = state.runScript("restore-code");
+    const manual = state.runScript("manual-code");
+    await waitFor(() => expect(worker.posted.filter((request) => request.cmd === "run")).toHaveLength(2));
+    const runs = worker.posted.filter((request): request is Extract<CadRequest, { cmd: "run" }> => request.cmd === "run");
+    const restoreRequest = runs.find((request) => request.code === "restore-code")!;
+    const manualRequest = runs.find((request) => request.code === "manual-code")!;
+    await act(async () => {
+      worker.emit({
+        id: manualRequest.id,
+        ok: true,
+        cmd: "run",
+        stdout: "",
+        measurements: NEW_MEASUREMENTS,
+        mesh: NEW_MESH,
+        gate: { status: "passed", checks: [] },
+      } satisfies CadResponse);
+      worker.emit({
+        id: restoreRequest.id,
+        ok: true,
+        cmd: "run",
+        stdout: "",
+        measurements: OLD_MEASUREMENTS,
+        mesh: OLD_MESH,
+        gate: { status: "passed", checks: [] },
+      } satisfies CadResponse);
+    });
+
+    await expect(manual).resolves.toBe(true);
+    await expect(restore).resolves.toBe(false);
+    expect(state.currentScript).toBe("manual-code");
+    expect(state.measurements).toEqual(NEW_MEASUREMENTS);
+  });
 });

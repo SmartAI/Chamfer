@@ -7,20 +7,23 @@ import { ErrorBanner } from "./ErrorBanner";
 import { PresetPrompts } from "./PresetPrompts";
 import { VerificationChip } from "./VerificationChip";
 import { PlanCard } from "./PlanCard";
+import { SourceSpecificationsCard } from "./SourceSpecificationsCard";
+import { ProofContractCard } from "./ProofContractCard";
+import { DesignEscalationCard } from "./DesignEscalationCard";
+import { ReferenceRegistrationsCard } from "./ReferenceRegistrationsCard";
+import { ProofReportCard } from "./ProofReportCard";
 import { latestGateSummary } from "@/agent/gateSummary";
 import { latestPlan } from "@/agent/plan";
+import { currentProofContract } from "@/agent/proofContract";
 import { currentVisualVerification } from "@/agent/visualVerification";
-import { PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
+import { FUSION_RECONCILIATION_MARKER, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
 import { useChatState } from "@/state/chatState";
+import { useOptionalAppState } from "@/state/appState";
+import { effectiveProofReport } from "@/agent/proofReport";
+import { ResultFeedback } from "./ResultFeedback";
+import { ConnectedFusionDocumentStrip } from "./FusionDocumentStrip";
 
 const SETTINGS_HINT = "Configure a model and API key in Settings to start chatting.";
-
-interface PendingPreset {
-  prompt: string;
-  /** null until createConversation resolves; the send effect only fires once a session
-   * for exactly this conversation exists, so a preset can never land in the wrong chat. */
-  conversationId: string | null;
-}
 
 export interface ChatPanelProps {
   /** Opens the settings modal (owned by App); feeds the invalid-key banner action. */
@@ -46,20 +49,20 @@ function lastUserMessageText(messages: unknown[]): string | undefined {
     }
     // Injected self-check and plan nudges are user-role messages but not the user's
     // prompt; retrying one would just re-ask the agent to checklist itself.
-    if (text?.startsWith(SELF_CHECK_MARKER) || text?.startsWith(PLAN_NUDGE_MARKER)) continue;
+    if (text?.startsWith(SELF_CHECK_MARKER) || text?.startsWith(PLAN_NUDGE_MARKER) || text?.startsWith(FUSION_RECONCILIATION_MARKER)) continue;
     return text;
   }
   return undefined;
 }
 
 export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
+  const currentArtifact = useOptionalAppState()?.currentArtifact ?? null;
   const {
     activeConversationId,
     conversations,
     session,
     sessionState,
     settingsPresent,
-    newConversation,
     error: providerError,
     clearError,
     queuedMessages,
@@ -75,33 +78,14 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
 
   const stats = useMemo(() => turnStats(sessionState.messages), [sessionState.messages]);
 
-  // A preset chosen from the no-conversation state must wait for newConversation()'s async
-  // switch to produce a live ChatSession; the prompt is stashed here and sent by the effect
-  // below once the created conversation's session appears.
-  const pendingPresetRef = useRef<PendingPreset | null>(null);
   // Synchronous double-click guard: React state re-renders too late to stop a second click
   // arriving before the first one's state update has flushed.
   const presetBusyRef = useRef(false);
   const [presetLaunching, setPresetLaunching] = useState(false);
 
+  // Re-arm the preset cards whenever no turn is streaming.
   useEffect(() => {
-    if (!session) return;
-    const pending = pendingPresetRef.current;
-    if (!pending || pending.conversationId === null) return;
-    // A session appeared: either for the conversation this preset created (send it) or for
-    // another conversation the user opened during the create window (drop the preset).
-    pendingPresetRef.current = null;
-    presetBusyRef.current = false;
-    setPresetLaunching(false);
-    if (session.conversationId === pending.conversationId) {
-      void session.send(pending.prompt, []);
-    }
-  }, [session]);
-
-  // Re-arm the preset cards whenever no turn is streaming and no launch is pending
-  // (e.g. after a conversation switch or a completed/failed turn).
-  useEffect(() => {
-    if (sessionState.streaming || pendingPresetRef.current) return;
+    if (sessionState.streaming) return;
     presetBusyRef.current = false;
     setPresetLaunching(false);
   }, [activeConversationId, sessionState.streaming]);
@@ -121,34 +105,15 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
 
   const handlePresetSelect = useCallback(
     (prompt: string) => {
-      if (presetBusyRef.current || pendingPresetRef.current) return;
-      if (session) {
-        if (sessionState.streaming) return;
-        presetBusyRef.current = true;
-        setPresetLaunching(true);
-        void session.send(prompt, []);
-        return;
-      }
-      // Arm synchronously so a rapid second click cannot create a second conversation.
+      if (presetBusyRef.current || !session || sessionState.streaming) return;
       presetBusyRef.current = true;
-      pendingPresetRef.current = { prompt, conversationId: null };
       setPresetLaunching(true);
-      newConversation()
-        .then((id) => {
-          const pending = pendingPresetRef.current;
-          if (pending && pending.prompt === prompt && pending.conversationId === null) {
-            pendingPresetRef.current = { prompt, conversationId: id };
-          }
-        })
-        .catch(() => {
-          // Creation failed (rendered by the provider-error banner above): disarm so the
-          // preset cannot fire into whatever conversation is opened next.
-          pendingPresetRef.current = null;
-          presetBusyRef.current = false;
-          setPresetLaunching(false);
-        });
+      void session.send(prompt, []).finally(() => {
+        presetBusyRef.current = false;
+        setPresetLaunching(false);
+      });
     },
-    [newConversation, session, sessionState.streaming],
+    [session, sessionState.streaming],
   );
 
   // Provider-level failures (conversation create/delete, conversation load, artifact
@@ -167,13 +132,8 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
         <div className="flex flex-1 flex-col items-center justify-center gap-6">
           <div className="text-center text-sm text-muted-foreground">
             <p className="text-base font-medium text-foreground">No conversation selected</p>
-            <p className="mt-1">Start a new chat to begin</p>
+            <p className="mt-1">Start a new chat to choose a CAD environment</p>
           </div>
-          <PresetPrompts
-            disabled={!settingsPresent || presetLaunching}
-            disabledHint={!settingsPresent ? SETTINGS_HINT : undefined}
-            onSelect={handlePresetSelect}
-          />
         </div>
       </div>
     );
@@ -183,20 +143,63 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
   const disabled = !settingsPresent || !session;
   const disabledHint = !settingsPresent ? SETTINGS_HINT : undefined;
 
-  const conversationTitle = conversations.find((c) => c.id === activeConversationId)?.title;
+  const activeConversation = conversations.find((c) => c.id === activeConversationId);
+  const conversationTitle = activeConversation?.title;
   const plan = latestPlan(sessionState.messages);
+  const proofContract = currentProofContract(
+    sessionState.proofContracts ?? [],
+    plan,
+    sessionState.referenceRegistrations ?? [],
+  );
+  const proofReport = effectiveProofReport(sessionState.proofReports ?? [], {
+    plan,
+    contract: proofContract,
+    sourceSpecifications: sessionState.sourceSpecifications ?? [],
+    referenceRegistrations: sessionState.referenceRegistrations ?? [],
+    activeReferenceIds: (sessionState.referenceRecords ?? [])
+      .filter((record) => record.status === "active" || record.status === "complementary")
+      .map((record) => record.referenceId),
+    visualVerification: currentVisualVerification(sessionState.messages, sessionState.referenceRecords ?? []),
+    artifact: currentArtifact,
+  });
+  const designEscalation = sessionState.designEscalations?.at(-1);
+  const hasAssistantResult = sessionState.messages.some((message) =>
+    (message as { role?: string }).role === "assistant"
+  );
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div data-testid="chat-header" className="flex min-h-12 shrink-0 items-center gap-2 border-b py-2 pl-12 pr-4">
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{conversationTitle}</span>
+        {activeConversation && (
+          <span
+            data-testid="cad-environment-badge"
+            title="The CAD environment is fixed for this conversation"
+            className="shrink-0 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
+          >
+            {activeConversation.cadEnvironment === "fusion" ? "Autodesk Fusion" : "Local build123d"}
+          </span>
+        )}
         <VerificationChip
           streaming={sessionState.streaming}
           summary={latestGateSummary(sessionState.messages)}
           visual={currentVisualVerification(sessionState.messages, sessionState.referenceRecords ?? [])}
+          proofState={proofReport?.status}
         />
       </div>
-      {plan && <PlanCard plan={plan} />}
+      {activeConversation?.cadEnvironment === "fusion" && (
+        <ConnectedFusionDocumentStrip conversation={activeConversation} />
+      )}
+      {(sessionState.sourceSpecifications ?? []).length > 0 && (
+        <SourceSpecificationsCard specifications={sessionState.sourceSpecifications ?? []} />
+      )}
+      {designEscalation && <DesignEscalationCard escalation={designEscalation} />}
+      {(sessionState.referenceRegistrations ?? []).length > 0 && (
+        <ReferenceRegistrationsCard registrations={sessionState.referenceRegistrations ?? []} />
+      )}
+      {proofContract && <ProofContractCard contract={proofContract} />}
+      {proofReport && <ProofReportCard report={proofReport} />}
+      {plan && <PlanCard plan={plan} sourceSpecifications={sessionState.sourceSpecifications ?? []} />}
       {providerErrorBanner}
       {sessionState.error && (
         <ErrorBanner
@@ -211,9 +214,21 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
         generationFailed={Boolean(sessionState.error)}
         showCadCode={showCadCode}
         emptyState={
-          // No disabledHint here: the composer directly below already explains
-          // why everything is disabled; repeating the sentence reads as a bug.
-          <PresetPrompts disabled={disabled || presetLaunching} onSelect={handlePresetSelect} />
+          activeConversation?.cadEnvironment === "fusion" ? (
+            <div className="max-w-sm text-center text-sm text-muted-foreground">
+              <p>Describe the part you want to create or revise in the bound Autodesk Fusion environment.</p>
+              <p className="mt-3 text-xs leading-relaxed">
+                The native Fusion canvas remains the authoritative interactive 3D view; Chamfer does not mirror the model here.
+              </p>
+              <p data-testid="fusion-provider-disclosure" className="mt-2 text-xs leading-relaxed">
+                Selected Fusion evidence is processed by your configured model provider. Chamfer sends only the bound design's necessary engineering snapshot, relevant installed API excerpts, selected views, and normalized action results—not Fusion files, unrelated documents or projects, credentials, or raw MCP traffic.
+              </p>
+            </div>
+          ) : (
+            // No disabledHint here: the composer directly below already explains
+            // why everything is disabled; repeating the sentence reads as a bug.
+            <PresetPrompts disabled={disabled || presetLaunching} onSelect={handlePresetSelect} />
+          )
         }
       />
       {queuedMessages.length > 0 && (
@@ -255,6 +270,11 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
           ))}
         </div>
       )}
+      {!sessionState.streaming && hasAssistantResult && (
+        <div className="flex shrink-0 justify-end border-t px-4 py-1.5">
+          <ResultFeedback conversationId={activeConversationId} resultKey={sessionState.messages.length} />
+        </div>
+      )}
       {modelName && (
         <div
           data-testid="agent-status"
@@ -263,10 +283,14 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
           <span className="font-medium text-foreground">{modelName}</span>
           <span aria-hidden="true">·</span>
           <span>LLM calls {stats.llmCalls}</span>
-          <span aria-hidden="true">·</span>
-          <span>
-            CAD runs {stats.cadRunsThisTurn} / {maxCadRuns}
-          </span>
+          {activeConversation?.cadEnvironment !== "fusion" && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>
+                CAD runs {stats.cadRunsThisTurn} / {maxCadRuns}
+              </span>
+            </>
+          )}
           {sessionState.notice?.kind === "retrying" && (
             <>
               <span aria-hidden="true">·</span>

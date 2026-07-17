@@ -82,4 +82,16 @@ describe("load_skill tool", () => {
     ]);
     expect(keys).toEqual(new Set(["a", "b snippets/x.py"]));
   });
+
+  it("loads only Fusion and shared-method skills with exact version attribution", async () => {
+    const tool = createLoadSkillTool({ cadEnvironment: "fusion", getMessages: () => [] });
+    const fusion = await execute(tool, { name: "fusion-parametric-features" });
+    const shared = await execute(tool, { name: "design-intent" });
+    const local = await execute(tool, { name: "sweep-and-loft" });
+
+    expect(fusion.details).toMatchObject({ skill: "fusion-parametric-features", version: "1.12.0", loaded: true });
+    expect(shared.details).toMatchObject({ skill: "design-intent", version: "1.0.0", loaded: true });
+    expect((local.content[0] as { text: string }).text).toContain('Unknown skill "sweep-and-loft"');
+    expect((local.content[0] as { text: string }).text).not.toContain("Plane(origin=");
+  });
 });

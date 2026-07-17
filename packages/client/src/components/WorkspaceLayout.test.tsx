@@ -14,4 +14,12 @@ describe("WorkspaceLayout", () => {
     expect(screen.getByTestId("sidebar").getAttribute("aria-hidden")).toBeNull();
     expect(screen.getByRole("separator", { name: "Resize sidebar" })).toBeTruthy();
   });
+
+  it("renders chat-only without a viewer column when no viewer is given", () => {
+    render(<WorkspaceLayout sidebar="History" chat="Chat" />);
+
+    expect(screen.getByTestId("chat-panel")).toBeTruthy();
+    expect(screen.queryByTestId("right-panel")).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize 3D panel" })).toBeNull();
+  });
 });
