@@ -1,4 +1,5 @@
 import { expect, test, type TestInfo } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 import { writeFileSync } from "node:fs";
 import sharp from "sharp";
 
@@ -49,9 +50,7 @@ async function attachMask(testInfo: TestInfo, name: string, mask: EncodedMask) {
 test("rejects a scalar-valid wrong silhouette, preserves diagnostics, repairs, and passes unchanged policy", async ({ page }, testInfo) => {
   test.setTimeout(600_000);
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
-  await page.getByRole("dialog", { name: "Choose a CAD environment" })
-    .getByRole("button", { name: "Start conversation" }).click();
+  await startBuild123dConversation(page);
 
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();

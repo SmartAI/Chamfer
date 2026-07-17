@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -21,10 +22,7 @@ test("persists and reloads a rendered plan-nonconforming CAD result", async ({ p
     response.request().method() === "POST" && new URL(response.url()).pathname === "/api/conversations"
   );
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
-  // A new chat first commits to a CAD environment; build123d is the default.
-  await page.getByRole("dialog", { name: "Choose a CAD environment" })
-    .getByRole("button", { name: "Start conversation" }).click();
+  await startBuild123dConversation(page);
   const conversation = await (await conversationResponse).json() as { id: string };
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();

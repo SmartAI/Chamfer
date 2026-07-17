@@ -9,8 +9,8 @@ import { evaluateFusionChecks } from "./inspection";
 import type { CapturedFusionInspection } from "./inspection";
 import { ensureFusionVisualArtifact, recordFusionInspection } from "./inspectionStore";
 import {
-  appendFusionActionLedger, fusionLedgerActionIdentity, latestCompletedFusionOperationalContext,
-  listFusionActionLedger, recordFusionActionOperationalContext,
+  appendFusionActionLedger, fusionLedgerActionIdentity, latestChamferProducedFusionAction,
+  latestCompletedFusionOperationalContext, listFusionActionLedger, recordFusionActionOperationalContext,
 } from "./actionLedger";
 import { FUSION_ACTION_POLICY_VERSION, validateFusionActionBody } from "./actionPolicy";
 import { fusionDocumentMatches, getFusionBinding } from "./ownershipStore";
@@ -51,9 +51,6 @@ export interface FusionActionLeaseContext {
    * rollback succeed even when trusted inspection pushed its own Undo entries. */
   verifiedUndo?(document: FusionDocumentIdentityDto, target: string, maxSteps: number): Promise<boolean>;
   markRecoveryFailure(): void;
-  /** Clears the in-memory recovery block after a user-authorized resolution
-   * re-establishes the authoritative revision. */
-  clearRecoveryFailure?(): void;
 }
 
 export interface FusionActionRuntime {
@@ -128,47 +125,6 @@ export class FusionActions {
   constructor(private readonly db: DatabaseSync, private readonly runtime: FusionActionRuntime) {}
 
   history(conversationId: string) { return listFusionActionLedger(this.db, conversationId); }
-
-  /** User-authorized recovery resolution. When the endpoint is blocked in hard
-   * recovery, re-establish the authoritative revision with a trusted read-only
-   * inspection and, on success, append a resolved recovery record and clear the
-   * in-memory recovery flag - so a single mistake no longer requires restarting
-   * the server and Fusion to continue the session. */
-  async resolveRecovery(conversationId: string): Promise<{ resolved: boolean; revision?: string }> {
-    const binding = getFusionBinding(this.db, conversationId);
-    if (!binding || binding.role !== "owner") {
-      throw new FusionActionError("Only the owning conversation can resolve Fusion recovery.", 409, "not-owner");
-    }
-    const recovery = currentFusionRecovery(this.db, binding.endpoint);
-    if (!recovery) return { resolved: false };
-    return await this.runtime.runExclusive(async (runtime) => {
-      // Optimistically clear the in-memory block so a fresh diagnosis (which
-      // refreshes readiness) is not itself rejected as unhealthy; re-arm it if
-      // inspection cannot establish the state.
-      runtime.clearRecoveryFailure?.();
-      let inspected: CapturedFusionInspection | undefined;
-      try {
-        inspected = await runtime.captureInspection(binding.document);
-      } catch {
-        if (runtime.diagnose) {
-          try { inspected = await runtime.diagnose(binding.document); } catch { inspected = undefined; }
-        }
-      }
-      if (!inspected) {
-        runtime.markRecoveryFailure();
-        throw new FusionActionError("Fusion could not be inspected to resolve recovery; ensure the bound document is open and reachable, then try again.", 503, "recovery-inspection-failed");
-      }
-      const recorded = recordFusionInspection(this.db, conversationId, inspected, []);
-      appendFusionRecovery(this.db, {
-        conversationId, endpoint: binding.endpoint, actionId: "recovery-resolve", state: "resolved",
-        failureClass: recovery.failureClass,
-        diagnosis: "A user-authorized recovery inspection re-established the authoritative Fusion revision; mutation is unblocked.",
-        allowedOperation: "none", precedingRevision: recovery.precedingRevision,
-        observedRevision: inspected.revision, evidenceIds: [recorded.current.id],
-      });
-      return { resolved: true, revision: inspected.revision };
-    });
-  }
 
   async execute(conversationId: string, request: FusionActionRequestDto, requestSignal?: AbortSignal): Promise<FusionActionResultDto> {
     const priorHistory = this.history(conversationId);
@@ -271,13 +227,7 @@ export class FusionActions {
             : "The expected Fusion revision was reconciled; inspect the refreshed state before constructing another action.", 409, reason);
         }
         const currentReconciliation = getFusionReconciliation(this.db, conversationId, before.revision);
-        // A rolled-back action establishes a Chamfer-produced revision too (the
-        // restored one); excluding it made Chamfer's own rollback look like a
-        // manual edit and blocked the very next action on a confirm string.
-        const latestCompleted = priorHistory
-          .filter((record) => record.event === "completed"
-            && (record.result.status === "completed" || record.result.status === "nonconforming"
-              || record.result.status === "rolled-back")).at(-1);
+        const latestCompleted = latestChamferProducedFusionAction(priorHistory);
         const chamferProducedCurrentOccurrence = latestCompleted?.finalRevision === before.revision
           && (!currentReconciliation || latestCompleted.recordedAt >= currentReconciliation.recordedAt);
         const unresolved = chamferProducedCurrentOccurrence ? undefined : currentReconciliation;

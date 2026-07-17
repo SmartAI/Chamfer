@@ -1,11 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 
 test("text requirements are durable, separately visible, and survive reload", async ({ page }, testInfo) => {
   test.setTimeout(600_000);
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
-  await page.getByRole("dialog", { name: "Choose a CAD environment" })
-    .getByRole("button", { name: "Start conversation" }).click();
+  await startBuild123dConversation(page);
 
   const composer = page.getByTestId("composer-input");
   await expect(composer).toBeEnabled();

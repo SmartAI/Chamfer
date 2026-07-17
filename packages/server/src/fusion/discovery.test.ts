@@ -34,7 +34,18 @@ describe("discoverFusionMcpEndpoint", () => {
       defaultPort: 27182,
     });
     expect(found).toBe("http://127.0.0.1:59921/mcp");
-    expect(probed).toEqual([27182, 59921]);
+    // The prioritized preferred/default probe runs first; the lsof-derived
+    // candidates are then probed concurrently, so all of them are attempted.
+    expect(probed).toEqual([27182, 59921, 59922]);
+  });
+
+  it("prefers the earliest listed port when several answer concurrently", async () => {
+    const found = await discoverFusionMcpEndpoint({
+      probe: async (port) => port !== 27182,
+      listPorts: async () => [59930, 59931],
+      defaultPort: 27182,
+    });
+    expect(found).toBe("http://127.0.0.1:59930/mcp");
   });
 
   it("does not re-probe a port that appears in more than one candidate source", async () => {

@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   FusionDocumentIdentityDto,
@@ -25,7 +24,7 @@ import {
 import { FusionActionLeaseUnavailableError, type FusionActionLeaseContext, type FusionActionRuntime } from "./action";
 import { FusionLifecycleRuntimeError, type FusionLifecycleRuntime } from "./lifecycle";
 import { fusionActionHarnessScript } from "./actionScripts";
-import { fingerprintEngineeringScript } from "./integrityScripts";
+import { fingerprintFusionEngineering, undoFusionOnce, undoFusionUntilFingerprint } from "./fingerprint";
 import { currentFusionRecovery } from "./recoveryStore";
 import type { FusionActionRequestDto } from "@chamfer/shared";
 import { fusionIntegrityAccessFromEnv } from "./integrityGate";
@@ -300,14 +299,11 @@ export class FusionConnector implements FusionReadinessProvider, FusionDocumenta
     });
   }
 
-  /** Token-free engineering fingerprint of the active design. Runs the same
-   * inspector the integrity probe uses; it never reads entityToken, so it leaves
-   * the native Undo stack untouched and is safe to call inside a rollback loop. */
+  /** Token-free engineering fingerprint of the active design, via the exact
+   * helper the integrity probe certifies against live Fusion. */
   private async engineeringFingerprintUnlocked(document: FusionDocumentIdentityDto): Promise<string> {
     if (!this.negotiated) throw new Error("Fusion fingerprint requires a connected compatible MCP session");
-    const payload = await executeFusionScript(this.negotiated.client, fingerprintEngineeringScript(document.id));
-    if (!isRecord(payload.fingerprint)) throw new Error("Fusion fingerprint inspector returned no fingerprint");
-    return createHash("sha256").update(stableJson(payload.fingerprint)).digest("hex");
+    return fingerprintFusionEngineering(this.negotiated.client, document.id);
   }
 
   async runExclusive<T>(operation: (context: FusionActionLeaseContext) => Promise<T>): Promise<T> {
@@ -342,8 +338,7 @@ export class FusionConnector implements FusionReadinessProvider, FusionDocumenta
         },
         undo: async () => {
           if (!this.negotiated) throw new Error("Fusion Undo requires a connected compatible MCP session");
-          const result = await this.negotiated.client.callJson("fusion_mcp_update", { featureType: "undo" });
-          if (isRecord(result) && result.success === false) throw new Error("Fusion refused automatic Undo");
+          await undoFusionOnce(this.negotiated.client);
         },
         engineeringFingerprint: (document) => this.engineeringFingerprintUnlocked(document),
         verifiedUndo: async (document, target, maxSteps) => {
@@ -352,18 +347,12 @@ export class FusionConnector implements FusionReadinessProvider, FusionDocumenta
           // blind Undo would pop one of those, not the command, leaving the
           // mutation in place - so undo repeatedly and check a token-free
           // fingerprint (which never perturbs the Undo stack) until the baseline
-          // geometry returns. This is the same verified-rollback loop the
+          // geometry returns. This is the exact verified-rollback loop the
           // integrity probe proves against live Fusion.
-          for (let step = 0; step < maxSteps; step += 1) {
-            if (!this.negotiated) throw new Error("Fusion Undo requires a connected compatible MCP session");
-            const result = await this.negotiated.client.callJson("fusion_mcp_update", { featureType: "undo" });
-            if (isRecord(result) && result.success === false) throw new Error("Fusion refused automatic Undo");
-            if ((await this.engineeringFingerprintUnlocked(document)) === target) return true;
-          }
-          return false;
+          if (!this.negotiated) throw new Error("Fusion Undo requires a connected compatible MCP session");
+          return (await undoFusionUntilFingerprint(this.negotiated.client, document.id, target, maxSteps)) !== undefined;
         },
         markRecoveryFailure: () => { this.recoveryFailed = true; },
-        clearRecoveryFailure: () => { this.recoveryFailed = false; },
       }));
     } finally {
       this.mutationReserved = false;

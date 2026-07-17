@@ -1,12 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { startBuild123dConversation } from "./helpers";
 import { writeFileSync } from "node:fs";
 
 test("corrected source evidence makes the plan stale until criteria and coverage are reconciled", async ({ page }, testInfo) => {
   test.setTimeout(600_000);
   await page.goto("/");
-  await page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
-  await page.getByRole("dialog", { name: "Choose a CAD environment" })
-    .getByRole("button", { name: "Start conversation" }).click();
+  await startBuild123dConversation(page);
 
   const composer = page.getByTestId("composer-input");
   await composer.fill(

@@ -2806,7 +2806,15 @@ describe("createSession agent-loop policies", () => {
 
     expect(calls).toBe(3);
     expect(latest?.error).toBeUndefined();
-    expect(notices).toContainEqual({ kind: "retrying", attempt: 1, maxAttempts: MAX_ERROR_RESUMES, delaySeconds: 5 });
+    // The resume delay is jittered (0.8-1.2x the 5s base), so pin the schedule
+    // shape rather than one sampled value.
+    expect(notices).toContainEqual(expect.objectContaining({
+      kind: "retrying", attempt: 1, maxAttempts: MAX_ERROR_RESUMES,
+      delaySeconds: expect.any(Number),
+    }));
+    const retrying = notices.find((notice) => (notice as { kind?: string }).kind === "retrying") as { delaySeconds: number };
+    expect(retrying.delaySeconds).toBeGreaterThanOrEqual(4);
+    expect(retrying.delaySeconds).toBeLessThanOrEqual(6);
     const finalAssistant = (latest?.messages ?? []).at(-1) as { content?: { text?: string }[] };
     expect(finalAssistant?.content?.[0]?.text).toBe("recovered after outage");
   });

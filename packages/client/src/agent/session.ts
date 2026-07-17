@@ -25,7 +25,7 @@ import {
 import * as rest from "../api/rest";
 import { transformLlmContext } from "./contextPolicy";
 import { runCompaction } from "./compaction";
-import { isRetryableFailure, withStreamRetry, type StreamRetryOptions } from "./retryStream";
+import { isRetryableFailure, retryDelayMs, withStreamRetry, type StreamRetryOptions } from "./retryStream";
 import {
   PROBE_COMPONENT,
   CREATE_PLAN_TOOL_NAME,
@@ -1816,7 +1816,9 @@ export function createSession(opts: CreateSessionOptions): ChatSession {
           // rejected prompt that never reached turn_end) with a transient failure.
           if (lastRunStopReason !== "stop" && lastError && isResumableSessionError(lastError) && errorResumes < maxErrorResumes) {
             errorResumes += 1;
-            const delayMs = Math.min(ERROR_RESUME_BASE_DELAY_MS * 2 ** (errorResumes - 1), ERROR_RESUME_MAX_DELAY_MS);
+            // Same schedule as the stream-level retry: server retry-after hint
+            // when present, else capped exponential backoff with jitter.
+            const delayMs = retryDelayMs(lastError.message, errorResumes, ERROR_RESUME_BASE_DELAY_MS, ERROR_RESUME_MAX_DELAY_MS);
             notice = { kind: "retrying", attempt: errorResumes, maxAttempts: maxErrorResumes, delaySeconds: Math.ceil(delayMs / 1000) };
             notify();
             await waitUnlessAborted(delayMs);

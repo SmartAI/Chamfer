@@ -2,6 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import type { FusionCheckInput, FusionInspectionDto } from "@chamfer/shared";
 import { composeFusionViewSheet } from "../fusionViewSheet";
+import { FUSION_INSPECTION_CHECKS_PREFIX, FUSION_INSPECTION_HEADER } from "../inspectionSheetLifecycle";
 
 const parameters = Type.Object({
   checks: Type.Optional(Type.Array(Type.Object({ kind: Type.String() }, { additionalProperties: true }))),
@@ -55,11 +56,11 @@ export function createInspectFusionTool(deps: {
       // neither sweep the camera nor spend image budget.
       const sheet = await composeFusionViewSheet(current.screenshots);
       const text = [
-        `# Bound Fusion inspection`,
+        FUSION_INSPECTION_HEADER,
         `Document: ${result.document.name} (${result.document.dataFileId ?? result.document.id})`,
         `Revision: ${current.revision}`,
         `Snapshot: ${JSON.stringify(snapshot)}`,
-        `Checks: ${JSON.stringify(current.checks)}`,
+        `${FUSION_INSPECTION_CHECKS_PREFIX}${JSON.stringify(current.checks)}`,
         ...(sheet ? [`Rendered views (${sheet.views.join(", ")}) are attached. Read the top view for feature interference and crowding before continuing.`] : []),
       ].join("\n");
       // The server evaluates exactly the requested checks in order, so the

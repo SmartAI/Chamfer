@@ -22,7 +22,7 @@ import {
 } from "./ownershipStore";
 import { evaluateFusionChecks } from "./inspection";
 import { ensureFusionVisualArtifact, recordFusionInspection } from "./inspectionStore";
-import { latestCompletedFusionOperationalContext, listFusionActionLedger } from "./actionLedger";
+import { latestChamferProducedFusionAction, latestCompletedFusionOperationalContext, listFusionActionLedger } from "./actionLedger";
 import { getFusionReconciliation, recordFusionReconciliation } from "./reconciliationStore";
 import { refreshFusionChecksForManualState } from "./reconciliation";
 import { currentFusionRecovery } from "./recoveryStore";
@@ -197,13 +197,7 @@ export class FusionOwnership {
     const recorded = recordFusionInspection(this.db, conversationId, captured, results);
     const preceding = recorded.history.find((inspection) => inspection.stale && inspection.revision !== captured.revision);
     const operational = latestCompletedFusionOperationalContext(this.db, conversationId);
-    // Rolled-back actions count: the restored revision is Chamfer-produced, and
-    // treating it as a manual edit manufactured a needs-user reconciliation out
-    // of Chamfer's own rollback.
-    const latestCompletedAction = listFusionActionLedger(this.db, conversationId)
-      .filter((record) => record.event === "completed"
-        && (record.result.status === "completed" || record.result.status === "nonconforming"
-          || record.result.status === "rolled-back")).at(-1);
+    const latestCompletedAction = latestChamferProducedFusionAction(listFusionActionLedger(this.db, conversationId));
     const reconciliationChecks = operational
       ? refreshFusionChecksForManualState(captured.snapshot, operational.expectedEffects ?? [])
       : results;
@@ -268,12 +262,10 @@ export class FusionOwnership {
       : [];
     const recorded = recordFusionInspection(this.db, conversationId, captured, checks);
     const preceding = recorded.history.find((inspection) => inspection.stale && inspection.revision !== captured.revision);
-    // A revision Chamfer itself just produced (including a retained nonconforming
-    // action) is not a manual edit; only reconcile when the current revision was
-    // not the result of our own latest completed action.
-    const chamferProduced = listFusionActionLedger(this.db, conversationId)
-      .filter((record) => record.event === "completed"
-        && (record.result.status === "completed" || record.result.status === "nonconforming")).at(-1);
+    // A revision Chamfer itself just produced is not a manual edit; only
+    // reconcile when the current revision was not the result of our own latest
+    // completed action.
+    const chamferProduced = latestChamferProducedFusionAction(listFusionActionLedger(this.db, conversationId));
     const reconciliation = preceding && chamferProduced?.finalRevision !== captured.revision
       ? recordFusionReconciliation(this.db, conversationId, readiness.document, preceding, recorded.current,
           operational?.affectedReferences ?? [], checks)

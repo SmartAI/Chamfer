@@ -9,6 +9,7 @@ import {
 } from "./planChecks";
 import type { FusionExpectedEffect } from "@chamfer/shared";
 import { validateSpecSheetRevision } from "./specSheetRevision";
+import { latestFusionInspectionIdentity } from "./tools/inspectFusion";
 
 export { parseComponentDeclaration } from "./componentDeclaration";
 export type { PlanCheckEntry, PlanCheckRef, PlanSpecSheetRow } from "./planChecks";
@@ -403,28 +404,24 @@ export function collectFusionComponentEvidence(messages: readonly unknown[], pla
   const component = buildable[0]!;
   if (!(component.checks ?? []).some((check) => check.kind === "fusion_effect" && check.removed !== true)) return evidence;
 
-  // Walk from the end: the first fusion tool result seen carries the current
-  // authoritative revision; the first inspect_fusion with structured verdicts
+  // The newest fusion tool result of either kind carries the current
+  // authoritative revision; the newest inspect_fusion with structured verdicts
   // is the newest full verification. Evidence only counts when they agree -
   // any later action makes an earlier verification stale.
-  let currentRevision: string | undefined;
+  const currentRevision = latestFusionInspectionIdentity(messages)?.revision;
   let verification: { id: string; revision: string; evaluated: Array<{ input?: unknown; status?: unknown }>; bodyVolumes: unknown[] } | undefined;
   for (let index = messages.length - 1; index >= 0 && !verification; index -= 1) {
     const m = messages[index] as FusionToolResultLike;
     if (m?.role !== "toolResult" || m.isError === true || typeof m.details !== "object" || m.details === null) continue;
-    if (m.toolName === "run_fusion_action") {
-      const current = m.details.inspection?.current;
-      if (currentRevision === undefined && typeof current?.revision === "string") currentRevision = current.revision;
-    } else if (m.toolName === "inspect_fusion") {
+    if (m.toolName === "inspect_fusion") {
       const { revision, inspectionId, evaluatedChecks, bodyVolumesMm3 } = m.details;
-      if (currentRevision === undefined && typeof revision === "string") currentRevision = revision;
       if (typeof inspectionId === "string" && typeof revision === "string" && Array.isArray(evaluatedChecks)) {
         verification = { id: inspectionId, revision, evaluated: evaluatedChecks,
           bodyVolumes: Array.isArray(bodyVolumesMm3) ? bodyVolumesMm3 : [] };
       }
     }
   }
-  if (!verification || verification.revision !== currentRevision) return evidence;
+  if (!verification || currentRevision === undefined || verification.revision !== currentRevision) return evidence;
 
   const passed = new Set(verification.evaluated
     .filter((entry) => entry.status === "passed" && entry.input !== undefined)
@@ -889,12 +886,12 @@ export function validatePlanSnapshot({ next, previous, evidence, requireSpecShee
       const fusionVolume = (component.checks ?? []).some((check) =>
         check.kind === "fusion_effect" && check.removed !== true
         && ((check as { effect?: { kind?: unknown } }).effect?.kind === "volume"));
-      if (!volume && fusionVolume) {
-        // Covered by the fusion_effect volume assertion.
-      } else if (!volume) {
-        errors.push(
-          `component "${id}": checks must include a volume check targeting it, e.g. {"id": "volume", "kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
-        );
+      if (!volume) {
+        if (!fusionVolume) {
+          errors.push(
+            `component "${id}": checks must include a volume check targeting it, e.g. {"id": "volume", "kind": "volume", "range_mm3": [lo, hi], "target": "${id}"} - derive the range (about ±10%) from the component's intended dimensions`,
+          );
+        }
       } else {
         const range = Array.isArray(volume.range_mm3) ? (volume.range_mm3 as unknown[]) : undefined;
         const lo = typeof range?.[0] === "number" ? (range[0] as number) : undefined;

@@ -72,6 +72,20 @@ export function appendFusionActionLedger(
   return parse(db.prepare("SELECT * FROM fusion_action_ledger WHERE id = ?").get(id) as unknown as LedgerRow);
 }
 
+/** The newest completed action whose outcome left a Chamfer-produced document
+ * revision: fully completed and rolled-back actions alike (a rollback restores
+ * the pre-action revision, which is still Chamfer's own work) - treating either
+ * as a manual edit manufactured a needs-user reconciliation out of Chamfer's
+ * own actions. "nonconforming" is no longer a producible status; it stays
+ * accepted for persisted legacy ledger rows. */
+export function latestChamferProducedFusionAction(
+  records: FusionActionLedgerRecordDto[],
+): FusionActionLedgerRecordDto | undefined {
+  return records.filter((record) => record.event === "completed"
+    && (record.result.status === "completed" || record.result.status === "nonconforming"
+      || record.result.status === "rolled-back")).at(-1);
+}
+
 export function listFusionActionLedger(db: DatabaseSync, conversationId: string): FusionActionLedgerRecordDto[] {
   return (db.prepare("SELECT * FROM fusion_action_ledger WHERE conversation_id = ? ORDER BY recorded_at, rowid")
     .all(conversationId) as unknown as LedgerRow[]).map(parse);

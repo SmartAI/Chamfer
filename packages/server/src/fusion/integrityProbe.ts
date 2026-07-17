@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FusionMcpClient, FusionMcpSessionInfo, FusionRawTool } from "./mcpClient";
 import { SdkFusionMcpClient } from "./mcpClient";
+import { fingerprintFusionEngineering, undoFusionOnce, undoFusionUntilFingerprint } from "./fingerprint";
 import {
   closeDisposableDocumentScript,
   commandMutationScript,
   createDisposableDocumentScript,
-  fingerprintEngineeringScript,
   inspectCameraScript,
   inspectEngineeringScript,
   restoreCameraScript,
@@ -153,13 +153,6 @@ async function inspectCamera(client: FusionMcpClient, marker: string) {
   return { identity: result.identity, camera: result.camera };
 }
 
-async function undoOnce(client: FusionMcpClient): Promise<void> {
-  const result = await client.callJson(UPDATE_TOOL, { featureType: "undo" });
-  if (!isRecord(result) || result.success !== true) {
-    throw new Error(`Fusion Undo failed: ${stableJson(result)}`);
-  }
-}
-
 function identityKey(value: unknown): string {
   if (!isRecord(value)) throw new Error("Document identity sample is invalid");
   return stableJson({
@@ -173,25 +166,6 @@ function identityKey(value: unknown): string {
 function check(report: FusionIntegrityReport, id: string, passed: boolean, detail: string): void {
   report.checks.push({ id, passed, detail });
   if (!passed) throw new Error(`${id}: ${detail}`);
-}
-
-async function fingerprintEngineering(client: FusionMcpClient, marker: string): Promise<string> {
-  const payload = await executeScript(client, fingerprintEngineeringScript(marker));
-  if (!isRecord(payload.fingerprint)) throw new Error("Fusion fingerprint inspector returned no fingerprint");
-  return sha256(stableJson(payload.fingerprint));
-}
-
-async function undoUntilFingerprint(
-  client: FusionMcpClient,
-  marker: string,
-  target: string,
-  maxSteps: number,
-): Promise<number | undefined> {
-  for (let step = 1; step <= maxSteps; step += 1) {
-    await undoOnce(client);
-    if ((await fingerprintEngineering(client, marker)) === target) return step;
-  }
-  return undefined;
 }
 
 function ambiguityIsRejected(snapshot: unknown): boolean {
@@ -304,13 +278,13 @@ export async function runFusionIntegrityProbe(
         baseline.snapshot.designType === PARAMETRIC_DESIGN_TYPE,
       "The disposable document is a history-enabled Fusion design eligible for parametric-part mutation",
     );
-    const baselineFingerprint = await fingerprintEngineering(client, marker);
+    const baselineFingerprint = await fingerprintFusionEngineering(client, marker);
 
     // Single-Undo atomicity is only defined with nothing between the action
     // and its Undo: any interleaved script that reads entityToken pushes its
     // own entry onto the native Undo stack and would be popped instead.
     await executeScript(client, commandMutationScript(marker, "single_undo"));
-    await undoOnce(client);
+    await undoFusionOnce(client);
     const undone = await inspectEngineering(client, marker);
     report.identitySamples.push(undone.identity);
     report.engineeringSnapshotHashes.push(undone.hash);
@@ -340,7 +314,7 @@ export async function runFusionIntegrityProbe(
     );
     // The token-reading inspection above pushed its own Undo entry, so rolling
     // the mutation back requires the verified loop rather than one blind Undo.
-    const mutationRollbackSteps = await undoUntilFingerprint(client, marker, baselineFingerprint, 4);
+    const mutationRollbackSteps = await undoFusionUntilFingerprint(client, marker, baselineFingerprint, 4);
     if (mutationRollbackSteps === undefined) {
       throw new Error("deterministic-rollback: verified Undo could not restore the baseline after an inspected mutation");
     }
@@ -358,7 +332,7 @@ export async function runFusionIntegrityProbe(
       !deliberatelyFailed,
       "Deliberate expectation of two bodies failed as intended",
     );
-    const rejectionRollbackSteps = await undoUntilFingerprint(client, marker, baselineFingerprint, 4);
+    const rejectionRollbackSteps = await undoFusionUntilFingerprint(client, marker, baselineFingerprint, 4);
     const rolledBack = rejectionRollbackSteps === undefined ? undefined : await inspectEngineering(client, marker);
     if (rolledBack) {
       report.identitySamples.push(rolledBack.identity);

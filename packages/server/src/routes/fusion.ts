@@ -122,10 +122,6 @@ export function fusionRoutes(
   app.post("/api/conversations/:id/fusion-reconciliation", async (c) =>
     c.json(await ownership.reconcileIfChanged(c.req.param("id"))));
   app.get("/api/conversations/:id/fusion-actions", (c) => c.json(actions.history(c.req.param("id"))));
-  app.post("/api/conversations/:id/fusion-recovery/resolve", async (c) => {
-    const result = await actions.resolveRecovery(c.req.param("id"));
-    return c.json({ ...result, readiness: await ownership.current(c.req.param("id")) });
-  });
   app.post("/api/conversations/:id/fusion-actions/:actionId/interrupt", async (c) => {
     const body: { reason?: unknown } = await c.req.json<{ reason?: unknown }>().catch(() => ({}));
     const controller = actionInterruptions.get(interruptionKey(c.req.param("id"), c.req.param("actionId")));

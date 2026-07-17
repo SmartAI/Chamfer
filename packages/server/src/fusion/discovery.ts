@@ -108,19 +108,27 @@ export async function discoverFusionMcpEndpoint(
   const listPorts = options.listPorts ?? defaultListPorts;
   const defaultPort = options.defaultPort ?? DEFAULT_FUSION_MCP_PORT;
 
-  const ordered: number[] = [];
-  const push = (port: number | undefined) => {
-    if (port !== undefined && Number.isInteger(port) && port > 0) ordered.push(port);
-  };
-  push(portOf(options.preferredEndpoint));
-  push(defaultPort);
-  for (const port of await listPorts()) push(port);
-
   const seen = new Set<number>();
-  for (const port of ordered) {
-    if (seen.has(port)) continue;
-    seen.add(port);
+  const candidates = (ports: Array<number | undefined>): number[] => {
+    const fresh: number[] = [];
+    for (const port of ports) {
+      if (port === undefined || !Number.isInteger(port) || port <= 0 || seen.has(port)) continue;
+      seen.add(port);
+      fresh.push(port);
+    }
+    return fresh;
+  };
+
+  // The preferred and default ports encode priority, so they are probed in
+  // order; each probe carries its own timeout.
+  for (const port of candidates([portOf(options.preferredEndpoint), defaultPort])) {
     if (await probe(port)) return `http://127.0.0.1:${port}/mcp`;
   }
-  return undefined;
+  // The lsof-derived ports are unordered peers; probing them sequentially made
+  // a single hanging listener cost N probe timeouts inside the readiness
+  // refresh, so they race concurrently and the first (in list order) wins.
+  const discovered = candidates(await listPorts());
+  const probed = await Promise.all(discovered.map(async (port) => ({ port, answered: await probe(port) })));
+  const hit = probed.find((candidate) => candidate.answered);
+  return hit ? `http://127.0.0.1:${hit.port}/mcp` : undefined;
 }

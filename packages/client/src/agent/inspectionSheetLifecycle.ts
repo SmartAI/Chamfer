@@ -150,7 +150,11 @@ function isFusionInspectViewResult(message: unknown): boolean {
   ));
 }
 
-const FUSION_INSPECTION_HEADER = "# Bound Fusion inspection";
+/** Load-bearing prose contract with the inspect_fusion tool: the stubbing below
+ * only recognizes inspection texts that start with this header and carry this
+ * checks-line prefix, so both sides must share the exact strings. */
+export const FUSION_INSPECTION_HEADER = "# Bound Fusion inspection";
+export const FUSION_INSPECTION_CHECKS_PREFIX = "Checks: ";
 
 function isSuccessfulFusionInspection(message: unknown): boolean {
   if (typeof message !== "object" || message === null) return false;
@@ -170,11 +174,11 @@ export function stubStaleFusionInspectionText(text: string): string {
   if (!text.startsWith(FUSION_INSPECTION_HEADER)) return text;
   const lines = text.split("\n");
   const identity = lines.filter((line) => line.startsWith("Document: ") || line.startsWith("Revision: "));
-  const checksLine = lines.find((line) => line.startsWith("Checks: "));
+  const checksLine = lines.find((line) => line.startsWith(FUSION_INSPECTION_CHECKS_PREFIX));
   let checksSummary = "";
   if (checksLine) {
     try {
-      const checks = JSON.parse(checksLine.slice("Checks: ".length)) as { kind?: string; status?: string; detail?: string }[];
+      const checks = JSON.parse(checksLine.slice(FUSION_INSPECTION_CHECKS_PREFIX.length)) as { kind?: string; status?: string; detail?: string }[];
       const failed = checks.filter((check) => check.status === "failed");
       const passed = checks.filter((check) => check.status === "passed").length;
       checksSummary = ` ${passed} checks passed, ${failed.length} failed${
@@ -191,18 +195,27 @@ export function stubStaleFusionInspectionText(text: string): string {
   ].join("\n");
 }
 
+/** Newest matching message survives untouched; every earlier match is degraded.
+ * Pure and deterministic over the message array (same contract as the pixel
+ * eviction projections); indices are preserved and the durable transcript is
+ * never rewritten. */
+function projectAllButNewest(
+  messages: AgentMessage[],
+  matches: (message: unknown) => boolean,
+  degrade: (message: AgentMessage) => AgentMessage,
+): AgentMessage[] {
+  const indexes = messages.flatMap((message, index) => (matches(message) ? [index] : []));
+  if (indexes.length <= 1) return messages;
+  const stale = new Set(indexes.slice(0, -1));
+  return messages.map((message, index) => (stale.has(index) ? degrade(message) : message));
+}
+
 /**
  * Keep only the newest successful inspect_fusion result's full snapshot text in
  * model context; earlier inspections become compact identity + verdict stubs.
- * Pure and deterministic over the message array (same contract as the pixel
- * eviction projections); the durable transcript is never rewritten.
  */
 export function projectStaleFusionInspectionText(messages: AgentMessage[]): AgentMessage[] {
-  const indexes = messages.flatMap((message, index) => (isSuccessfulFusionInspection(message) ? [index] : []));
-  if (indexes.length <= 1) return messages;
-  const stale = new Set(indexes.slice(0, -1));
-  return messages.map((message, index) => {
-    if (!stale.has(index)) return message;
+  return projectAllButNewest(messages, isSuccessfulFusionInspection, (message) => {
     const content = contentOf(message);
     if (!content) return message;
     return {
@@ -223,10 +236,7 @@ export function projectStaleFusionInspectionText(messages: AgentMessage[]): Agen
  * long autonomous build the same way the CAD sheet lifecycle bounds action renders.
  */
 export function projectCurrentFusionInspectViews(messages: AgentMessage[]): AgentMessage[] {
-  const indexes = messages.flatMap((message, index) => (isFusionInspectViewResult(message) ? [index] : []));
-  if (indexes.length <= 1) return messages;
-  const evict = new Set(indexes.slice(0, -1));
-  return messages.map((message, index) => (evict.has(index) ? withoutPixels(message) : message));
+  return projectAllButNewest(messages, isFusionInspectViewResult, withoutPixels);
 }
 
 /** Add the logical attachment id to the render evidence already carried by a CAD result. */
