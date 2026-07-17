@@ -14,6 +14,10 @@ CAD execution, native geometry and Fusion files, unrelated documents and project
 
 ## Demos
 
+### Driving Autodesk Fusion autonomously
+
+<a href="https://chamferonline.com/media/fusion-demo-0716.mp4"><img src="https://chamferonline.com/media/fusion-demo-0716-poster.jpg" alt="Watch Chamfer drive Autodesk Fusion: a finned motor bearing housing built and visually verified from one prompt" width="480" /></a>
+
 ### Espresso machine from a product image
 
 [![Watch the espresso machine demo](https://img.youtube.com/vi/rvVmGJ5AsDQ/hqdefault.jpg)](https://youtu.be/rvVmGJ5AsDQ)
