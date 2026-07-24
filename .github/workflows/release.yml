@@ -18,14 +18,7 @@ permissions:
   id-token: write
 
 jobs:
-  agent-evaluation:
-    uses: ./.github/workflows/agent-evaluation.yml
-    with:
-      depth: release
-    secrets: inherit
-
   publish:
-    needs: agent-evaluation
     runs-on: ubuntu-latest
     # Public repo only — never release from the private dev repo or a fork.
     if: github.repository == 'SmartAI/Chamfer'
