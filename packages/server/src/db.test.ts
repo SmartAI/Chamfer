@@ -14,14 +14,24 @@ describe("db", () => {
       "attachments",
       "artifacts",
       "settings",
+      "evidence_events",
+      "evidence_deletion_authorizations",
+      "headless_runs",
+      "cad_gate_evidence",
+      "designs",
+      "design_revisions",
+      "design_revision_gate_evidence",
+    ]) {
+      expect(names).toContain(t);
+    }
+    for (const legacy of [
       "source_specification_mutations",
       "source_specifications",
-      "source_specification_supersessions",
       "design_escalations",
       "reference_registrations",
       "proof_contracts",
     ]) {
-      expect(names).toContain(t);
+      expect(names).not.toContain(legacy);
     }
   });
 });

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import sharp from "sharp";
 import type { EvaluationTask } from "./schema";
+import type { EvidenceProjection } from "@chamfer/shared";
 import { analyzeProductionConversation, type AnalyzedRun, type ProductionConversationSnapshot } from "./observation";
 
 interface ConversationResponse {
@@ -75,8 +76,8 @@ export class PlaywrightProductionSession {
     const messagesLoaded = this.page.waitForResponse((response) =>
       response.request().method() === "GET" && /\/api\/conversations\/[^/]+\/messages$/.test(response.url()),
     );
-    const proofReportsLoaded = this.page.waitForResponse((response) =>
-      response.request().method() === "GET" && /\/api\/conversations\/[^/]+\/proof-reports$/.test(response.url()),
+    const evidenceLoaded = this.page.waitForResponse((response) =>
+      response.request().method() === "GET" && /\/api\/conversations\/[^/]+\/evidence$/.test(response.url()),
     );
     await this.page.getByTestId("sidebar").getByRole("button", { name: "New chat", exact: true }).first().click();
     // Creation now goes through an explicit CAD-environment chooser; select the
@@ -86,7 +87,7 @@ export class PlaywrightProductionSession {
     await environmentDialog.getByRole("radio", { name: /Local build123d/ }).check();
     await environmentDialog.getByRole("button", { name: "Start conversation" }).click();
     const conversation = await (await created).json() as ConversationResponse;
-    const loadedUrls = [(await messagesLoaded).url(), (await proofReportsLoaded).url()];
+    const loadedUrls = [(await messagesLoaded).url(), (await evidenceLoaded).url()];
     if (loadedUrls.some((url) => !url.includes(`/api/conversations/${conversation.id}/`))) {
       throw new Error(`Evaluation conversation switch loaded a different conversation than ${conversation.id}`);
     }
@@ -115,19 +116,17 @@ export class PlaywrightProductionSession {
     await stop.waitFor({ state: "hidden", timeout: 600_000 });
     const elapsedMs = Math.round(performance.now() - startedAt);
 
-    const [messages, proofContracts, artifacts, visualVerifications, proofReports] = await Promise.all([
+    const [messages, evidence, artifacts] = await Promise.all([
       responseJson<ProductionConversationSnapshot["messages"]>(this.page, this.baseUrl, `/api/conversations/${conversation.id}/messages`),
-      responseJson<ProductionConversationSnapshot["proofContracts"]>(this.page, this.baseUrl, `/api/conversations/${conversation.id}/proof-contracts`),
+      responseJson<EvidenceProjection>(this.page, this.baseUrl, `/api/conversations/${conversation.id}/evidence`),
       responseJson<ProductionConversationSnapshot["artifacts"]>(this.page, this.baseUrl, `/api/conversations/${conversation.id}/artifacts`),
-      responseJson<ProductionConversationSnapshot["visualVerifications"]>(this.page, this.baseUrl, `/api/conversations/${conversation.id}/visual-verifications`),
-      responseJson<ProductionConversationSnapshot["proofReports"]>(this.page, this.baseUrl, `/api/conversations/${conversation.id}/proof-reports`),
     ]);
     return {
       messages,
-      proofContracts,
+      proofContracts: evidence.proofContracts,
       artifacts,
-      visualVerifications,
-      proofReports,
+      visualVerifications: evidence.visualVerifications,
+      proofReports: evidence.proofReports,
       elapsedMs,
       configuredProvider: task.modelConfiguration.provider,
       configuredModel: task.modelConfiguration.model,

@@ -1,0 +1,608 @@
+/* Styles for the hosted-deployment shell (sign-in landing + account chip).
+   Only loaded by the online entry; the local app never imports this file.
+
+   The landing borrows its language from the logo mark: an ink plate with one
+   chamfered, cyan-faced corner, drawn on drafting paper. Every chamfered
+   corner on the page is that same 45-degree cut. */
+
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&display=swap");
+
+.online-landing {
+  --ol-ink: #0e1524;
+  --ol-paper: #fafbfc;
+  --ol-panel: #ffffff;
+  --ol-grid: rgba(14, 21, 36, 0.055);
+  --ol-grid-major: rgba(14, 21, 36, 0.09);
+  --ol-line: #d8dee6;
+  --ol-text: #1f2937;
+  --ol-muted: #4b5563;
+  --ol-faint: #6b7280;
+  --ol-cyan: #22d3ee;
+  --ol-green: #16a34a;
+  --ol-glyph: #ffffff;
+
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1.25rem, 5vw, 4rem);
+  color: var(--ol-text);
+  background-color: var(--ol-paper);
+  background-image:
+    linear-gradient(var(--ol-grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ol-grid-major) 1px, transparent 1px),
+    linear-gradient(var(--ol-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ol-grid) 1px, transparent 1px);
+  background-size:
+    140px 140px,
+    140px 140px,
+    28px 28px,
+    28px 28px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing {
+    --ol-ink: #101828;
+    --ol-paper: #0a0f1a;
+    --ol-panel: #101623;
+    --ol-grid: rgba(216, 222, 230, 0.05);
+    --ol-grid-major: rgba(216, 222, 230, 0.08);
+    --ol-line: #273042;
+    --ol-text: #e5e7eb;
+    --ol-muted: #9ca3af;
+    --ol-faint: #7b8494;
+    --ol-green: #4ade80;
+  }
+}
+
+/* ---- header ---- */
+
+.online-landing-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: "Space Grotesk", Inter, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+}
+
+.online-star-chip {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.8rem;
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  color: var(--ol-muted);
+  text-decoration: none;
+  border: 1px solid var(--ol-line);
+  background: var(--ol-panel);
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.online-star-chip:hover {
+  color: var(--ol-ink);
+  border-color: var(--ol-muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-star-chip:hover {
+    color: var(--ol-text);
+  }
+}
+
+.online-star-chip:focus-visible {
+  outline: 2px solid var(--ol-cyan);
+  outline-offset: 2px;
+}
+
+.online-star-chip svg {
+  color: var(--ol-cyan);
+  flex-shrink: 0;
+}
+
+@media (max-width: 560px) {
+  .online-star-chip span {
+    display: none;
+  }
+  .online-star-chip {
+    padding: 0.42rem 0.55rem;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing-brand img {
+    outline: 1px solid var(--ol-line);
+    outline-offset: 0;
+  }
+}
+
+/* ---- hero ---- */
+
+.online-landing-hero {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 30rem) minmax(0, 26rem);
+  justify-content: center;
+  align-items: center;
+  align-content: center;
+  gap: clamp(2rem, 6vw, 5.5rem);
+  padding: clamp(2rem, 6vh, 4rem) 0;
+  max-width: 68rem;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.online-landing-pitch h1 {
+  margin: 0 0 1.1rem;
+  font-family: "Space Grotesk", Inter, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: clamp(2.15rem, 4.6vw, 3.3rem);
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  color: var(--ol-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing-pitch h1 {
+    color: var(--ol-text);
+  }
+}
+
+.online-landing-tagline {
+  margin: 0 0 1.4rem;
+  max-width: 30rem;
+  line-height: 1.55;
+  color: var(--ol-muted);
+}
+
+.online-landing-points {
+  margin: 0 0 1.8rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--ol-muted);
+}
+
+.online-landing-points li {
+  position: relative;
+  padding-left: 1.15rem;
+}
+
+/* list markers are miniature chamfered plates */
+.online-landing-points li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.36em;
+  width: 8px;
+  height: 8px;
+  background: var(--ol-ink);
+  clip-path: polygon(0 0, 62% 0, 100% 38%, 100% 100%, 0 100%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing-points li::before {
+    background: var(--ol-cyan);
+  }
+}
+
+/* ---- calls to action ---- */
+
+.online-landing-signin {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.online-cta {
+  position: relative;
+  display: inline-block;
+  padding: 0.78rem 1.5rem;
+  border: none;
+  background: var(--ol-ink);
+  color: #fff;
+  font: inherit;
+  font-weight: 500;
+  font-size: 0.95rem;
+  text-decoration: none;
+  cursor: pointer;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+.online-cta::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 14px;
+  height: 13px;
+  background: var(--ol-cyan);
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+
+.online-cta:hover {
+  transform: translateY(-1px);
+}
+
+.online-cta:focus-visible {
+  outline: 2px solid var(--ol-cyan);
+  outline-offset: 3px;
+}
+
+.online-cta-secondary {
+  background: transparent;
+  color: var(--ol-ink);
+  box-shadow: inset 0 0 0 1px var(--ol-ink);
+}
+
+.online-cta-secondary::after {
+  background: var(--ol-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-cta {
+    background: var(--ol-text);
+    color: var(--ol-paper);
+  }
+  .online-cta-secondary {
+    background: transparent;
+    color: var(--ol-text);
+    box-shadow: inset 0 0 0 1px var(--ol-muted);
+  }
+  .online-cta-secondary::after {
+    background: var(--ol-muted);
+  }
+}
+
+.online-landing-error {
+  color: #e5484d;
+  margin: 0.9rem 0 0;
+  font-size: 0.85rem;
+}
+
+.online-landing-unconfigured {
+  opacity: 0.6;
+  margin: 0;
+}
+
+/* section label shared by the two capability bands */
+.online-landing-eyebrow {
+  margin: 0 0 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ol-faint);
+}
+
+.online-landing-eyebrow::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 0.55rem;
+  background: var(--ol-ink);
+  clip-path: polygon(0 0, 62% 0, 100% 38%, 100% 100%, 0 100%);
+  transform: translateY(1px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing-eyebrow::before {
+    background: var(--ol-cyan);
+  }
+}
+
+/* the prompt-to-CAD loop, full width below the hero */
+.online-landing-demo {
+  max-width: 68rem;
+  margin: 0 auto clamp(2.5rem, 6vh, 4rem);
+  width: 100%;
+}
+
+.online-landing-demo-sheet,
+.online-landing-fusion-sheet {
+  margin: 0;
+  padding: clamp(0.5rem, 1.2vw, 0.9rem);
+}
+
+.online-landing-demo-sheet img,
+.online-landing-fusion-sheet video {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--ol-line);
+}
+
+.online-landing-fusion-sheet video {
+  background: #0b0f17;
+}
+
+.online-landing-demo-sheet figcaption,
+.online-landing-fusion-sheet figcaption {
+  padding: 0.6rem 0.25rem 0.1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--ol-faint);
+}
+
+/* the Fusion capability band */
+.online-landing-fusion {
+  max-width: 68rem;
+  margin: 0 auto clamp(2.5rem, 6vh, 4rem);
+  width: 100%;
+}
+
+.online-landing-fusion h2 {
+  margin: 0 0 0.7rem;
+  font-family: "Space Grotesk", Inter, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: clamp(1.55rem, 3vw, 2.1rem);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  color: var(--ol-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing-fusion h2 {
+    color: var(--ol-text);
+  }
+}
+
+.online-landing-fusion-lead {
+  margin: 0 0 1.4rem;
+  max-width: 42rem;
+  line-height: 1.55;
+  color: var(--ol-muted);
+}
+
+.online-landing-fusion-lead code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.online-landing-footnote {
+  margin: 1.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--ol-faint);
+}
+
+.online-landing-footnote code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+/* ---- the drawing sheet ---- */
+
+.online-landing-sheet {
+  position: relative;
+  background: var(--ol-panel);
+  border: 1px solid var(--ol-line);
+  padding: clamp(0.75rem, 2vw, 1.4rem);
+  clip-path: polygon(0 0, calc(100% - 26px) 0, 100% 26px, 100% 100%, 0 100%);
+  box-shadow: 0 18px 40px -28px rgba(14, 21, 36, 0.35);
+}
+
+.online-landing-sheet::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 26px;
+  height: 25px;
+  background: var(--ol-cyan);
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+
+.online-landing-drawing {
+  display: block;
+  width: 100%;
+  height: auto;
+  color: var(--ol-faint);
+}
+
+.online-landing-drawing .drawing-body {
+  fill: var(--ol-ink);
+}
+
+.online-landing-drawing .drawing-glyph {
+  fill: var(--ol-glyph);
+}
+
+@media (prefers-color-scheme: dark) {
+  .online-landing-drawing .drawing-body {
+    stroke: var(--ol-line);
+    stroke-width: 0.75;
+  }
+}
+
+.online-landing-drawing .drawing-dims {
+  stroke: currentColor;
+  stroke-width: 0.75;
+  fill: none;
+}
+
+.online-landing-drawing .drawing-dims text {
+  stroke: none;
+  fill: currentColor;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+}
+
+.online-landing-drawing .drawing-verdict circle {
+  fill: var(--ol-green);
+}
+
+.online-landing-drawing .drawing-verdict text {
+  fill: var(--ol-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+/* dimension lines draw themselves in once, like a plot */
+@media (prefers-reduced-motion: no-preference) {
+  .online-landing-drawing .drawing-dims line {
+    stroke-dasharray: 130;
+    stroke-dashoffset: 130;
+    animation: ol-plot 0.7s ease-out 0.25s forwards;
+  }
+  .online-landing-drawing .drawing-dims text,
+  .online-landing-drawing .drawing-verdict {
+    opacity: 0;
+    animation: ol-fade 0.5s ease-out 0.85s forwards;
+  }
+}
+
+@keyframes ol-plot {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ol-fade {
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- footer ---- */
+
+.online-landing-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 68rem;
+  margin: 0 auto;
+  width: 100%;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--ol-line);
+  font-size: 0.75rem;
+  color: var(--ol-faint);
+}
+
+.online-landing-footer nav {
+  display: flex;
+  gap: 0.9rem;
+  margin-left: auto;
+}
+
+.online-landing-footer a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.online-landing-footer a:hover {
+  color: var(--ol-text);
+  text-decoration: underline;
+}
+
+.online-landing-footer a:focus-visible {
+  outline: 2px solid var(--ol-cyan);
+  outline-offset: 2px;
+}
+
+/* ---- responsive ---- */
+
+@media (max-width: 880px) {
+  .online-landing-hero {
+    grid-template-columns: minmax(0, 30rem);
+    justify-items: start;
+    gap: 2.25rem;
+  }
+  .online-landing-sheet {
+    max-width: 22rem;
+    width: 100%;
+  }
+}
+
+/* ---- gate loading state ---- */
+
+.online-gate-loading {
+  min-height: 100vh;
+}
+
+/* ---- account chip (signed-in overlay) ---- */
+
+.online-account-chip {
+  position: fixed;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 1000;
+}
+
+.online-account-chip-button {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  background: rgba(128, 128, 128, 0.15);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.online-account-chip-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.online-account-chip-menu {
+  position: absolute;
+  right: 0;
+  margin-top: 0.4rem;
+  min-width: 12rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.online-account-chip-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.online-account-chip-identity span {
+  opacity: 0.7;
+  font-size: 0.75rem;
+}
+
+.online-account-chip-menu button {
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.online-account-chip-menu button:hover {
+  background: rgba(128, 128, 128, 0.15);
+}

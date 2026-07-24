@@ -8,9 +8,6 @@ describe("App", () => {
     expect(screen.getByTestId("sidebar")).toBeTruthy();
     expect(screen.getByTestId("chat-panel")).toBeTruthy();
     expect(screen.getByTestId("right-panel")).toBeTruthy();
-    expect(screen.getByTestId("viewer-booting").textContent).toContain(
-      "Preparing environment, please wait...",
-    );
     expect(screen.getByRole("separator", { name: "Resize sidebar" })).toBeTruthy();
     expect(screen.getByRole("separator", { name: "Resize 3D panel" })).toBeTruthy();
   });

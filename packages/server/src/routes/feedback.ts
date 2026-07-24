@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { AgentConfigurationIdentity } from "@chamfer/shared";
 import { Hono } from "hono";
 import type { ScorePayload } from "../evaluation/langfuseExperimentSync";
 import { addOnlineReviewReason } from "../evaluation/onlineMonitoring";
@@ -90,7 +91,7 @@ export function feedbackRoutes(db: DatabaseSync, options: {
       if (existing.rating !== body.rating) return c.json({ error: "feedback already recorded" }, 409);
       return c.json(response(existing), 200);
     }
-    const configuration = JSON.parse(run.agent_configuration_json) as { identityHash?: string };
+    const configuration = JSON.parse(run.agent_configuration_json) as Partial<AgentConfigurationIdentity>;
     const id = feedbackId(conversationId, runId);
     const createdAt = Date.now();
     db.prepare(`INSERT INTO agent_run_feedback
@@ -120,7 +121,10 @@ export function feedbackRoutes(db: DatabaseSync, options: {
         metadata: {
           provenance: SCORE_PROVENANCE,
           release: run.release,
-          agentConfigurationHash: configuration.identityHash ?? "unknown",
+          agentConfiguration: {
+            name: configuration.name ?? "unknown",
+            identityHash: configuration.identityHash ?? "unknown",
+          },
         },
         environment: "production",
       }, options.syncDeadlineMs ?? 500);

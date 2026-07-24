@@ -1,12 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
-  PROXY_AUTH_TOKEN, fusionCompletionEvidencePassed, fusionReadinessAllowsInspection,
-  isCadCodeIdentity, isCadResponse, isFusionExpectedEffect, isMeasurements,
+  AGENT_EVALUATION_PILLARS, PROXY_AUTH_TOKEN, fusionCompletionEvidencePassed, fusionReadinessAllowsInspection,
+  isAgentConfigurationIdentity, isCadCodeIdentity, isCadResponse, isFusionExpectedEffect, isMeasurements,
+  modelJsonProvider, resolveTurnFunding,
 } from "./index";
 
 describe("shared", () => {
   it("exports the local proxy token", () => {
     expect(PROXY_AUTH_TOKEN).toBe("chamfer-local");
+  });
+  it("defines the fixture-comparable agent evaluation vocabulary once", () => {
+    expect(AGENT_EVALUATION_PILLARS).toEqual([
+      "taskSuccess",
+      "gateIntegrity",
+      "cost",
+      "latency",
+      "toolErrorRate",
+    ]);
+  });
+  it("validates the shared artifact identity forms", () => {
+    expect(isAgentConfigurationIdentity({ name: "current", identityHash: "a".repeat(64) })).toBe(true);
+    expect(isAgentConfigurationIdentity({ name: "current", identityHash: `sha256:${"a".repeat(64)}` })).toBe(false);
   });
   it("guards CadResponse shapes", () => {
     expect(isCadResponse({ id: 1, ok: false, cmd: "run", error: "boom" })).toBe(true);
@@ -58,5 +72,74 @@ describe("shared", () => {
     expect(isMeasurements(measurements)).toBe(true);
     expect(isMeasurements({ ...measurements, bboxMm: [10, 20] })).toBe(false);
     expect(isMeasurements({ ...measurements, children: [{ label: "body" }] })).toBe(false);
+  });
+});
+
+// The single funding rule every surface consumes (issue #53): the hosted turn
+// seed, title generation, and the client's composer gate and status bar.
+describe("resolveTurnFunding", () => {
+  const NO_KEYS = {};
+
+  it("runs the selected model on its provider's own key", () => {
+    expect(
+      resolveTurnFunding({
+        selectedProvider: "google",
+        keys: { googleApiKey: "***abcd" },
+        fallbackProvider: "anthropic",
+      }),
+    ).toEqual({ kind: "run", model: "selected", funding: "user-key" });
+  });
+
+  it("falls back to the deployment model on the demo key when nothing is keyed", () => {
+    for (const selectedProvider of ["google", undefined, "mistral"]) {
+      expect(
+        resolveTurnFunding({ selectedProvider, keys: NO_KEYS, fallbackProvider: "anthropic" }),
+      ).toEqual({ kind: "run", model: "fallback", funding: "demo" });
+    }
+  });
+
+  it("funds the fallback with the user's own key for its provider, not the demo key", () => {
+    // Key-first resolution downstream makes this BYOK; labeling it "(demo)"
+    // or metering it would be a lie.
+    expect(
+      resolveTurnFunding({
+        selectedProvider: "google",
+        keys: { anthropicApiKey: "***abcd" },
+        fallbackProvider: "anthropic",
+      }),
+    ).toEqual({ kind: "run", model: "fallback", funding: "user-key" });
+  });
+
+  it("blocks naming the missing provider when nothing can fund the selection", () => {
+    expect(
+      resolveTurnFunding({ selectedProvider: "google", keys: { anthropicApiKey: "k" }, fallbackProvider: undefined }),
+    ).toEqual({ kind: "blocked", missingProvider: "google" });
+    expect(
+      resolveTurnFunding({ selectedProvider: "anthropic", keys: NO_KEYS, fallbackProvider: undefined }),
+    ).toEqual({ kind: "blocked", missingProvider: "anthropic" });
+  });
+
+  it("distinguishes unroutable providers and the no-model case", () => {
+    expect(
+      resolveTurnFunding({ selectedProvider: "mistral", keys: NO_KEYS, fallbackProvider: undefined }),
+    ).toEqual({ kind: "unroutable", provider: "mistral" });
+    expect(
+      resolveTurnFunding({ selectedProvider: undefined, keys: NO_KEYS, fallbackProvider: undefined }),
+    ).toEqual({ kind: "no-model" });
+  });
+
+  it("treats empty (masked-away) key values as absent", () => {
+    expect(
+      resolveTurnFunding({ selectedProvider: "google", keys: { googleApiKey: "" }, fallbackProvider: undefined }),
+    ).toEqual({ kind: "blocked", missingProvider: "google" });
+  });
+});
+
+describe("modelJsonProvider", () => {
+  it("extracts the provider and tolerates garbage", () => {
+    expect(modelJsonProvider(JSON.stringify({ provider: "google", id: "g" }))).toBe("google");
+    expect(modelJsonProvider(undefined)).toBeUndefined();
+    expect(modelJsonProvider("not json")).toBeUndefined();
+    expect(modelJsonProvider(JSON.stringify({ id: "g" }))).toBeUndefined();
   });
 });

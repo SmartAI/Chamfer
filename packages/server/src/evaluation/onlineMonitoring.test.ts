@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../db";
 import { recordCompletedRunMonitoring } from "./onlineMonitoring";
-import type { AgentRunLifecycleDto } from "@chamfer/shared";
+import { AGENT_EVALUATION_PILLARS, type AgentConfigurationIdentity, type AgentRunLifecycleDto } from "@chamfer/shared";
 import { createApp } from "../app";
 
 function run(id: string, release = "0.2.2"): AgentRunLifecycleDto {
@@ -16,10 +16,10 @@ function run(id: string, release = "0.2.2"): AgentRunLifecycleDto {
     totalDurationMs: 100,
     release,
     agentConfiguration: {
+      name: "current",
       identityHash: "a".repeat(64),
       provider: "fixture",
       model: "fixture-model",
-      skillMode: "catalog",
     },
     lastSeq: 1,
     counters: {
@@ -49,14 +49,23 @@ describe("production online monitoring persistence", () => {
     db.prepare("INSERT INTO conversations (id, title, created_at, updated_at, last_gate_status) VALUES (?, ?, ?, ?, ?)")
       .run("conversation-1", "Test", 1, 1, "passed");
     const result = recordCompletedRunMonitoring(db, run("run-1"));
-    expect(result?.score.taskSuccess).toBe("unavailable");
+    const benchmarkIdentity: AgentConfigurationIdentity = {
+      name: "current",
+      identityHash: "a".repeat(64),
+    };
+    expect(result?.score.configuration).toEqual(benchmarkIdentity);
+    expect(result?.score.pillars.taskSuccess).toEqual({ passed: null, status: "unavailable" });
+    expect(Object.keys(result!.score.pillars)).toEqual(AGENT_EVALUATION_PILLARS);
     expect(result?.review?.reasons).toEqual(["new-release"]);
     expect(db.prepare("SELECT COUNT(*) AS count FROM online_run_scores").get()).toEqual({ count: 1 });
   });
 
-  it("isolates monitoring persistence failure", () => {
+  it("records identity-bearing unavailable evidence when conversation context is missing", () => {
     const db = openDb(":memory:");
-    expect(recordCompletedRunMonitoring(db, run("missing-conversation"))).toBeUndefined();
+    expect(recordCompletedRunMonitoring(db, run("missing-conversation"))?.score).toMatchObject({
+      configuration: { name: "current", identityHash: "a".repeat(64) },
+      pillars: { gateIntegrity: { passed: null } },
+    });
   });
 
   it("derives provider cost and plan completion from persisted structured records", () => {
@@ -86,7 +95,10 @@ describe("production online monitoring persistence", () => {
       repeatedCadFailures: 2,
     });
 
-    expect(result?.score).toMatchObject({ cost: 1.25, planCompleted: true, taskSuccess: "unavailable" });
+    expect(result?.score).toMatchObject({
+      pillars: { cost: { providerCostUsd: 1.25 }, taskSuccess: { passed: null, status: "unavailable" } },
+      diagnostics: { planCompleted: true },
+    });
     expect(result?.review?.reasons).toContain("unusual-cost");
   });
 

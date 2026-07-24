@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
+import {
+  isAgentConfigurationIdentity,
+  type AgentConfigurationIdentity,
+  type AgentEvaluationPillars,
+} from "@chamfer/shared";
+
+export const ONLINE_SCORE_SCHEMA_VERSION = 2 as const;
 
 export interface OnlineRunEvidence {
   runId: string;
   release: string;
-  agentConfigurationHash: string;
+  configuration: AgentConfigurationIdentity;
   provider: string;
   model: string;
   modality: "text" | "image" | "multimodal";
@@ -13,6 +20,7 @@ export interface OnlineRunEvidence {
   requiredEvidence: number;
   observedEvidence: number;
   completionClaimed: boolean;
+  toolCalls: number;
   toolErrors: number;
   cadFailures: number;
   retries: number;
@@ -46,33 +54,40 @@ export type ReviewReason =
   | "random-sample";
 
 export interface OnlineDeterministicScore {
-  schemaVersion: 1;
+  schemaVersion: typeof ONLINE_SCORE_SCHEMA_VERSION;
   runId: string;
+  configuration: AgentConfigurationIdentity;
   segment: {
     release: string;
-    agentConfigurationHash: string;
     provider: string;
     model: string;
     modality: OnlineRunEvidence["modality"];
   };
   provenance: { scorer: "online-deterministic"; version: number };
   status: "available" | "unavailable";
-  taskSuccess: "unavailable";
-  lifecycleComplete: boolean;
-  planCompleted: boolean | null;
-  verificationGatePassed: boolean | null;
-  evidenceCoverage: number | null;
-  suspectedFalseSuccess: boolean;
-  cost: number;
-  latencyMs: number;
-  toolErrors: number;
-  cadFailures: number;
-  retries: number;
-  persistenceFailures: number;
+  pillars: AgentEvaluationPillars<{
+    taskSuccess: { passed: null; status: "unavailable" };
+    gateIntegrity: {
+      passed: boolean | null;
+      suspectedFalseSuccess: boolean;
+      evidenceCoverage: number | null;
+    };
+    cost: { providerCostUsd: number };
+    latency: { method: "wall-clock"; totalMs: number };
+    toolErrorRate: { errors: number; calls: number; rate: number };
+  }>;
+  diagnostics: {
+    lifecycleComplete: boolean;
+    planCompleted: boolean | null;
+    cadFailures: number;
+    retries: number;
+    persistenceFailures: number;
+  };
 }
 
 export interface ReviewInventoryItem {
   runId: string;
+  configuration: AgentConfigurationIdentity;
   reasons: ReviewReason[];
   sampledByPolicyVersion: number;
   segment: OnlineDeterministicScore["segment"];
@@ -110,30 +125,41 @@ function riskReasons(input: {
 function score(run: OnlineRunEvidence, policy: OnlineSamplingPolicy): OnlineDeterministicScore {
   const available = run.lifecycleComplete && run.persistenceFailures === 0;
   return {
-    schemaVersion: 1,
+    schemaVersion: ONLINE_SCORE_SCHEMA_VERSION,
     runId: run.runId,
+    configuration: run.configuration,
     segment: {
       release: run.release,
-      agentConfigurationHash: run.agentConfigurationHash,
       provider: run.provider,
       model: run.model,
       modality: run.modality,
     },
     provenance: { scorer: "online-deterministic", version: policy.version },
     status: available ? "available" : "unavailable",
-    taskSuccess: "unavailable",
-    lifecycleComplete: run.lifecycleComplete,
-    planCompleted: run.planStatus === "unavailable" ? null : run.planStatus === "completed",
-    verificationGatePassed: run.verificationGate === "unavailable" ? null : run.verificationGate === "passed",
-    evidenceCoverage: run.requiredEvidence > 0 ? run.observedEvidence / run.requiredEvidence : null,
-    suspectedFalseSuccess: run.completionClaimed &&
-      (run.verificationGate !== "passed" || run.observedEvidence < run.requiredEvidence),
-    cost: run.cost,
-    latencyMs: run.latencyMs,
-    toolErrors: run.toolErrors,
-    cadFailures: run.cadFailures,
-    retries: run.retries,
-    persistenceFailures: run.persistenceFailures,
+    pillars: {
+      taskSuccess: { passed: null, status: "unavailable" },
+      gateIntegrity: {
+        passed: run.verificationGate === "unavailable" ? null : run.verificationGate === "passed" &&
+          !(run.completionClaimed && run.observedEvidence < run.requiredEvidence),
+        suspectedFalseSuccess: run.completionClaimed &&
+          (run.verificationGate !== "passed" || run.observedEvidence < run.requiredEvidence),
+        evidenceCoverage: run.requiredEvidence > 0 ? run.observedEvidence / run.requiredEvidence : null,
+      },
+      cost: { providerCostUsd: run.cost },
+      latency: { method: "wall-clock", totalMs: run.latencyMs },
+      toolErrorRate: {
+        errors: run.toolErrors,
+        calls: run.toolCalls,
+        rate: run.toolCalls === 0 ? 0 : run.toolErrors / run.toolCalls,
+      },
+    },
+    diagnostics: {
+      lifecycleComplete: run.lifecycleComplete,
+      planCompleted: run.planStatus === "unavailable" ? null : run.planStatus === "completed",
+      cadFailures: run.cadFailures,
+      retries: run.retries,
+      persistenceFailures: run.persistenceFailures,
+    },
   };
 }
 
@@ -146,6 +172,9 @@ export function scoreOnlineRuns(input: {
 }): { scores: OnlineDeterministicScore[]; reviewInventory: ReviewInventoryItem[] } {
   if (input.policy.randomSampleRate < 0 || input.policy.randomSampleRate > 1) {
     throw new Error("Random sample rate must be between zero and one");
+  }
+  if (input.runs.some((run) => !isAgentConfigurationIdentity(run.configuration))) {
+    throw new Error("Online scoring requires an artifact-derived agent configuration identity");
   }
   const knownReleases = new Set(input.knownReleases);
   const knownFailureSignatures = new Set(input.knownFailureSignatures);
@@ -169,6 +198,7 @@ export function scoreOnlineRuns(input: {
     scores,
     reviewInventory: candidates.map(({ run, reasons }) => ({
       runId: run.runId,
+      configuration: run.configuration,
       reasons,
       sampledByPolicyVersion: input.policy.version,
       segment: score(run, input.policy).segment,

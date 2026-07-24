@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { AttachmentStorageError, AttachmentStore, type StoredImageBlob } from "./attachmentStore";
+import { AttachmentStorageError, type ImageBlobStore, type StoredImageBlob } from "./imageBlobStore";
 
 const MIGRATION_VERSION = 1;
 const ATTACHMENT_KINDS = new Set(["user-image", "view-sheet"]);
@@ -142,7 +142,7 @@ function recordBroken(
 
 async function linkBlob(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   row: AttachmentRow,
   bytes: Uint8Array,
   mime: string,
@@ -171,7 +171,7 @@ async function linkBlob(
 
 async function migrateRow(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   row: AttachmentRow,
   inline: InlineImage | undefined,
   report: LegacyImageMigrationReport,
@@ -246,7 +246,7 @@ function removeLegacyDataColumn(db: DatabaseSync): void {
 
 export async function migrateLegacyImages(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   options: LegacyImageMigrationOptions = {},
 ): Promise<LegacyImageMigrationReport> {
   ensureMigrationSchema(db);

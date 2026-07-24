@@ -1,12 +1,18 @@
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import type { DatabaseSync } from "node:sqlite";
 import {
   DEFAULT_CONVERSATION_TITLE,
   isCadCodeIdentity,
+  isLlmProvider,
   isMeasurements,
+  modelJsonProvider,
+  resolveTurnFunding,
   type AttachmentReferenceBlock,
   type CadEnvironment,
   type GenerateTitleDto,
+  type HeadlessRunDto,
+  type ConversationEvent,
 } from "@chamfer/shared";
 import {
   conversationExists,
@@ -24,12 +30,15 @@ import {
   messageExists,
   setConversationTitle,
 } from "../conversationStore";
-import { AttachmentStorageError, AttachmentStore, type StoredImageBlob } from "../attachmentStore";
+import { AttachmentStorageError, type ImageBlobStore, type StoredImageBlob } from "../imageBlobStore";
 import { readEffectiveSettings } from "../settingsStore";
 import { resolveProviderConfig } from "../providerConfig";
 import { buildTitleTranscript, generateTitleText } from "../titles";
 import type { LlmStreamer } from "../llm";
 import { deleteConversationWithAttachments } from "../conversationDeletion";
+import { getDesign } from "../designStore";
+import { ConversationEventStore } from "../conversationEventStore";
+import { replayThenLive } from "../replayThenLive";
 
 const VALID_ATTACHMENT_KINDS = new Set(["user-image", "view-sheet"]);
 const VALID_CAD_ENVIRONMENTS = new Set<CadEnvironment>(["build123d", "fusion"]);
@@ -92,7 +101,8 @@ function validateAtomicMessage(
     }
   }
   const viewSheets = references.filter((reference) => reference.kind === "view-sheet");
-  if (message.role === "toolResult" && message.toolName === "run_build123d") {
+  if (message.role === "toolResult" &&
+      (message.toolName === "run_build123d" || (message.toolName === "execute_cad_change" && isRecord(message.details) && isRecord(message.details.code)))) {
     if (viewSheets.length !== 1 || !isRecord(message.details) || !isRecord(message.details.inspectionSheet)) {
       return { error: "CAD image messages require one derived inspection sheet" };
     }
@@ -109,7 +119,8 @@ function validateAtomicMessage(
       return { error: "inspection sheet metadata must derive from the CAD result" };
     }
   } else if (message.role === "toolResult" &&
-      (message.toolName === "run_fusion_action" || message.toolName === "inspect_fusion")) {
+      (message.toolName === "inspect_fusion" ||
+        (message.toolName === "execute_cad_change" && isRecord(message.details) && isRecord(message.details.inspection)))) {
     const visual = isRecord(message.details) && isRecord(message.details.visualArtifact) ? message.details.visualArtifact : undefined;
     const inspectionSheet = visual && isRecord(visual.inspectionSheet) ? visual.inspectionSheet : undefined;
     if (viewSheets.length !== 1 || inspectionSheet?.attachmentId !== viewSheets[0]!.attachmentId ||
@@ -146,11 +157,29 @@ function sameAtomicCommit(
     });
 }
 
-export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachmentStore: AttachmentStore): Hono {
+export function conversationsRoutes(
+  db: DatabaseSync,
+  llm: LlmStreamer,
+  attachmentStore: ImageBlobStore,
+  options: {
+    activeRun?: (conversationId: string) => HeadlessRunDto | undefined;
+    stopActiveRun?: (runId: string) => Promise<void>;
+    /** Deployment default model backing server-initiated calls (title
+     * generation) when the settings table names none - the online demo path. */
+    defaultModelJson?: string;
+  } = {},
+): Hono {
+  const { activeRun, stopActiveRun } = options;
   const app = new Hono();
+  const eventStore = new ConversationEventStore(db);
 
   app.post("/api/conversations", async (c) => {
-    const body = (await c.req.json()) as { title?: unknown; cadEnvironment?: unknown };
+    const body = (await c.req.json()) as {
+      title?: unknown;
+      cadEnvironment?: unknown;
+      designId?: unknown;
+      designName?: unknown;
+    };
     if (typeof body.title !== "string" || body.title.trim().length === 0) {
       return c.json({ error: "title is required" }, 400);
     }
@@ -158,17 +187,91 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
         !VALID_CAD_ENVIRONMENTS.has(body.cadEnvironment as CadEnvironment)) {
       return c.json({ error: "cadEnvironment must be build123d or fusion" }, 400);
     }
-    const conversation = createConversation(db, body.title, body.cadEnvironment as CadEnvironment);
+    if (body.designId !== undefined && typeof body.designId !== "string") {
+      return c.json({ error: "designId must be a string" }, 400);
+    }
+    if (body.designName !== undefined &&
+        (typeof body.designName !== "string" || body.designName.trim().length === 0)) {
+      return c.json({ error: "designName must be non-empty" }, 400);
+    }
+    if (typeof body.designId === "string") {
+      const design = getDesign(db, body.designId);
+      if (!design) return c.json({ error: "design not found" }, 404);
+      if (design.cadEnvironment !== body.cadEnvironment) {
+        return c.json({ error: "conversation CAD environment must match the design" }, 409);
+      }
+    }
+    const conversation = createConversation(
+      db,
+      body.title,
+      body.cadEnvironment as CadEnvironment,
+      typeof body.designId === "string" ? body.designId : undefined,
+      typeof body.designName === "string" ? body.designName.trim() : undefined,
+    );
     return c.json(conversation);
   });
 
   app.get("/api/conversations", (c) => {
-    return c.json(listConversations(db));
+    return c.json(listConversations(db).map((conversation) => {
+      const run = activeRun?.(conversation.id);
+      return run ? { ...conversation, liveRun: run } : conversation;
+    }));
   });
 
   app.get("/api/conversations/:id", (c) => {
     const conversation = getConversation(db, c.req.param("id"));
-    return conversation ? c.json(conversation) : c.json({ error: "not found" }, 404);
+    const run = conversation && activeRun?.(conversation.id);
+    return conversation ? c.json(run ? { ...conversation, liveRun: run } : conversation) : c.json({ error: "not found" }, 404);
+  });
+
+  // This is the same subscribe-before-replay, buffer, deduplicate, then-live
+  // discipline used by the headless run SSE route. Last-Event-ID and `after`
+  // share the same suffix cursor so a browser reload resumes without a second
+  // streaming protocol or a bespoke reconstruction path.
+  app.get("/api/conversations/:id/events", (c) => {
+    const conversationId = c.req.param("id");
+    if (!conversationExists(db, conversationId)) return c.json({ error: "not found" }, 404);
+    const requestedAfter = Number(c.req.header("last-event-id") ?? c.req.query("after") ?? 0);
+    const after = Number.isFinite(requestedAfter) ? requestedAfter : 0;
+    return streamSSE(c, async (stream) => {
+      await new Promise<void>((resolve) => {
+        const connection = replayThenLive<ConversationEvent>({
+          after,
+          sequence: (event) => event.sequence,
+          replay: (cursor) => eventStore.events(conversationId, cursor),
+          subscribe: (listener) => eventStore.subscribe(conversationId, listener),
+          write: (event) => stream.writeSSE({
+            id: String(event.sequence),
+            event: event.type,
+            data: JSON.stringify(event),
+          }),
+          onClose: resolve,
+        });
+        stream.onAbort(() => {
+          void connection.close();
+        });
+      });
+    });
+  });
+
+  app.get("/api/conversations/:id/conversation-state", (c) => {
+    const conversationId = c.req.param("id");
+    if (!conversationExists(db, conversationId)) return c.json({ error: "not found" }, 404);
+    return c.json(eventStore.project(conversationId));
+  });
+
+  app.put("/api/conversations/:id/ui-state/:key", async (c) => {
+    const conversationId = c.req.param("id");
+    if (!conversationExists(db, conversationId)) return c.json({ error: "not found" }, 404);
+    const key = c.req.param("key");
+    if (key.length === 0 || key.length > 100) return c.json({ error: "invalid UI state key" }, 400);
+    const body = await c.req.json<{ value?: unknown }>().catch(() => undefined);
+    if (!body || !("value" in body)) return c.json({ error: "value is required" }, 400);
+    const event = eventStore.append(conversationId, {
+      type: "ui.state-updated",
+      data: { key, value: body.value },
+    });
+    return c.json(event);
   });
 
   app.post("/api/conversations/:id/generate-title", async (c) => {
@@ -181,12 +284,27 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
       return c.json({ title: conversation.title, generated: false } satisfies GenerateTitleDto);
     }
     const { settings } = readEffectiveSettings(db);
-    if (!settings.modelJson) return c.json({ error: "no model configured" }, 400);
+    // Same funding rule as hosted turns and the client's composer gate
+    // (resolveTurnFunding in @chamfer/shared): a fresh account gets the
+    // deployment default, and a selected model whose provider is unkeyed
+    // falls back to it too when the deployment can fund the call - instead
+    // of erroring "demo covers Anthropic only" while the agent turn quietly
+    // succeeds on the same fallback (#53).
+    const fallbackProvider = modelJsonProvider(options.defaultModelJson);
+    const verdict = resolveTurnFunding({
+      selectedProvider: modelJsonProvider(settings.modelJson),
+      keys: settings,
+      fallbackProvider: isLlmProvider(fallbackProvider) ? fallbackProvider : undefined,
+    });
+    const modelJson = verdict.kind === "run" && verdict.model === "fallback"
+      ? options.defaultModelJson
+      : settings.modelJson ?? options.defaultModelJson;
+    if (!modelJson) return c.json({ error: "no model configured" }, 400);
     const transcript = buildTitleTranscript(listMessages(db, id));
     if (!transcript) {
       return c.json({ title: conversation.title, generated: false } satisfies GenerateTitleDto);
     }
-    const model = JSON.parse(settings.modelJson) as unknown;
+    const model = JSON.parse(modelJson) as unknown;
     const { requestModel, apiKey, env } = resolveProviderConfig(settings, model);
     let title: string;
     try {
@@ -201,8 +319,11 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
     return c.json({ title, generated: true } satisfies GenerateTitleDto);
   });
 
-  app.delete("/api/conversations/:id", (c) => {
-    const deleted = deleteConversationWithAttachments(db, attachmentStore, c.req.param("id"));
+  app.delete("/api/conversations/:id", async (c) => {
+    const conversationId = c.req.param("id");
+    const run = activeRun?.(conversationId);
+    if (run && stopActiveRun) await stopActiveRun(run.id);
+    const deleted = await deleteConversationWithAttachments(db, attachmentStore, conversationId);
     if (!deleted) return c.json({ error: "not found" }, 404);
     return c.json({ ok: true });
   });
@@ -244,11 +365,11 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
 
     const blobs: StoredImageBlob[] = [];
     const created = new Map<string, StoredImageBlob>();
-    const cleanup = () => {
+    const cleanup = async () => {
       for (const blob of created.values()) {
         if (attachmentReferenceCount(db, blob.contentHash) !== 0) continue;
         try {
-          attachmentStore.remove(blob.blobPath);
+          await attachmentStore.remove(blob.blobPath);
         } catch {
           // Startup maintenance reclaims crash and cleanup-failure orphans.
         }
@@ -258,7 +379,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
       for (const attachment of attachments) {
         const decoded = decodeBase64(attachment.data);
         if (!decoded) {
-          cleanup();
+          await cleanup();
           return c.json({ error: "invalid base64 attachment data" }, 400);
         }
         const blob = await attachmentStore.write(decoded, attachment.mime);
@@ -266,7 +387,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
         if (blob.created) created.set(blob.blobPath, blob);
       }
     } catch (error) {
-      cleanup();
+      await cleanup();
       if (error instanceof AttachmentStorageError) {
         const status = error.code === "unsupported-media" ? 415 : error.code === "corrupt" ? 422 : 500;
         return c.json({ error: error.code }, status);
@@ -280,7 +401,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
       const exact = sameAtomicCommit(
         existing, conversationId, message, attachments, blobs, listAttachments(db, message.id),
       );
-      cleanup();
+      await cleanup();
       return exact ? c.json(existing) : c.json({ error: "atomic message retry conflicts with committed data" }, 409);
     }
     try {
@@ -291,7 +412,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
         attachments.map((attachment, index) => ({ id: attachment.id, kind: attachment.kind, blob: blobs[index]! })),
       ));
     } catch (error) {
-      cleanup();
+      await cleanup();
       if (isUniqueConstraintError(error)) return c.json({ error: "atomic message conflicts with committed data" }, 409);
       throw error;
     }
@@ -324,7 +445,7 @@ export function conversationsRoutes(db: DatabaseSync, llm: LlmStreamer, attachme
         }
         if (blob.created && attachmentReferenceCount(db, blob.contentHash) === 0) {
           try {
-            attachmentStore.remove(blob.blobPath);
+            await attachmentStore.remove(blob.blobPath);
           } catch {
             // Startup maintenance can reclaim a blob if best-effort cleanup fails.
           }

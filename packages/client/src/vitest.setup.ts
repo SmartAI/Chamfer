@@ -7,16 +7,16 @@ afterEach(() => {
 
 // jsdom does not implement these; Radix UI components (Select, Dialog) call
 // them during interaction, so stub them out for tests.
-if (!Element.prototype.scrollIntoView) {
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
-if (!Element.prototype.hasPointerCapture) {
+if (typeof Element !== "undefined" && !Element.prototype.hasPointerCapture) {
   Element.prototype.hasPointerCapture = () => false;
 }
-if (!Element.prototype.releasePointerCapture) {
+if (typeof Element !== "undefined" && !Element.prototype.releasePointerCapture) {
   Element.prototype.releasePointerCapture = () => {};
 }
-if (!Element.prototype.setPointerCapture) {
+if (typeof Element !== "undefined" && !Element.prototype.setPointerCapture) {
   Element.prototype.setPointerCapture = () => {};
 }
 
@@ -54,6 +54,30 @@ if (typeof globalThis.Worker === "undefined") {
   }
   // @ts-expect-error - minimal stub, not a full Worker implementation
   globalThis.Worker = NoopWorker;
+}
+
+// jsdom does not implement object URLs; the viewer's export menu creates one
+// per downloaded file.
+if (typeof URL !== "undefined" && !URL.createObjectURL) {
+  URL.createObjectURL = () => "blob:vitest";
+  URL.revokeObjectURL = () => {};
+}
+
+// jsdom does not implement matchMedia; WorkspaceLayout queries it to pick the
+// mobile layout. Default to desktop (matches: false) so component tests render
+// the resizable grid unless they override this.
+if (typeof window !== "undefined" && !window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList;
 }
 
 // jsdom does not implement ResizeObserver; @react-three/fiber's Canvas uses

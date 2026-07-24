@@ -1,29 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Clock, Send, X } from "lucide-react";
-import { turnStats } from "@/agent/turnStats";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
 import { ErrorBanner } from "./ErrorBanner";
 import { PresetPrompts } from "./PresetPrompts";
-import { VerificationChip } from "./VerificationChip";
-import { PlanCard } from "./PlanCard";
-import { SourceSpecificationsCard } from "./SourceSpecificationsCard";
-import { ProofContractCard } from "./ProofContractCard";
-import { DesignEscalationCard } from "./DesignEscalationCard";
-import { ReferenceRegistrationsCard } from "./ReferenceRegistrationsCard";
-import { ProofReportCard } from "./ProofReportCard";
-import { latestGateSummary } from "@/agent/gateSummary";
-import { latestPlan } from "@/agent/plan";
-import { currentProofContract } from "@/agent/proofContract";
-import { currentVisualVerification } from "@/agent/visualVerification";
-import { FUSION_RECONCILIATION_MARKER, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER } from "@/agent/session";
+import { DemoQuotaMeter } from "./DemoQuotaMeter";
 import { useChatState } from "@/state/chatState";
-import { useOptionalAppState } from "@/state/appState";
-import { effectiveProofReport } from "@/agent/proofReport";
-import { ResultFeedback } from "./ResultFeedback";
 import { ConnectedFusionDocumentStrip } from "./FusionDocumentStrip";
 
 const SETTINGS_HINT = "Configure a model and API key in Settings to start chatting.";
+const HOSTED_AGENT_OFFLINE_HINT =
+  "Agent runs are offline on this deployment while Chamfer moves to its new agent runtime.";
 
 export interface ChatPanelProps {
   /** Opens the settings modal (owned by App); feeds the invalid-key banner action. */
@@ -31,64 +17,54 @@ export interface ChatPanelProps {
 }
 
 /**
- * Extracts the text of the most recent user message from the session's message list,
- * used by the rate-limited banner's Retry action. User messages carry either a plain
- * string or a content-block array whose first text block holds the prompt.
+ * Extracts the text of the most recent user message, used by the rate-limited
+ * banner's Retry action.
  */
 function lastUserMessageText(messages: unknown[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as { role?: string; content?: unknown };
     if (message?.role !== "user") continue;
-    let text: string | undefined;
-    if (typeof message.content === "string") text = message.content;
-    else if (Array.isArray(message.content)) {
+    if (typeof message.content === "string") return message.content;
+    if (Array.isArray(message.content)) {
       const textBlock = message.content.find(
         (block: { type?: string }) => block?.type === "text",
       ) as { text?: string } | undefined;
-      text = textBlock?.text;
+      return textBlock?.text;
     }
-    // Injected self-check and plan nudges are user-role messages but not the user's
-    // prompt; retrying one would just re-ask the agent to checklist itself.
-    if (text?.startsWith(SELF_CHECK_MARKER) || text?.startsWith(PLAN_NUDGE_MARKER) || text?.startsWith(FUSION_RECONCILIATION_MARKER)) continue;
-    return text;
   }
   return undefined;
 }
 
 export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
-  const currentArtifact = useOptionalAppState()?.currentArtifact ?? null;
   const {
     activeConversationId,
     conversations,
-    session,
     sessionState,
     settingsPresent,
+    agentHostingOffline,
     error: providerError,
     clearError,
-    queuedMessages,
-    queuePaused,
     sendMessage,
     stopAgent,
-    removeQueued,
-    sendQueuedNow,
     modelName,
-    maxCadRuns,
+    missingProviderKey,
     showCadCode,
+    demoBudget,
   } = useChatState();
 
-  const stats = useMemo(() => turnStats(sessionState.messages), [sessionState.messages]);
+  // The turn is in flight from the moment the prompt is POSTed (submitting) until
+  // it settles (streaming); the composer and preset guard treat both as busy.
+  const busy = sessionState.streaming || Boolean(sessionState.submitting);
 
-  // Synchronous double-click guard: React state re-renders too late to stop a second click
-  // arriving before the first one's state update has flushed.
+  // Synchronous double-click guard for the preset cards.
   const presetBusyRef = useRef(false);
   const [presetLaunching, setPresetLaunching] = useState(false);
 
-  // Re-arm the preset cards whenever no turn is streaming.
   useEffect(() => {
-    if (sessionState.streaming) return;
+    if (busy) return;
     presetBusyRef.current = false;
     setPresetLaunching(false);
-  }, [activeConversationId, sessionState.streaming]);
+  }, [activeConversationId, busy]);
 
   const handleSend = useCallback(
     (text: string, images: File[]) => {
@@ -100,34 +76,40 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
   const retryText = sessionState.error?.kind === "rate-limited" ? lastUserMessageText(sessionState.messages) : undefined;
 
   const handleRetry = useCallback(() => {
-    if (retryText) void session?.send(retryText);
-  }, [retryText, session]);
+    if (retryText) sendMessage(retryText, []);
+  }, [retryText, sendMessage]);
 
   const handlePresetSelect = useCallback(
     (prompt: string) => {
-      if (presetBusyRef.current || !session || sessionState.streaming) return;
+      if (presetBusyRef.current || busy) return;
       presetBusyRef.current = true;
       setPresetLaunching(true);
-      void session.send(prompt, []).finally(() => {
-        presetBusyRef.current = false;
-        setPresetLaunching(false);
-      });
+      sendMessage(prompt, []);
     },
-    [session, sessionState.streaming],
+    [sendMessage, busy],
   );
 
-  // Provider-level failures (conversation create/delete, conversation load, artifact
-  // persistence) live outside any session, so they get their own dismissible banner
-  // above the session error banner.
   const providerErrorBanner = providerError ? (
     <div data-testid="provider-error-banner" className="shrink-0">
       <ErrorBanner error={{ kind: "generic", message: providerError }} onDismiss={clearError} />
     </div>
   ) : null;
 
+  const hostedAgentOfflineBanner = agentHostingOffline ? (
+    <div
+      data-testid="agent-offline-banner"
+      className="shrink-0 border-b bg-amber-50 px-4 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+    >
+      {HOSTED_AGENT_OFFLINE_HINT} Run Chamfer locally with{" "}
+      <code className="rounded bg-amber-100 px-1 py-0.5 font-mono dark:bg-amber-900">npx chamfer</code> in the
+      meantime; your conversations here are kept.
+    </div>
+  ) : null;
+
   if (!activeConversationId) {
     return (
       <div className="flex h-full flex-1 flex-col overflow-hidden">
+        {hostedAgentOfflineBanner}
         {providerErrorBanner}
         <div className="flex flex-1 flex-col items-center justify-center gap-6">
           <div className="text-center text-sm text-muted-foreground">
@@ -139,38 +121,27 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
     );
   }
 
-  // Streaming no longer disables the composer: sends during a turn steer the active run.
-  const disabled = !settingsPresent || !session;
-  const disabledHint = !settingsPresent ? SETTINGS_HINT : undefined;
+  // Provider-aware gate (issue #53): a turn needs a key for the selected
+  // model's provider or the deployment's demo quota; without either, the
+  // composer is off and the hint names the exact fix.
+  const disabled = !settingsPresent || agentHostingOffline || Boolean(missingProviderKey);
+  const disabledHint = agentHostingOffline
+    ? HOSTED_AGENT_OFFLINE_HINT
+    : !settingsPresent
+      ? SETTINGS_HINT
+      : missingProviderKey
+        ? `Add your ${missingProviderKey} API key in Settings to run the selected model.`
+        : undefined;
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const conversationTitle = activeConversation?.title;
-  const plan = latestPlan(sessionState.messages);
-  const proofContract = currentProofContract(
-    sessionState.proofContracts ?? [],
-    plan,
-    sessionState.referenceRegistrations ?? [],
-  );
-  const proofReport = effectiveProofReport(sessionState.proofReports ?? [], {
-    plan,
-    contract: proofContract,
-    sourceSpecifications: sessionState.sourceSpecifications ?? [],
-    referenceRegistrations: sessionState.referenceRegistrations ?? [],
-    activeReferenceIds: (sessionState.referenceRecords ?? [])
-      .filter((record) => record.status === "active" || record.status === "complementary")
-      .map((record) => record.referenceId),
-    visualVerification: currentVisualVerification(sessionState.messages, sessionState.referenceRecords ?? []),
-    artifact: currentArtifact,
-  });
-  const designEscalation = sessionState.designEscalations?.at(-1);
-  const hasAssistantResult = sessionState.messages.some((message) =>
-    (message as { role?: string }).role === "assistant"
-  );
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div data-testid="chat-header" className="flex min-h-12 shrink-0 items-center gap-2 border-b py-2 pl-12 pr-4">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{conversationTitle}</span>
+      <div data-testid="chat-header" className="flex min-h-12 shrink-0 items-center gap-2 border-b py-2 pl-4 pr-4 md:pl-12">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{conversationTitle}</p>
+        </div>
         {activeConversation && (
           <span
             data-testid="cad-environment-badge"
@@ -180,37 +151,25 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
             {activeConversation.cadEnvironment === "fusion" ? "Autodesk Fusion" : "Local build123d"}
           </span>
         )}
-        <VerificationChip
-          streaming={sessionState.streaming}
-          summary={latestGateSummary(sessionState.messages)}
-          visual={currentVisualVerification(sessionState.messages, sessionState.referenceRecords ?? [])}
-          proofState={proofReport?.status}
-        />
       </div>
       {activeConversation?.cadEnvironment === "fusion" && (
         <ConnectedFusionDocumentStrip conversation={activeConversation} />
       )}
-      {(sessionState.sourceSpecifications ?? []).length > 0 && (
-        <SourceSpecificationsCard specifications={sessionState.sourceSpecifications ?? []} />
-      )}
-      {designEscalation && <DesignEscalationCard escalation={designEscalation} />}
-      {(sessionState.referenceRegistrations ?? []).length > 0 && (
-        <ReferenceRegistrationsCard registrations={sessionState.referenceRegistrations ?? []} />
-      )}
-      {proofContract && <ProofContractCard contract={proofContract} />}
-      {proofReport && <ProofReportCard report={proofReport} />}
-      {plan && <PlanCard plan={plan} sourceSpecifications={sessionState.sourceSpecifications ?? []} />}
+      {hostedAgentOfflineBanner}
       {providerErrorBanner}
       {sessionState.error && (
         <ErrorBanner
           error={sessionState.error}
           onOpenSettings={onOpenSettings}
-          onRetry={session && retryText && !sessionState.streaming ? handleRetry : undefined}
+          onRetry={retryText && !sessionState.streaming ? handleRetry : undefined}
         />
       )}
       <MessageList
         messages={sessionState.messages}
         streaming={sessionState.streaming}
+        submitting={sessionState.submitting}
+        pendingPrompt={sessionState.pendingPrompt}
+        activeTool={sessionState.activeTool}
         generationFailed={Boolean(sessionState.error)}
         showCadCode={showCadCode}
         emptyState={
@@ -220,98 +179,25 @@ export function ChatPanel({ onOpenSettings }: ChatPanelProps) {
               <p className="mt-3 text-xs leading-relaxed">
                 The native Fusion canvas remains the authoritative interactive 3D view; Chamfer does not mirror the model here.
               </p>
-              <p data-testid="fusion-provider-disclosure" className="mt-2 text-xs leading-relaxed">
-                Selected Fusion evidence is processed by your configured model provider. Chamfer sends only the bound design's necessary engineering snapshot, relevant installed API excerpts, selected views, and normalized action results—not Fusion files, unrelated documents or projects, credentials, or raw MCP traffic.
-              </p>
             </div>
           ) : (
-            // No disabledHint here: the composer directly below already explains
-            // why everything is disabled; repeating the sentence reads as a bug.
             <PresetPrompts disabled={disabled || presetLaunching} onSelect={handlePresetSelect} />
           )
         }
       />
-      {queuedMessages.length > 0 && (
-        <div data-testid="queue-strip" className="flex shrink-0 flex-col gap-1.5 border-t px-3 pt-2">
-          {queuePaused && (
-            <p data-testid="queue-paused" className="text-xs text-muted-foreground">
-              Queue paused — send a queued message below or type a new one to resume.
-            </p>
-          )}
-          {queuedMessages.map((message) => (
-            <div
-              key={message.id}
-              data-testid="queued-message"
-              className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5 text-xs"
-            >
-              <Clock className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">{message.text}</span>
-              <button
-                type="button"
-                data-testid="queued-send-now"
-                aria-label="Send now"
-                title="Send now"
-                onClick={() => sendQueuedNow(message.id)}
-                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Send className="h-3 w-3" />
-              </button>
-              <button
-                type="button"
-                data-testid="queued-remove"
-                aria-label="Remove from queue"
-                title="Remove from queue"
-                onClick={() => removeQueued(message.id)}
-                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {!sessionState.streaming && hasAssistantResult && (
-        <div className="flex shrink-0 justify-end border-t px-4 py-1.5">
-          <ResultFeedback conversationId={activeConversationId} resultKey={sessionState.messages.length} />
-        </div>
-      )}
+      {demoBudget && <DemoQuotaMeter budget={demoBudget} onOpenSettings={onOpenSettings} />}
       {modelName && (
         <div
           data-testid="agent-status"
           className="flex shrink-0 items-center gap-1.5 border-t px-4 py-1.5 text-[11px] tabular-nums text-muted-foreground"
         >
           <span className="font-medium text-foreground">{modelName}</span>
-          <span aria-hidden="true">·</span>
-          <span>LLM calls {stats.llmCalls}</span>
-          {activeConversation?.cadEnvironment !== "fusion" && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span>
-                CAD runs {stats.cadRunsThisTurn} / {maxCadRuns}
-              </span>
-            </>
-          )}
-          {sessionState.notice?.kind === "retrying" && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span data-testid="retry-notice" className="text-amber-600 dark:text-amber-400">
-                request interrupted, retrying in {sessionState.notice.delaySeconds}s (attempt{" "}
-                {sessionState.notice.attempt} of {sessionState.notice.maxAttempts})
-              </span>
-            </>
-          )}
-          {sessionState.notice?.kind === "compacting" && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span data-testid="compacting-notice">compacting context…</span>
-            </>
-          )}
         </div>
       )}
       <Composer
         disabled={disabled}
         disabledHint={disabledHint}
-        streaming={sessionState.streaming}
+        streaming={busy}
         onStop={stopAgent}
         onSend={handleSend}
       />

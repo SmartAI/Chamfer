@@ -17,6 +17,7 @@ import type {
   FusionSketchDto,
 } from "@chamfer/shared";
 import type { FusionMcpClient } from "./mcpClient";
+import { hashFusionEngineeringFingerprint } from "./fingerprint";
 import { executeFusionScript, isRecord, stableJson } from "./mcpPayload";
 import {
   captureInspectionCameraScript,
@@ -240,7 +241,7 @@ export function evaluateFusionChecks(
   checks: readonly FusionCheckInput[],
   evidence: { views: readonly FusionEvidenceView[]; cameraRestored: boolean } = { views: [], cameraRestored: false },
 ): FusionCheckResultDto[] {
-  return checks.map((check) => {
+  const evaluate = (check: FusionCheckInput): FusionCheckResultDto => {
     if (check.kind === "body-count" && "expected" in check && typeof check.expected === "number") {
       const passed = snapshot.bodies.length === check.expected;
       return { kind: check.kind, status: passed ? "passed" : "failed", detail: `Expected ${check.expected} bodies; found ${snapshot.bodies.length}.` };
@@ -622,7 +623,12 @@ export function evaluateFusionChecks(
         : `Missing views: ${missing.join(", ") || "none"}; camera restored: ${evidence.cameraRestored}.` };
     }
     return { kind: check.kind, status: "unsupported", detail: `Unsupported Fusion check kind: ${check.kind}.` };
-  });
+  };
+  // Echo the evaluated input on every verdict: callers must attribute statuses
+  // to their requested checks by content, never by array position, because
+  // composed result arrays (the action path prepends structural verdicts) do
+  // not preserve positional alignment with the request.
+  return checks.map((check) => ({ ...evaluate(check), input: check }));
 }
 
 export function screenshotPayload(value: unknown): { mime: string; data: string } {
@@ -652,11 +658,15 @@ export function screenshotPayload(value: unknown): { mime: string; data: string 
 export interface CapturedFusionInspection {
   snapshot: FusionEngineeringSnapshotDto;
   revision: string;
+  /** Token-free engineering fingerprint hash computed by the same in-Fusion
+   * script execution as the snapshot; the rollback baseline that verifiedUndo
+   * compares against with the standalone fingerprint helper. */
+  fingerprint?: string;
   screenshots: FusionScreenshotDto[];
   cameraRestored: boolean;
 }
 
-export type CapturedFusionEngineeringState = Pick<CapturedFusionInspection, "snapshot" | "revision">;
+export type CapturedFusionEngineeringState = Pick<CapturedFusionInspection, "snapshot" | "revision" | "fingerprint">;
 
 export class FusionInspectionCaptureError extends Error {
   constructor(message: string, readonly cameraRestored: boolean, options?: ErrorOptions) {
@@ -691,7 +701,6 @@ export async function captureFusionInspection(
   captureViews = false,
 ): Promise<CapturedFusionInspection> {
   const engineering = await captureFusionEngineeringState(client, expectedDocument);
-  const snapshot = engineering.snapshot;
   // Rendering the multi-view sheet requires sweeping the live camera through each
   // orientation, which is exactly what makes the Fusion canvas flicker. Only pay
   // that cost - and only feed pixels to the model - when a caller actually wants a
@@ -700,7 +709,7 @@ export async function captureFusionInspection(
   // flicker, no wasted image budget. The camera never moves, so it is trivially
   // "restored".
   if (!captureViews) {
-    return { snapshot, revision: engineering.revision, screenshots: [], cameraRestored: true };
+    return { ...engineering, screenshots: [], cameraRestored: true };
   }
   const before = await executeFusionScript(client, captureInspectionCameraScript());
   if (!isRecord(before.camera)) throw new Error("Fusion camera inspector returned no camera state");
@@ -759,7 +768,7 @@ export async function captureFusionInspection(
     const message = captureFailure instanceof Error ? captureFailure.message : String(captureFailure);
     throw new FusionInspectionCaptureError(message, cameraRestored, { cause: captureFailure });
   }
-  return { snapshot, revision: engineering.revision, screenshots, cameraRestored };
+  return { ...engineering, screenshots, cameraRestored };
 }
 
 export async function captureFusionEngineeringState(
@@ -772,5 +781,13 @@ export async function captureFusionEngineeringState(
     throw new Error(`Fusion switched away from the bound Fusion document before inspection completed (expected ${expectedDocument.dataFileId ?? expectedDocument.id}, got ${actualDocument?.dataFileId ?? actualDocument?.id ?? "none"})`);
   }
   const snapshot = canonicalizeFusionSnapshot(raw.snapshot);
-  return { snapshot, revision: fingerprintFusionSnapshot(snapshot) };
+  return {
+    snapshot,
+    revision: fingerprintFusionSnapshot(snapshot),
+    // The snapshot script computes the token-free fingerprint in the same
+    // execution, so a mutating action needs no separate fingerprint round-trip
+    // for its rollback baseline. Best-effort: an absent or malformed payload
+    // degrades the rollback to a single blind Undo, never the inspection.
+    ...(isRecord(raw.fingerprint) ? { fingerprint: hashFusionEngineeringFingerprint(raw.fingerprint) } : {}),
+  };
 }

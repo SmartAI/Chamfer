@@ -7,8 +7,10 @@ import {
   fingerprintFusionSnapshot,
 } from "./inspection";
 import { engineeringSnapshotScript } from "./inspectionScripts";
+import { engineeringFingerprintCollector } from "./integrityScripts";
+import { fingerprintFusionEngineering } from "./fingerprint";
 import { fusionActionHarnessScript } from "./actionScripts";
-import type { FusionActionRequestDto } from "@chamfer/shared";
+import type { FusionActionRequestDto, FusionCheckInput } from "@chamfer/shared";
 import { FUS_TEXT_002 } from "@chamfer/fusion-fixtures";
 
 const rawSnapshot = {
@@ -78,6 +80,46 @@ describe("Fusion engineering inspection", () => {
     expect(source).not.toMatch(/attributes\.add|\.add\(ATTR_GROUP/);
   });
 
+  it("computes the token-free rollback fingerprint inside the snapshot execution", () => {
+    // The shared collector must stay token-free: an entityToken read would push
+    // a native Undo entry, and the standalone rollback loop runs the same code.
+    expect(engineeringFingerprintCollector).not.toContain("entityToken");
+    const source = engineeringSnapshotScript();
+    expect(source).toContain("def _chamfer_engineering_fingerprint(design)");
+    expect(source).toContain('"fingerprint": _chamfer_engineering_fingerprint(design)');
+  });
+
+  it("hashes the combined snapshot fingerprint identically to the standalone rollback helper", async () => {
+    const fingerprintPayload = { designType: 1, defaultLengthUnits: "mm", parameters: [], sketches: [], extrudes: [], bodies: [{ name: "Body1", volume: 24, area: 62, faceCount: 6, edgeCount: 12 }] };
+    const client = (payload: unknown): FusionMcpClient => ({
+      connect: async () => { throw new Error("unused"); },
+      close: async () => undefined,
+      callJson: async () => ({ output: JSON.stringify(payload) }),
+    });
+
+    const captured = await captureFusionInspection(
+      client({ document: { id: "doc-1", name: "Bracket", dataFileId: "data-1" }, snapshot: rawSnapshot, fingerprint: fingerprintPayload }),
+      { id: "doc-1", name: "Bracket", dataFileId: "data-1" },
+    );
+    const standalone = await fingerprintFusionEngineering(client({ fingerprint: fingerprintPayload }), "doc-1");
+
+    expect(captured.fingerprint).toBe(standalone);
+    expect(captured.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("keeps the inspection usable when the snapshot payload carries no fingerprint", async () => {
+    const client: FusionMcpClient = {
+      connect: async () => { throw new Error("unused"); },
+      close: async () => undefined,
+      callJson: async () => ({ output: JSON.stringify({ document: { id: "doc-1", name: "Bracket", dataFileId: "data-1" }, snapshot: rawSnapshot }) }),
+    };
+
+    const captured = await captureFusionInspection(client, { id: "doc-1", name: "Bracket", dataFileId: "data-1" });
+
+    expect(captured.fingerprint).toBeUndefined();
+    expect(captured.snapshot.bodies).toHaveLength(1);
+  });
+
   it("supplies trusted entity registration and fails closed on ambiguous token resolution", () => {
     const request = {
       actionId: "action-1", document: { id: "doc", name: "Part" }, expectedEvidenceId: "evidence",
@@ -137,7 +179,7 @@ describe("Fusion engineering inspection", () => {
   });
 
   it("evaluates supported typed checks and reports unknown kinds explicitly", () => {
-    const results = evaluateFusionChecks(canonicalizeFusionSnapshot(rawSnapshot), [
+    const requested: FusionCheckInput[] = [
       { kind: "body-count", expected: 1 },
       { kind: "dimensions", expectedMm: [80, 30, 10], toleranceMm: 0.01 },
       { kind: "volume", minMm3: 23999, maxMm3: 24001 },
@@ -157,12 +199,17 @@ describe("Fusion engineering inspection", () => {
       { kind: "visual-evidence", requiredViews: ["front", "top", "isometric"] },
       { kind: "curvature-continuity", expected: "G2" },
       { kind: "volume" },
-    ], { views: ["front", "top", "isometric"], cameraRestored: true });
+    ];
+    const results = evaluateFusionChecks(canonicalizeFusionSnapshot(rawSnapshot), requested,
+      { views: ["front", "top", "isometric"], cameraRestored: true });
 
     expect(results.map((result) => result.status)).toEqual([
       "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "passed", "unsupported", "failed",
     ]);
     expect(results[16]?.detail).toContain("curvature-continuity");
+    // Every verdict echoes the exact check it evaluated: clients attribute
+    // statuses by this echo, so it must be present even for unsupported kinds.
+    expect(results.map((result) => result.input)).toEqual(requested);
   });
 
   it("fails native constraint, angle-expression, and pattern-occurrence mismatches", () => {

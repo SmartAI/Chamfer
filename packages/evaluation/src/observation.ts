@@ -169,7 +169,7 @@ function evidenceFor(
   }
   if (contracts.some((contract) => contract.status === "current")) evidence.add("proof-contract");
   const gatePassed = messages.some((message) => {
-    if (message.role !== "toolResult" || message.toolName !== "run_build123d" || message.isError === true) return false;
+    if (message.role !== "toolResult" || (message.toolName !== "run_build123d" && message.toolName !== "execute_cad_change") || message.isError === true) return false;
     const details = record(message.details);
     const measurements = record(details?.measurements);
     if (measurements?.component === "probe") return false;

@@ -17,6 +17,8 @@ export interface StartServerOptions {
   dbPath: string;
   /** Absolute path to the built client; static hosting is skipped if absent. */
   clientDist?: string;
+  /** Authored agent skill root; inferred from clientDist in packaged builds. */
+  agentSkillsDir?: string;
   port?: number;
 }
 
@@ -42,7 +44,11 @@ export async function startServer(opts: StartServerOptions) {
     );
   }
   const llm = process.env.CHAMFER_FAKE_LLM === "1" ? fakeLlm() : realLlm();
-  const app = createApp(db, llm, { dataDir: dirname(opts.dbPath) });
+  const app = createApp(db, llm, {
+    dataDir: dirname(opts.dbPath),
+    ...(opts.clientDist ? { clientAssetsDir: opts.clientDist } : {}),
+    ...(opts.agentSkillsDir ? { agentSkillsDir: opts.agentSkillsDir } : {}),
+  });
 
   // Production static hosting: when a built client is available, serve it from
   // this server so one process runs the whole app. The API routes registered

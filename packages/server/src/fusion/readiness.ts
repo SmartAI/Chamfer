@@ -24,7 +24,7 @@ import {
 import { FusionActionLeaseUnavailableError, type FusionActionLeaseContext, type FusionActionRuntime } from "./action";
 import { FusionLifecycleRuntimeError, type FusionLifecycleRuntime } from "./lifecycle";
 import { fusionActionHarnessScript } from "./actionScripts";
-import { fingerprintFusionEngineering, undoFusionOnce, undoFusionUntilFingerprint } from "./fingerprint";
+import { undoFusionOnce, undoFusionUntilFingerprint } from "./fingerprint";
 import { currentFusionRecovery } from "./recoveryStore";
 import type { FusionActionRequestDto } from "@chamfer/shared";
 import { fusionIntegrityAccessFromEnv } from "./integrityGate";
@@ -299,13 +299,6 @@ export class FusionConnector implements FusionReadinessProvider, FusionDocumenta
     });
   }
 
-  /** Token-free engineering fingerprint of the active design, via the exact
-   * helper the integrity probe certifies against live Fusion. */
-  private async engineeringFingerprintUnlocked(document: FusionDocumentIdentityDto): Promise<string> {
-    if (!this.negotiated) throw new Error("Fusion fingerprint requires a connected compatible MCP session");
-    return fingerprintFusionEngineering(this.negotiated.client, document.id);
-  }
-
   async runExclusive<T>(operation: (context: FusionActionLeaseContext) => Promise<T>): Promise<T> {
     if (this.mutationReserved) throw new FusionActionLeaseUnavailableError("The Fusion endpoint action lease is unavailable.");
     this.mutationReserved = true;
@@ -340,7 +333,6 @@ export class FusionConnector implements FusionReadinessProvider, FusionDocumenta
           if (!this.negotiated) throw new Error("Fusion Undo requires a connected compatible MCP session");
           await undoFusionOnce(this.negotiated.client);
         },
-        engineeringFingerprint: (document) => this.engineeringFingerprintUnlocked(document),
         verifiedUndo: async (document, target, maxSteps) => {
           // Trusted post-action inspection reads entityToken on the new entities,
           // which pushes extra native Undo entries on top of the command. A single

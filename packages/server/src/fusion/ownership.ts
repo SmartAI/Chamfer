@@ -26,6 +26,7 @@ import { latestChamferProducedFusionAction, latestCompletedFusionOperationalCont
 import { getFusionReconciliation, recordFusionReconciliation } from "./reconciliationStore";
 import { refreshFusionChecksForManualState } from "./reconciliation";
 import { currentFusionRecovery } from "./recoveryStore";
+import { getDesign, updateFusionDesignIdentity } from "../designStore";
 
 export class FusionOwnershipError extends Error {
   constructor(message: string, readonly status: 404 | 409 | 503) {
@@ -97,8 +98,13 @@ export class FusionOwnership {
     const inspected = await this.readiness.current();
     if (!inspected.document) throw new FusionOwnershipError("No active Fusion document is available to bind.", 503);
     const document = inspected.document;
+    const conversation = getConversation(this.db, conversationId)!;
+    const design = conversation.designId ? getDesign(this.db, conversation.designId) : undefined;
+    if (design?.fusionDocument && design.fusionDocument.id !== document.id) {
+      throw new FusionOwnershipError("The active Fusion document is not this design's authoritative document.", 409);
+    }
 
-    return withImmediateTransaction(this.db, () => {
+    const binding = withImmediateTransaction(this.db, () => {
       const existing = getFusionBinding(this.db, conversationId);
       if (existing) {
         if (existing.endpoint !== inspected.endpoint ||
@@ -134,6 +140,8 @@ export class FusionOwnership {
         managed ? "read-only" : "owner",
       );
     });
+    updateFusionDesignIdentity(this.db, conversationId, binding.document);
+    return binding;
   }
 
   async transfer(conversationId: string): Promise<FusionDocumentBindingDto> {

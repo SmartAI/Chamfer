@@ -93,6 +93,28 @@ interface GenerationInputSummary {
   toolCallCount: number;
 }
 
+export function agentRunTraceAttributes(run: AgentRunLifecycleDto) {
+  return {
+    sessionId: langfuseSessionId(run.conversationId),
+    traceName: "chamfer-agent-run",
+    tags: run.evaluation ? ["agent-run", "evaluation"] : ["agent-run"],
+    version: run.agentConfiguration.identityHash,
+    metadata: {
+      release: run.release,
+      agentConfigurationName: run.agentConfiguration.name,
+      agentConfigurationIdentityHash: run.agentConfiguration.identityHash,
+      provider: run.agentConfiguration.provider,
+      model: run.agentConfiguration.model,
+      ...(run.evaluation ? {
+        evaluationCaseExecutionId: run.evaluation.caseExecutionId,
+        evaluationCaseId: run.evaluation.caseId,
+        evaluationCorpusVersion: run.evaluation.corpusVersion,
+        evaluationRepetition: String(run.evaluation.repetition),
+      } : {}),
+    },
+  };
+}
+
 interface GenerationOutputSummary {
   blockCount: number;
   textCharacters: number;
@@ -232,26 +254,7 @@ export class AgentRunTraceManager {
   }
 
   private withIdentity<T>(run: AgentRunLifecycleDto, fn: () => T): T {
-    const metadata: Record<string, string> = {
-      release: run.release,
-      agentConfigurationHash: run.agentConfiguration.identityHash,
-      provider: run.agentConfiguration.provider,
-      model: run.agentConfiguration.model,
-      skillMode: run.agentConfiguration.skillMode,
-      ...(run.evaluation ? {
-        evaluationCaseExecutionId: run.evaluation.caseExecutionId,
-        evaluationCaseId: run.evaluation.caseId,
-        evaluationCorpusVersion: run.evaluation.corpusVersion,
-        evaluationRepetition: String(run.evaluation.repetition),
-      } : {}),
-    };
-    return propagateAttributes({
-      sessionId: langfuseSessionId(run.conversationId),
-      traceName: "chamfer-agent-run",
-      tags: run.evaluation ? ["agent-run", "evaluation"] : ["agent-run"],
-      version: run.agentConfiguration.identityHash,
-      metadata,
-    }, fn);
+    return propagateAttributes(agentRunTraceAttributes(run), fn);
   }
 
   private child(

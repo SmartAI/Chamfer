@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../db";
 import { createApp } from "../app";
 import type { ConversationDto, MessageDto, AttachmentDto } from "@chamfer/shared";
+import { appendFusionRecovery, currentFusionRecovery } from "../fusion/recoveryStore";
 
 function makeApp() {
   return createApp(openDb(":memory:"));
@@ -72,7 +73,7 @@ describe("conversations routes", () => {
   });
 
   it("supports the full conversation lifecycle", async () => {
-    const app = makeApp();
+    const { app, db } = makePersistentApp();
 
     // Create conversation
     const createRes = await app.request("/api/conversations", {
@@ -168,6 +169,10 @@ describe("conversations routes", () => {
 
     const afterDeleteAttachRes = await app.request(`/api/attachments/${attachment.id}`);
     expect(afterDeleteAttachRes.status).toBe(404);
+    expect(db.prepare("SELECT 1 FROM conversation_events WHERE conversation_id = ?").get(conversation.id))
+      .toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM conversation_ui_projection WHERE conversation_id = ?").get(conversation.id))
+      .toBeUndefined();
   });
 
   it("returns 409 with a structured error on duplicate (conversation_id, seq)", async () => {
@@ -217,8 +222,28 @@ describe("conversations routes", () => {
     db.prepare(`INSERT INTO fusion_save_evidence
       (id, conversation_id, captured_at, preceding_document_json, resulting_document_json, revision, inspection_json)
       VALUES ('save-evidence-1', ?, 1, '{}', '{}', 'rev-1', '{}')`).run(conversation.id);
+    const endpoint = "http://127.0.0.1:27182/mcp";
+    appendFusionRecovery(db, {
+      conversationId: conversation.id,
+      endpoint,
+      actionId: "action-1",
+      state: "hard-recovery",
+      failureClass: "disconnect",
+      diagnosis: "Endpoint state is unresolved.",
+      allowedOperation: "inspect-resulting-state",
+      precedingRevision: "rev-0",
+    }, 1);
+    await app.request(`/api/conversations/${conversation.id}/ui-state/panel`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ value: "inspection" }),
+    });
 
     expect((await app.request(`/api/conversations/${conversation.id}`, { method: "DELETE" })).status).toBe(200);
+    expect(currentFusionRecovery(db, endpoint)).toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM conversation_events WHERE conversation_id = ?").get(conversation.id)).toBeUndefined();
+    expect(db.prepare("SELECT 1 FROM conversation_ui_projection WHERE conversation_id = ?").get(conversation.id))
+      .toBeUndefined();
     expect(db.prepare("SELECT 1 FROM fusion_inspections WHERE conversation_id = ?").get(conversation.id)).toBeUndefined();
     expect(db.prepare("SELECT 1 FROM fusion_action_ledger WHERE conversation_id = ?").get(conversation.id)).toBeDefined();
     expect(db.prepare("SELECT 1 FROM fusion_reconciliation_ledger WHERE conversation_id = ?").get(conversation.id)).toBeDefined();
@@ -390,7 +415,7 @@ describe("content-addressed image attachments", () => {
     const normalized = {
       role: "toolResult",
       toolCallId: "diagnostic-run",
-      toolName: "run_build123d",
+      toolName: "execute_cad_change",
       content: [
         { type: "text", text: "Plan conformance: FAILED\n- planned check is missing" },
         { type: "attachment-reference", attachmentId: "diagnostic-sheet", kind: "view-sheet", mimeType: "image/png" },

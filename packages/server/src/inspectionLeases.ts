@@ -6,7 +6,8 @@ import type {
   InspectionObservationDto,
   InspectionObservationInput,
 } from "@chamfer/shared";
-import { AttachmentStorageError, type AttachmentStore } from "./attachmentStore";
+import { AttachmentStorageError, type ImageBlobStore } from "./imageBlobStore";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 interface EvidenceRow {
   id: string;
@@ -93,16 +94,21 @@ function toDto(db: DatabaseSync, row: LeaseRow): InspectionLeaseDto {
   };
 }
 
-export function listInspectionLeases(db: DatabaseSync, conversationId: string, status?: "open" | "closed"): InspectionLeaseDto[] {
+export function listLegacyInspectionLeases(db: DatabaseSync, conversationId: string, status?: "open" | "closed"): InspectionLeaseDto[] {
   const rows = (status
     ? db.prepare("SELECT * FROM inspection_leases WHERE conversation_id = ? AND status = ? ORDER BY opened_at ASC, rowid ASC").all(conversationId, status)
     : db.prepare("SELECT * FROM inspection_leases WHERE conversation_id = ? ORDER BY opened_at ASC, rowid ASC").all(conversationId)) as unknown as LeaseRow[];
   return rows.map((row) => toDto(db, row));
 }
 
+export function listInspectionLeases(db: DatabaseSync, conversationId: string, status?: "open" | "closed"): InspectionLeaseDto[] {
+  const leases = projectEvidence(db, conversationId).inspectionLeases;
+  return status ? leases.filter((lease) => lease.status === status) : leases;
+}
+
 export async function openInspectionLease(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   conversationId: string,
   input: InspectEvidenceInput,
   idempotencyKey?: string,
@@ -116,11 +122,12 @@ export async function openInspectionLease(
   }
   const purpose = input.purpose.trim();
   if (idempotencyKey) {
-    const existing = db.prepare("SELECT * FROM inspection_leases WHERE id = ?").get(idempotencyKey) as unknown as LeaseRow | undefined;
-    if (existing) {
-      const exact = existing.conversation_id === conversationId && existing.purpose === purpose &&
-        evidenceFor(db, existing.id).map((item) => item.attachmentId).join("\0") === input.evidenceIds.join("\0");
-      if (exact) return toDto(db, existing);
+    const existing = projectEvidence(db, conversationId).events.find((event) =>
+      event.type === "inspection-lease.opened" && event.data.commandIdempotencyKey === idempotencyKey);
+    if (existing && "lease" in existing.data) {
+      const exact = existing.data.lease.conversationId === conversationId && existing.data.lease.purpose === purpose &&
+        existing.data.lease.evidence.map((item) => item.attachmentId).join("\0") === input.evidenceIds.join("\0");
+      if (exact) return existing.data.lease;
       throw new InspectionLeaseError("idempotency key conflicts with an existing inspection lease", "conflict");
     }
   }
@@ -149,26 +156,20 @@ export async function openInspectionLease(
     rows.push(row);
   }
 
-  const lease: LeaseRow = {
+  const lease: InspectionLeaseDto = {
     id: idempotencyKey ?? crypto.randomUUID(),
-    conversation_id: conversationId,
+    conversationId,
     purpose,
     status: "open",
-    opened_at: Date.now(),
-    closed_at: null,
+    openedAt: Date.now(),
+    evidence: rows.map((row) => ({ attachmentId: row.id, kind: row.kind, mime: row.mime })),
   };
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare("INSERT INTO inspection_leases (id, conversation_id, purpose, status, opened_at) VALUES (?, ?, ?, 'open', ?)")
-      .run(lease.id, conversationId, lease.purpose, lease.opened_at);
-    const insert = db.prepare("INSERT INTO inspection_lease_evidence (lease_id, attachment_id, display_order) VALUES (?, ?, ?)");
-    rows.forEach((row, index) => insert.run(lease.id, row.id, index));
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return toDto(db, lease);
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:inspection-lease:${lease.id}:opened`,
+    type: "inspection-lease.opened",
+    data: { lease, ...(idempotencyKey ? { commandIdempotencyKey: idempotencyKey } : {}) },
+  });
+  return lease;
 }
 
 function validateObservation(input: InspectionObservationInput): InspectionObservationInput {
@@ -205,38 +206,39 @@ export function recordInspectionObservation(
 ): InspectionLeaseDto {
   const input = validateObservation(raw);
   if (idempotencyKey) {
-    const existing = db.prepare("SELECT * FROM inspection_observations WHERE id = ?").get(idempotencyKey) as unknown as ObservationRow | undefined;
-    if (existing) {
-      const exact = existing.lease_id === leaseId &&
-        existing.relevant_views_json === JSON.stringify(input.relevantViews) &&
-        existing.facts_json === JSON.stringify(input.facts) &&
-        existing.affected_specifications_json === JSON.stringify(input.affectedSpecifications) &&
-        existing.affected_components_json === JSON.stringify(input.affectedComponents) &&
-        (existing.no_affected_entity_reason ?? undefined) === (input.noAffectedEntityReason ?? undefined);
-      const lease = db.prepare("SELECT * FROM inspection_leases WHERE id = ? AND conversation_id = ?")
-        .get(leaseId, conversationId) as unknown as LeaseRow | undefined;
-      if (exact && lease) return toDto(db, lease);
+    const existing = projectEvidence(db, conversationId).events.find((event) =>
+      event.type === "inspection-lease.closed" && event.data.commandIdempotencyKey === idempotencyKey);
+    if (existing && "lease" in existing.data) {
+      const observation = existing.data.lease.observation;
+      const exact = existing.data.lease.id === leaseId && observation &&
+        JSON.stringify(observation.relevantViews) === JSON.stringify(input.relevantViews) &&
+        JSON.stringify(observation.facts) === JSON.stringify(input.facts) &&
+        JSON.stringify(observation.affectedSpecifications) === JSON.stringify(input.affectedSpecifications) &&
+        JSON.stringify(observation.affectedComponents) === JSON.stringify(input.affectedComponents) &&
+        (observation.noAffectedEntityReason ?? undefined) === (input.noAffectedEntityReason ?? undefined);
+      if (exact) return existing.data.lease;
       throw new InspectionLeaseError("idempotency key conflicts with an existing inspection observation", "conflict");
     }
   }
-  const lease = db.prepare("SELECT * FROM inspection_leases WHERE id = ? AND conversation_id = ?").get(leaseId, conversationId) as unknown as LeaseRow | undefined;
+  const lease = projectEvidence(db, conversationId).inspectionLeases.find((candidate) => candidate.id === leaseId);
   if (!lease) throw new InspectionLeaseError("inspection lease not found", "not-found");
   if (lease.status !== "open") throw new InspectionLeaseError("inspection lease is already closed");
   const now = Date.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`INSERT INTO inspection_observations
-      (id, lease_id, relevant_views_json, facts_json, affected_specifications_json,
-       affected_components_json, no_affected_entity_reason, recorded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(idempotencyKey ?? crypto.randomUUID(), leaseId, JSON.stringify(input.relevantViews), JSON.stringify(input.facts),
-        JSON.stringify(input.affectedSpecifications), JSON.stringify(input.affectedComponents),
-        input.noAffectedEntityReason ?? null, now);
-    db.prepare("UPDATE inspection_leases SET status = 'closed', closed_at = ? WHERE id = ? AND status = 'open'").run(now, leaseId);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return toDto(db, { ...lease, status: "closed", closed_at: now });
+  const closed: InspectionLeaseDto = {
+    ...lease,
+    status: "closed",
+    closedAt: now,
+    observation: {
+      id: idempotencyKey ?? crypto.randomUUID(),
+      leaseId,
+      ...input,
+      recordedAt: now,
+    },
+  };
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:inspection-lease:${closed.id}:closed`,
+    type: "inspection-lease.closed",
+    data: { lease: closed, ...(idempotencyKey ? { commandIdempotencyKey: idempotencyKey } : {}) },
+  });
+  return closed;
 }

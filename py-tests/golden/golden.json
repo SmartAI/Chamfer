@@ -26,6 +26,7 @@
           "kind": "through"
         }
       ],
+      "submittedChecks": [],
       "topology": {
         "edges": 27,
         "faces": 11,
@@ -109,6 +110,7 @@
         "pin"
       ],
       "holes": [],
+      "submittedChecks": [],
       "topology": {
         "edges": 15,
         "faces": 9,
@@ -132,6 +134,7 @@
       ],
       "children": [],
       "holes": [],
+      "submittedChecks": [],
       "topology": {
         "edges": 12,
         "faces": 6,

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
+import type { CheckSetComparison } from "./verificationChecks";
 
 export const PROXY_AUTH_TOKEN = "chamfer-local";
 
@@ -301,7 +302,7 @@ export interface FusionEngineeringSnapshotDto {
 // Fixed-length homogeneous arrays instead of Type.Tuple: TypeBox tuples
 // serialize to draft-07 syntax (items: [...] + additionalItems), which strict
 // draft-2020-12 tool-schema validators (Anthropic and OpenAI-compatible proxies
-// that enforce it) reject with a 400 on the whole run_fusion_action schema.
+// that enforce it) reject with a 400 on the whole legacy Fusion action schema.
 // minItems/maxItems arrays are valid across drafts and keep the same wire shape.
 // This mirrors the same fix already applied in packages/client planChecks.ts.
 const NumberTripleSchema = Type.Array(Type.Number(), { minItems: 3, maxItems: 3 });
@@ -355,6 +356,11 @@ export interface FusionCheckResultDto {
   kind: string;
   status: "passed" | "failed" | "unsupported";
   detail: string;
+  /** The exact caller-requested check this verdict evaluated. Present on every
+   * verdict derived from a requested check; absent on server-composed results
+   * (structural, intent-preservation, camera-restoration). Callers must match
+   * verdicts to their requests by this echo, never by array position. */
+  input?: FusionCheckInput;
 }
 
 export interface FusionScreenshotDto {
@@ -572,6 +578,8 @@ export interface GenerateTitleDto {
 export interface ConversationDto {
   id: string;
   title: string;
+  /** Stable design aggregate discussed by this conversation, or null after that design is deleted. */
+  designId?: string | null;
   cadEnvironment: CadEnvironment;
   createdAt: number;
   updatedAt: number;
@@ -580,6 +588,117 @@ export interface ConversationDto {
   sourceSpecificationsRequired?: boolean;
   /** Verdict of the most recent verify-gate-bearing run in this conversation. */
   lastGateStatus?: Gate["status"];
+  /** Active local-server run, when this conversation is driven headlessly. */
+  liveRun?: Pick<HeadlessRunDto, "id" | "status" | "modelName" | "updatedAt">;
+}
+
+export type HeadlessRunStatus = "starting" | "running" | "completed" | "stopped" | "crashed";
+
+export interface HeadlessRunDto {
+  id: string;
+  conversationId: string;
+  status: HeadlessRunStatus;
+  modelName: string;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  resumable: boolean;
+  lastEventSeq: number;
+  error?: string;
+}
+
+export type HeadlessRunEvent =
+  | { seq: number; type: "run"; run: HeadlessRunDto }
+  | { seq: number; type: "session"; state: unknown }
+  | { seq: number; type: "mesh"; mesh: { positions: number[]; indices: number[] }; measurements: Measurements }
+  | { seq: number; type: "artifact"; artifact: ArtifactDto; gate?: Gate };
+
+export type HeadlessRunEventInput = HeadlessRunEvent extends infer Event
+  ? Event extends HeadlessRunEvent
+    ? Omit<Event, "seq">
+    : never
+  : never;
+
+export interface HeadlessRuntimeCapabilitiesDto {
+  headlessRuns: boolean;
+  /** Whether this deployment can run agent turns. The local server hosts pi
+   * agent sessions in-process, so it answers true; the Cloudflare Worker
+   * answers true only when a per-user agent container is configured. */
+  agentHosting: boolean;
+  /** Whether this deployment funds turns for users with no API key of their
+   * own: the online demo quota, or a fake-LLM dev stack. Keyless turns then
+   * run pinned to `demoModel`; the client gates the composer and labels the
+   * status bar with it. */
+  demoQuota: boolean;
+  /** The model keyless (demo-funded) turns are pinned to; present exactly
+   * when demoQuota is true. Its provider feeds the shared funding rule
+   * (resolveTurnFunding), where a user key for it makes fallback turns BYOK. */
+  demoModel?: { id: string; name: string; provider: Provider };
+}
+
+/** This account's lifetime free-demo spend against its cap, in dollars (and the
+ * micro-USD source values). Served by the online worker's GET /api/online/budget;
+ * absent on the local server, which has no demo quota. `capUsd` is deployment
+ * config (not fixed at $2), so the client renders the cap it is told. */
+export interface OnlineBudgetDto {
+  spentUsd: number;
+  capUsd: number;
+  spentMicroUsd: number;
+  capMicroUsd: number;
+}
+
+export interface HeadlessRunImageInput {
+  name: string;
+  mimeType: string;
+  data: string;
+}
+
+export interface StartHeadlessRunInput {
+  text: string;
+  images?: HeadlessRunImageInput[];
+}
+
+export interface SteerHeadlessRunInput {
+  id: string;
+  text: string;
+  images?: HeadlessRunImageInput[];
+}
+
+export interface DesignProvenanceDto {
+  designId: string;
+  revision: number;
+}
+
+export interface DesignDto {
+  id: string;
+  name: string;
+  description: string;
+  cadEnvironment: CadEnvironment;
+  /** The latest accepted revision. It does not change while an agent run is in flight. */
+  currentRevision: number | null;
+  referencedConversationCount: number;
+  createdAt: number;
+  updatedAt: number;
+  /** Fusion document identity remains authoritative and is only mirrored for library display. */
+  fusionDocument?: { id: string; name: string };
+  provenance?: DesignProvenanceDto;
+}
+
+export interface DesignRevisionDto {
+  id: string;
+  designId: string;
+  revision: number;
+  pySource: string | null;
+  parameters: ParamSpec[];
+  gate: Gate;
+  measurements: Measurements | null;
+  sourceConversationId: string | null;
+  sourceArtifactId: string | null;
+  /** Authoritative Fusion engineering revision for Fusion-backed history entries. */
+  fusionRevision?: string;
+  sourceFusionActionId?: string;
+  provenance?: DesignProvenanceDto;
+  createdAt: number;
 }
 
 export interface MessageDto {
@@ -651,7 +770,8 @@ export type DesignEscalationKind =
   | "conflicting-specifications"
   | "missing-physical-scale"
   | "materially-different-interpretations"
-  | "explicit-requirement-change";
+  | "explicit-requirement-change"
+  | "verification-check-relaxation";
 
 export interface OpenDesignEscalationInput {
   escalationId: string;
@@ -659,6 +779,8 @@ export interface OpenDesignEscalationInput {
   question: string;
   affectedSpecificationIds: string[];
   basis: string;
+  /** The audited held proposal this escalation is allowed to authorize. */
+  verificationCheckAttemptId?: string;
 }
 
 export interface DesignEscalationDto extends OpenDesignEscalationInput {
@@ -667,6 +789,44 @@ export interface DesignEscalationDto extends OpenDesignEscalationInput {
   openedAt: number;
   resolvedAt?: number;
   resolutionSpecificationIds: string[];
+}
+
+/** Durable, conversation-scoped commitments projected into every model turn. */
+export interface DurableNoteDto {
+  id: string;
+  conversationId: string;
+  kind: "open-question" | "user-decision";
+  text: string;
+  status: "active" | "resolved";
+  sourceIdentity: string;
+  timestamp: number;
+}
+
+export type DurableNoteProjection = Omit<DurableNoteDto, "conversationId">;
+
+/** Derives the durable-note compatibility view from authoritative typed state. */
+export function deriveDurableNotes(
+  sourceSpecifications: readonly Pick<SourceSpecificationDto, "id" | "requirement" | "status" | "timestamp">[],
+  designEscalations: readonly Pick<DesignEscalationDto, "escalationId" | "question" | "status" | "openedAt">[],
+): DurableNoteProjection[] {
+  return [
+    ...sourceSpecifications.map((specification): DurableNoteProjection => ({
+      id: `decision:${specification.id}`,
+      kind: "user-decision",
+      text: specification.requirement,
+      status: specification.status === "active" ? "active" : "resolved",
+      sourceIdentity: specification.id,
+      timestamp: specification.timestamp,
+    })),
+    ...designEscalations.map((escalation): DurableNoteProjection => ({
+      id: `question:${escalation.escalationId}`,
+      kind: "open-question",
+      text: escalation.question,
+      status: escalation.status === "pending" ? "active" : "resolved",
+      sourceIdentity: escalation.escalationId,
+      timestamp: escalation.openedAt,
+    })),
+  ].sort((left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id));
 }
 
 export type ProofContractCriterionCategory =
@@ -729,6 +889,8 @@ export interface ProofContractDerivationDto {
 
 export interface CreateProofContractInput {
   derivation: ProofContractDerivationDto;
+  /** Resolved, user-visible exception authorizing this exact relaxation path. */
+  relaxationEscalationId?: string;
 }
 
 export const TEXT_PROOF_POLICY = {
@@ -749,6 +911,11 @@ export interface ProofContractDto {
   proofStatus: "pending" | "stale";
   frozenAt: number;
   derivation: ProofContractDerivationDto;
+  checkRevision?: {
+    comparison: CheckSetComparison;
+    authorizedByEscalationId?: string;
+    authorizedBySourceSpecificationIds?: string[];
+  };
 }
 
 export type ProofEvidenceState =
@@ -785,6 +952,7 @@ export interface ProofReportGateDto {
   state: Extract<ProofEvidenceState, "proven" | "failed" | "unavailable">;
   verdict: Gate["status"] | "unavailable";
   checks: GateCheck[];
+  checkSet?: { contractId: string; revision: number };
 }
 
 export interface ProofReportPlanConformanceDto {
@@ -842,6 +1010,39 @@ export interface ProofReportDto {
 
 // ---------- Agent-run lifecycle observability ----------
 
+/** Pillars shared by deterministic benches and production run scoring. */
+export const AGENT_EVALUATION_PILLARS = [
+  "taskSuccess",
+  "gateIntegrity",
+  "cost",
+  "latency",
+  "toolErrorRate",
+] as const;
+export type AgentEvaluationPillar = typeof AGENT_EVALUATION_PILLARS[number];
+export interface AgentEvaluationComparablePillarValues {
+  taskSuccess: { passed: boolean | null };
+  gateIntegrity: { passed: boolean | null };
+  cost: { providerCostUsd: number };
+  latency: { totalMs: number };
+  toolErrorRate: { errors: number; calls: number; rate: number };
+}
+export type AgentEvaluationPillars<
+  Values extends { [Pillar in AgentEvaluationPillar]: AgentEvaluationComparablePillarValues[Pillar] },
+> = { [Pillar in AgentEvaluationPillar]: Values[Pillar] };
+
+/** Artifact-derived configuration identity shared by offline and online evaluation. */
+export interface AgentConfigurationIdentity {
+  name: string;
+  identityHash: string;
+}
+
+export function isAgentConfigurationIdentity(value: unknown): value is AgentConfigurationIdentity {
+  if (!value || typeof value !== "object") return false;
+  const identity = value as Partial<AgentConfigurationIdentity>;
+  return typeof identity.name === "string" && identity.name.length > 0 &&
+    typeof identity.identityHash === "string" && /^[a-f0-9]{64}$/.test(identity.identityHash);
+}
+
 /** Wire contract for browser-owned agent lifecycle events. */
 export const AGENT_RUN_LIFECYCLE_VERSION = 1 as const;
 
@@ -853,12 +1054,11 @@ export type AgentRunOutcome =
   | "aborted"
   | "incomplete";
 
-export interface AgentConfigurationTraceIdentity {
+export interface AgentConfigurationTraceIdentity extends AgentConfigurationIdentity {
   /** SHA-256 of behavior-affecting configuration inputs. */
   identityHash: string;
   provider: string;
   model: string;
-  skillMode: string;
 }
 
 export interface AgentRunEvaluationIdentity {
@@ -867,6 +1067,13 @@ export interface AgentRunEvaluationIdentity {
   corpusVersion: string;
   repetition: number;
 }
+
+/** Browser-query contract for executable, development-only benchmark variants. */
+export const AGENT_CONFIGURATION_VARIANT_QUERY_PARAMETER = "chamferAgentConfiguration";
+export const BENCH_DETERMINISTIC_TIMING_QUERY_PARAMETER = "chamferBenchDeterministicTiming";
+export const DEGRADED_BENCH_CONFIGURATION_MARKER = "[Chamfer degraded bench configuration]";
+export const EXECUTABLE_BENCH_CONFIGURATIONS = ["current", "degraded"] as const;
+export type ExecutableBenchConfiguration = typeof EXECUTABLE_BENCH_CONFIGURATIONS[number];
 
 interface AgentRunEventBase {
   version: typeof AGENT_RUN_LIFECYCLE_VERSION;
@@ -1210,6 +1417,125 @@ export interface ShapeProofRecord {
   };
 }
 
+/** Versioned product policy for controlled render-to-render comparison. */
+export const MEASURED_VISUAL_COMPARISON_POLICY = {
+  id: "normalized-render-comparison",
+  version: 1,
+  algorithm: { id: "opencv-silhouette-edge-regions", version: 1 },
+  thresholds: {
+    silhouetteOverlapMin: 0.995,
+    edgeAlignmentMin: 0.97,
+  },
+  edgeTolerancePx: 1,
+  regionGrid: { columns: 4, rows: 4 },
+  preprocessing: {
+    silhouetteThreshold: 12,
+    binaryMaximum: 255,
+    morphology: { operation: "open", shape: "ellipse", kernel: { width: 3, height: 3 } },
+    blur: { kernel: { width: 3, height: 3 }, sigma: 0 },
+    canny: { lowThreshold: 40, highThreshold: 120 },
+  },
+  controlledRender: {
+    tileSizePx: 350,
+    columns: 4,
+    rows: 2,
+    camera: {
+      padding: 1.15,
+      minimumHalfSize: 1,
+      distanceRadiusFactor: 3,
+      minimumDistance: 3,
+      clipRadiusFactor: 1.5,
+      minimumNear: 0.01,
+    },
+    views: [
+      { label: "isometric", direction: [1, -1, 1] },
+      { label: "front", direction: [0, -1, 0] },
+      { label: "back", direction: [0, 1, 0] },
+      { label: "left", direction: [-1, 0, 0] },
+      { label: "right", direction: [1, 0, 0] },
+      { label: "top", direction: [0, 0, 1], up: [0, 1, 0] },
+      { label: "bottom", direction: [0, 0, -1], up: [0, 1, 0] },
+    ],
+    presentation: {
+      panelBackground: "#f1f3f5",
+      dimensionsBackground: "#e8ebef",
+      labelBackground: "#ffffff",
+      textColor: "#20242a",
+      faceLightBase: 145,
+      faceLightRange: 42,
+      faceGreenOffset: 10,
+      faceBlueOffset: 24,
+    },
+  },
+} as const;
+
+export type VisualComparisonView =
+  | "isometric"
+  | "front"
+  | "back"
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "section";
+
+export interface VisualDeviationRegion {
+  column: number;
+  row: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  deviation: number;
+}
+
+export interface VisualComparisonViewScore {
+  view: VisualComparisonView;
+  verdict: "match" | "mismatch";
+  silhouetteOverlap: number;
+  edgeAlignment: number;
+  deviation: {
+    columns: number;
+    rows: number;
+    regions: VisualDeviationRegion[];
+  };
+}
+
+export interface VisualComparisonTargetScore {
+  target: {
+    kind: "prior-accepted-artifact" | "registered-render";
+    id: string;
+    artifactId?: string;
+    artifactVersion?: number;
+    inspectionSheetId?: string;
+    referenceId?: string;
+  };
+  status: "match" | "mismatch" | "unavailable";
+  views: VisualComparisonViewScore[];
+  reason?: string;
+}
+
+/** Durable, machine-originated evidence attached to one rendered CAD result. */
+export interface MeasuredVisualComparisonEvidence {
+  evidenceId: string;
+  /** `not-applicable` is valid only when an initial working candidate has no eligible accepted render baseline. */
+  status: "match" | "mismatch" | "unavailable" | "not-applicable";
+  policy: { id: string; version: number };
+  algorithm: { id: string; version: number };
+  thresholds: {
+    silhouetteOverlapMin: number;
+    edgeAlignmentMin: number;
+    edgeTolerancePx: number;
+  };
+  candidate: {
+    artifactId: string;
+    artifactVersion: number;
+    inspectionSheetId: string;
+  };
+  comparisons: VisualComparisonTargetScore[];
+  reason?: string;
+}
+
 export interface InspectEvidenceInput {
   evidenceIds: string[];
   purpose: string;
@@ -1259,6 +1585,8 @@ export interface RecordVisualVerificationInput {
   artifactId: string;
   artifactVersion: number;
   inspectionSheetId: string;
+  /** Exact measured comparison evidence interpreted by this semantic verdict. */
+  visualComparisonEvidenceId: string;
   coveredReferenceIds: string[];
   verdict: VisualVerificationVerdict;
   observations: VisualVerificationObservation[];
@@ -1274,6 +1602,8 @@ export interface RecordVisualVerificationBatchInput {
   artifactId: string;
   artifactVersion: number;
   inspectionSheetId: string;
+  /** Exact measured comparison evidence interpreted across every batch. */
+  visualComparisonEvidenceId: string;
   imageLimit: number;
   activeReferenceIds: string[];
   batchIndex: number;
@@ -1297,6 +1627,8 @@ export interface ArtifactDto {
   version: number;
   pySource: string;
   paramsJson: string | null;
+  gate?: Gate;
+  measurements?: Measurements;
   createdAt: number;
 }
 
@@ -1352,6 +1684,95 @@ export interface ModelInfoDto {
   name: string;
   /** Full pi-ai Model object, serialized; passed back verbatim to streamProxy */
   modelJson: string;
+}
+
+// ---------- Hosted LLM providers and turn funding (issue #53) ----------
+
+/** Value-level list of the Provider union above: BYOK settings keys, the
+ * online LLM proxy routes (/api/llm/<provider>), and the hosted container's
+ * egress all quantify over exactly this list. Widen it only together with a
+ * proxy route and settings keys for the new provider. */
+export const LLM_PROVIDERS: readonly Provider[] = ["anthropic", "openai", "google"];
+
+export function isLlmProvider(value: unknown): value is Provider {
+  return (LLM_PROVIDERS as readonly unknown[]).includes(value);
+}
+
+/** Display names for provider-facing copy (composer hints, key refusals). */
+export const PROVIDER_DISPLAY_NAMES: Record<Provider, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  google: "Google",
+};
+
+/** The provider named by a serialized pi-ai model; undefined when the JSON is
+ * absent, unparseable, or names none. */
+export function modelJsonProvider(modelJson: string | undefined): string | undefined {
+  if (!modelJson) return undefined;
+  try {
+    const parsed = JSON.parse(modelJson) as { provider?: unknown };
+    return typeof parsed.provider === "string" ? parsed.provider : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The per-provider Settings keys a funding decision reads. Values may be the
+ * stored secrets or the masked forms GET /api/settings serves - presence
+ * (non-empty) is all that matters. */
+export type TurnFundingKeys = Pick<SettingsDto, "anthropicApiKey" | "openaiApiKey" | "googleApiKey">;
+
+export interface TurnFundingInputs {
+  /** Provider of the user's selected Settings model; undefined when none. */
+  selectedProvider: string | undefined;
+  keys: TurnFundingKeys;
+  /** Provider of the deployment's fallback model (the demo pin, or the
+   * fake-LLM model on hermetic stacks); undefined when the deployment cannot
+   * fund keyless turns. */
+  fallbackProvider: Provider | undefined;
+}
+
+/** How the next turn is funded. One rule for every surface that must agree
+ * on it - the hosted turn seed (selectTurnModel), server-initiated calls
+ * (title generation), and the client's composer gate and status bar - so the
+ * surfaces cannot drift (issue #53).
+ *
+ * kind "run": model "selected" is the user's Settings model on their own
+ * key; model "fallback" is the deployment default, funded by the user's own
+ * key for the fallback provider when they hold one (the proxy and chat paths
+ * resolve keys user-first, so that traffic is BYOK: unpinned, unmetered) and
+ * by the demo key only otherwise.
+ * kind "blocked": the selected provider is unkeyed and nothing else can
+ * fund the turn - the client gates the composer naming missingProvider; the
+ * server still delivers the model so an API-driven turn's refusal lands on
+ * the transcript.
+ * kinds "unroutable" / "no-model": nothing can run at all. */
+export type TurnFundingVerdict =
+  | { kind: "run"; model: "selected" | "fallback"; funding: "user-key" | "demo" }
+  | { kind: "blocked"; missingProvider: Provider }
+  | { kind: "unroutable"; provider: string }
+  | { kind: "no-model" };
+
+export function resolveTurnFunding(inputs: TurnFundingInputs): TurnFundingVerdict {
+  const { selectedProvider, keys, fallbackProvider } = inputs;
+  const keyed = (provider: Provider) => Boolean(keys[`${provider}ApiKey`]);
+  if (isLlmProvider(selectedProvider) && keyed(selectedProvider)) {
+    return { kind: "run", model: "selected", funding: "user-key" };
+  }
+  if (fallbackProvider) {
+    return {
+      kind: "run",
+      model: "fallback",
+      funding: keyed(fallbackProvider) ? "user-key" : "demo",
+    };
+  }
+  if (isLlmProvider(selectedProvider)) {
+    return { kind: "blocked", missingProvider: selectedProvider };
+  }
+  if (selectedProvider) {
+    return { kind: "unroutable", provider: selectedProvider };
+  }
+  return { kind: "no-model" };
 }
 
 // ---------- CAD worker protocol ----------
@@ -1424,6 +1845,9 @@ export interface Measurements {
   clearances?: ClearanceMeasurement[];
   /** Plan evidence echoed verbatim by the harness after a valid declaration. */
   component?: string | string[];
+  /** Normalized CAD-code CHECKS retained only for plan-conformance auditing.
+   * The kernel gate executes `checks`, which come from the frozen proof contract. */
+  submittedChecks?: unknown[];
   checks?: unknown[];
   /** Child labels with no touching or interpenetrating partner. */
   floating?: string[];
@@ -1480,6 +1904,8 @@ export interface GateCheck {
   name: string;
   passed: boolean;
   detail: string;
+  /** Stable proof-contract check identity when this is a loop-owned check result. */
+  checkId?: string;
 }
 
 /** Deterministic verify-gate verdict computed by the harness on every run.
@@ -1489,20 +1915,34 @@ export interface GateCheck {
 export interface Gate {
   status: "passed" | "failed" | "error";
   checks: GateCheck[];
+  checkSet?: { contractId: string; revision: number };
 }
 
 export type CadRequest =
-  | { id: number; cmd: "run"; code: string }
+  | { id: number; cmd: "run"; code: string; frozenCheckSet?: import("./verificationChecks").FrozenVerificationCheckSet }
   | { id: number; cmd: "parseParams"; code: string }
   | { id: number; cmd: "setParams"; code: string; values: Record<string, number> }
   | { id: number; cmd: "export"; code: string; format: ExportFormat };
 
 export type CadResponse =
-  | { id: number; ok: true; cmd: "run"; stdout: string; measurements: Measurements; mesh: MeshPayload; gate?: Gate }
+  | { id: number; ok: true; cmd: "run"; stdout: string; notices?: string[]; measurements: Measurements; mesh: MeshPayload; gate?: Gate }
   | { id: number; ok: true; cmd: "parseParams"; params: ParamSpec[] }
   | { id: number; ok: true; cmd: "setParams"; code: string }
   | { id: number; ok: true; cmd: "export"; data: Uint8Array; filename: string }
   | { id: number; ok: false; cmd: CadRequest["cmd"]; error: string };
+
+/** Host-neutral CAD execution boundary shared by browser workers and Node runtimes. */
+export interface CadExecutor {
+  run(
+    code: string,
+    frozenCheckSet?: import("./verificationChecks").FrozenVerificationCheckSet,
+    timeoutMs?: number,
+  ): Promise<{ stdout: string; notices?: string[]; measurements: Measurements; mesh: MeshPayload; gate?: Gate }>;
+  parseParams(code: string, timeoutMs?: number): Promise<ParamSpec[]>;
+  setParams(code: string, values: Record<string, number>, timeoutMs?: number): Promise<string>;
+  export(code: string, format: ExportFormat, timeoutMs?: number): Promise<{ data: Uint8Array; filename: string }>;
+  dispose(): void | Promise<void>;
+}
 
 export type CadBootStatus =
   | { phase: "downloading"; detail: string }
@@ -1515,3 +1955,8 @@ export function isCadResponse(value: unknown): value is CadResponse {
   const v = value as Record<string, unknown>;
   return typeof v.id === "number" && typeof v.ok === "boolean" && typeof v.cmd === "string";
 }
+
+export * from "./evidence";
+export * from "./conversationEvents";
+export * from "./verificationChecks";
+export * from "./canonicalJson";

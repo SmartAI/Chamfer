@@ -4,10 +4,10 @@ import { createApp } from "../app";
 import { openDb } from "../db";
 
 const CONFIG = {
+  name: "current",
   identityHash: "a".repeat(64),
   provider: "openai",
   model: "gpt-5",
-  skillMode: "catalog",
 };
 
 async function createConversation(app: ReturnType<typeof createApp>, title = "Trace") {
@@ -47,9 +47,9 @@ describe("agent-run lifecycle routes", () => {
         evaluation: { caseExecutionId: "precise-box-1", caseId: "precise-box", corpusVersion: "1.0.0", repetition: 1 },
       },
       { version: 1, runId, seq: 1, timestamp: 1_010, type: "turn.started", operationId: "turn-1" },
-      { version: 1, runId, seq: 2, timestamp: 1_020, type: "tool.started", operationId: "tool-1", name: "search_docs" },
+      { version: 1, runId, seq: 2, timestamp: 1_020, type: "tool.started", operationId: "tool-1", name: "lookup_docs" },
       { version: 1, runId, seq: 3, timestamp: 1_050, type: "tool.completed", operationId: "tool-1", outcome: "ok", durationMs: 30 },
-      { version: 1, runId, seq: 4, timestamp: 1_060, type: "tool.started", operationId: "cad-1", name: "run_build123d" },
+      { version: 1, runId, seq: 4, timestamp: 1_060, type: "tool.started", operationId: "cad-1", name: "execute_cad_change" },
       { version: 1, runId, seq: 5, timestamp: 1_160, type: "tool.completed", operationId: "cad-1", outcome: "ok", durationMs: 100 },
       { version: 1, runId, seq: 6, timestamp: 1_170, type: "retry.recorded", attempt: 1, delayMs: 250 },
       { version: 1, runId, seq: 7, timestamp: 1_200, type: "turn.completed", operationId: "turn-1", outcome: "ok", durationMs: 190 },
@@ -89,6 +89,36 @@ describe("agent-run lifecycle routes", () => {
     const latest = await app.request(`/api/conversations/${conversation.id}/agent-runs/latest`);
     expect(latest.status).toBe(200);
     expect((await latest.json() as AgentRunLifecycleDto).id).toBe(runId);
+
+    const conversationEvents = await app.request(`/api/conversations/${conversation.id}/conversation-state`);
+    const state = await conversationEvents.json() as {
+      agentRunEvents: AgentRunLifecycleBatch["events"];
+    };
+    expect(state.agentRunEvents.find((event) => event.type === "tool.started" && event.operationId === "cad-1"))
+      .toMatchObject({ name: "execute_cad_change" });
+  });
+
+  it("records both legacy CAD aliases as the canonical conversation operation", async () => {
+    const app = createApp(openDb(":memory:"));
+    const conversation = await createConversation(app, "Legacy Fusion trace");
+    const runId = "66666666-6666-4666-8666-666666666666";
+    const response = await postEvents(app, conversation.id, runId, [
+      { version: 1, runId, seq: 0, timestamp: 1_000, type: "run.started", agentConfiguration: CONFIG },
+      { version: 1, runId, seq: 1, timestamp: 1_001, type: "tool.started", operationId: "cad-1", name: "execute_cad_change" },
+      { version: 1, runId, seq: 2, timestamp: 1_002, type: "tool.completed", operationId: "cad-1", outcome: "ok", durationMs: 1 },
+      { version: 1, runId, seq: 3, timestamp: 1_003, type: "run.completed", outcome: "completed", durationMs: 3 },
+    ]);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      counters: { cadRuns: 1 },
+      durations: { cadMs: 1 },
+    });
+    const state = await (await app.request(`/api/conversations/${conversation.id}/conversation-state`)).json() as {
+      agentRunEvents: AgentRunLifecycleBatch["events"];
+    };
+    expect(state.agentRunEvents.find((event) => event.type === "tool.started"))
+      .toMatchObject({ name: "execute_cad_change" });
   });
 
   it("accepts exact retries but rejects gaps, conflicting retries, and completed-run overwrite", async () => {

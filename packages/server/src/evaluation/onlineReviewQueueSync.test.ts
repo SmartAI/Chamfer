@@ -15,7 +15,7 @@ function setup() {
     1,
     2,
     "0.2.2",
-    JSON.stringify({ identityHash: "a".repeat(64), provider: "fixture", model: "fixture", skillMode: "catalog" }),
+    JSON.stringify({ name: "current", identityHash: "a".repeat(64), provider: "fixture", model: "fixture" }),
     1,
     "{}",
     "{}",

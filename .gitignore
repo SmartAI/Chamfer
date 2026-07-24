@@ -28,3 +28,11 @@ docs/internal/
 /.playwright-mcp
 /.playwright-cli/
 /skills-lock.json
+
+# Benchmark scratch: per-run artifacts and the runtime-generated agent homes
+# (pi's models.json / codex's config.toml may embed a private base URL). Only
+# benchmarks/results/<stamp>-<arm>-<model>/summary.json dirs get committed.
+benchmarks/results/tmp-runs/
+benchmarks/results/.pi-home/
+benchmarks/results/.codex-home/
+benchmarks/private/

@@ -7,6 +7,7 @@ import type {
 } from "@chamfer/shared";
 import type { CapturedFusionInspection } from "./inspection";
 import { withImmediateTransaction } from "../dbTransaction";
+import { ConversationEventStore } from "../conversationEventStore";
 
 interface InspectionRow {
   id: string;
@@ -112,8 +113,21 @@ export function ensureFusionVisualArtifact(
   if (existing) return { artifactId: inspectionId, artifactVersion: existing.version };
   const versionRow = db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS version FROM artifacts WHERE conversation_id = ?")
     .get(conversationId) as { version: number };
-  db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, params_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(inspectionId, conversationId, versionRow.version, `fusion-revision:${revision}`,
-      JSON.stringify({ cadEnvironment: "fusion", inspectionId }), Date.now());
+  const createdAt = Date.now();
+  new ConversationEventStore(db).append(conversationId, {
+    recordedAt: createdAt,
+    type: "artifact.stored",
+    data: {
+      artifact: {
+        id: inspectionId,
+        conversationId,
+        version: versionRow.version,
+        pySource: `fusion-revision:${revision}`,
+        paramsJson: JSON.stringify({ cadEnvironment: "fusion", inspectionId }),
+        createdAt,
+      },
+      evidenceIds: [],
+    },
+  });
   return { artifactId: inspectionId, artifactVersion: versionRow.version };
 }

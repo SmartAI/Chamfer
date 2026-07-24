@@ -47,14 +47,27 @@ async function upload(app: ReturnType<typeof createApp>, messageId: string, id: 
 }
 
 async function openLease(app: ReturnType<typeof createApp>, conversationId: string, evidenceIds = ["evidence-1"]) {
-  return app.request(`/api/conversations/${conversationId}/inspection-leases`, {
+  return app.request(`/api/conversations/${conversationId}/evidence`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ evidenceIds, purpose: "Compare the mounting profile" }),
+    body: JSON.stringify({
+      type: "open-inspection-lease",
+      input: { evidenceIds, purpose: "Compare the mounting profile" },
+      idempotencyKey: crypto.randomUUID(),
+    }),
   });
 }
 
-const keyedHeaders = { "content-type": "application/json", "Idempotency-Key": "lease-call-1" };
+async function openLeases(app: ReturnType<typeof createApp>, conversationId: string) {
+  const projection = await (await app.request(`/api/conversations/${conversationId}/evidence`)).json() as {
+    inspectionLeases: InspectionLeaseDto[];
+  };
+  return projection.inspectionLeases.filter((lease) => lease.status === "open");
+}
+
+async function result<T>(response: Response): Promise<T> {
+  return ((await response.json()) as { result: T }).result;
+}
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -65,7 +78,7 @@ describe("inspection leases", () => {
     const { app, conversation } = await fixture();
     const response = await openLease(app, conversation.id);
     expect(response.status).toBe(200);
-    const lease = await response.json() as InspectionLeaseDto;
+    const lease = await result<InspectionLeaseDto>(response);
     expect(lease).toMatchObject({
       conversationId: conversation.id,
       status: "open",
@@ -73,7 +86,7 @@ describe("inspection leases", () => {
       evidence: [{ attachmentId: "evidence-1", kind: "user-image", mime: "image/png" }],
     });
 
-    const reloaded = await (await app.request(`/api/conversations/${conversation.id}/inspection-leases?status=open`)).json();
+    const reloaded = await openLeases(app, conversation.id);
     expect(reloaded).toEqual([lease]);
   });
 
@@ -83,7 +96,7 @@ describe("inspection leases", () => {
     const response = await openLease(app, other.id);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "evidence evidence-1 does not belong to this conversation" });
-    expect(await (await app.request(`/api/conversations/${conversation.id}/inspection-leases?status=open`)).json()).toEqual([]);
+    expect(await openLeases(app, conversation.id)).toEqual([]);
   });
 
   it("reports corrupt evidence explicitly and never marks it leased or observed", async () => {
@@ -93,7 +106,7 @@ describe("inspection leases", () => {
     const response = await openLease(app, conversation.id);
     expect(response.status).toBe(422);
     expect(await response.json()).toEqual({ error: "evidence evidence-1 is corrupt" });
-    expect(await (await app.request(`/api/conversations/${conversation.id}/inspection-leases?status=open`)).json()).toEqual([]);
+    expect(await openLeases(app, conversation.id)).toEqual([]);
   });
 
   it("reports missing evidence explicitly without opening a lease", async () => {
@@ -103,49 +116,54 @@ describe("inspection leases", () => {
     const response = await openLease(app, conversation.id);
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "evidence evidence-1 is missing" });
-    expect(await (await app.request(`/api/conversations/${conversation.id}/inspection-leases?status=open`)).json()).toEqual([]);
+    expect(await openLeases(app, conversation.id)).toEqual([]);
   });
 
   it("keeps a lease open after rejected observations, then atomically records and closes it", async () => {
     const { app, conversation } = await fixture();
-    const lease = await (await openLease(app, conversation.id)).json() as InspectionLeaseDto;
-    const invalid = await app.request(`/api/conversations/${conversation.id}/inspection-leases/${lease.id}/observations`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ relevantViews: [], facts: [], affectedSpecifications: [], affectedComponents: [] }),
-    });
-    expect(invalid.status).toBe(400);
-    expect((await app.request(`/api/conversations/${conversation.id}/inspection-leases?status=open`)).status).toBe(200);
-
-    const valid = await app.request(`/api/conversations/${conversation.id}/inspection-leases/${lease.id}/observations`, {
+    const lease = await result<InspectionLeaseDto>(await openLease(app, conversation.id));
+    const invalid = await app.request(`/api/conversations/${conversation.id}/evidence`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        relevantViews: ["front", "isometric"],
-        facts: ["The flange projects beyond the body on both sides."],
-        affectedSpecifications: ["spec.mount-width"],
-        affectedComponents: ["mount"],
+        type: "record-inspection-observation", leaseId: lease.id, idempotencyKey: "invalid-observation",
+        input: { relevantViews: [], facts: [], affectedSpecifications: [], affectedComponents: [] },
       }),
     });
+    expect(invalid.status).toBe(400);
+    expect(await openLeases(app, conversation.id)).toEqual([lease]);
+
+    const valid = await app.request(`/api/conversations/${conversation.id}/evidence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "record-inspection-observation", leaseId: lease.id, idempotencyKey: "valid-observation", input: {
+        relevantViews: ["front", "isometric"], facts: ["The flange projects beyond the body on both sides."],
+        affectedSpecifications: ["spec.mount-width"], affectedComponents: ["mount"],
+      } }),
+    });
     expect(valid.status).toBe(200);
-    expect(await valid.json()).toMatchObject({ status: "closed", observation: {
+    expect(await result<InspectionLeaseDto>(valid)).toMatchObject({ status: "closed", observation: {
       relevantViews: ["front", "isometric"],
       facts: ["The flange projects beyond the body on both sides."],
     } });
-    expect(await (await app.request(`/api/conversations/${conversation.id}/inspection-leases?status=open`)).json()).toEqual([]);
+    expect(await openLeases(app, conversation.id)).toEqual([]);
   });
 
   it("replays keyed lease and observation mutations exactly and conflicts on changed payloads", async () => {
     const { app, db, conversation } = await fixture();
     const leaseInput = { evidenceIds: ["evidence-1"], purpose: "Compare the mounting profile" };
-    const open = () => app.request(`/api/conversations/${conversation.id}/inspection-leases`, {
-      method: "POST", headers: keyedHeaders, body: JSON.stringify(leaseInput),
+    const open = () => app.request(`/api/conversations/${conversation.id}/evidence`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        type: "open-inspection-lease", input: leaseInput, idempotencyKey: "lease-call-1",
+      }),
     });
-    const firstLease = await (await open()).json() as InspectionLeaseDto;
-    expect(await (await open()).json()).toEqual(firstLease);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM inspection_leases").get()).toEqual({ count: 1 });
-    const leaseConflict = await app.request(`/api/conversations/${conversation.id}/inspection-leases`, {
-      method: "POST", headers: keyedHeaders, body: JSON.stringify({ ...leaseInput, purpose: "Changed" }),
+    const firstLease = await result<InspectionLeaseDto>(await open());
+    expect(await result<InspectionLeaseDto>(await open())).toEqual(firstLease);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM evidence_events WHERE type = 'inspection-lease.opened'").get()).toEqual({ count: 1 });
+    const leaseConflict = await app.request(`/api/conversations/${conversation.id}/evidence`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        type: "open-inspection-lease", input: { ...leaseInput, purpose: "Changed" }, idempotencyKey: "lease-call-1",
+      }),
     });
     expect(leaseConflict.status).toBe(409);
 
@@ -153,16 +171,21 @@ describe("inspection leases", () => {
       relevantViews: ["front"], facts: ["The flange projects."],
       affectedSpecifications: ["spec.mount-width"], affectedComponents: [],
     };
-    const observationUrl = `/api/conversations/${conversation.id}/inspection-leases/${firstLease.id}/observations`;
-    const observationHeaders = { "content-type": "application/json", "Idempotency-Key": "observation-call-1" };
+    const observationUrl = `/api/conversations/${conversation.id}/evidence`;
     const record = () => app.request(observationUrl, {
-      method: "POST", headers: observationHeaders, body: JSON.stringify(observation),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        type: "record-inspection-observation", leaseId: firstLease.id, input: observation,
+        idempotencyKey: "observation-call-1",
+      }),
     });
-    const firstClosed = await (await record()).json();
-    expect(await (await record()).json()).toEqual(firstClosed);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM inspection_observations").get()).toEqual({ count: 1 });
+    const firstClosed = await result<InspectionLeaseDto>(await record());
+    expect(await result<InspectionLeaseDto>(await record())).toEqual(firstClosed);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM evidence_events WHERE type = 'inspection-lease.closed'").get()).toEqual({ count: 1 });
     const observationConflict = await app.request(observationUrl, {
-      method: "POST", headers: observationHeaders, body: JSON.stringify({ ...observation, facts: ["Changed."] }),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        type: "record-inspection-observation", leaseId: firstLease.id,
+        input: { ...observation, facts: ["Changed."] }, idempotencyKey: "observation-call-1",
+      }),
     });
     expect(observationConflict.status).toBe(409);
   });

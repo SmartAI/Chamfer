@@ -3,13 +3,16 @@ import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Provider, SettingsDto } from "@chamfer/shared";
-import { validateFusionMcpEndpoint } from "./fusion/mcpClient";
+import { FAKE_MODEL } from "./fakeLlm";
+import { validateFusionMcpEndpoint } from "./fusion/mcpEndpoint";
 
 const DOTENV_FILES = [".env", ".env.local"] as const;
 const ENV_PROVIDERS: Provider[] = ["anthropic", "openai", "google"];
 
 type Env = Record<string, string | undefined>;
 type ModelLookup = (provider: Provider) => ReadonlyArray<{ id: string }>;
+
+const warnedUnknownModelIds = new Set<string>();
 
 export interface DotenvResult {
   /** Absolute paths of the dotenv files that were read, in load order. */
@@ -55,10 +58,16 @@ function resolveEnvModelJson(env: Env, lookup: ModelLookup): string | undefined 
     ? [env.CHAMFER_PROVIDER as Provider]
     : ENV_PROVIDERS;
   for (const provider of providers) {
-    const model = lookup(provider).find((m) => m.id === modelId);
+    const models = env.CHAMFER_FAKE_LLM === "1" && provider === FAKE_MODEL.provider
+      ? [FAKE_MODEL, ...lookup(provider)]
+      : lookup(provider);
+    const model = models.find((m) => m.id === modelId);
     if (model) return JSON.stringify(model);
   }
-  console.warn(`CHAMFER_MODEL=${modelId} does not match any known model; ignoring`);
+  if (!warnedUnknownModelIds.has(modelId)) {
+    warnedUnknownModelIds.add(modelId);
+    console.warn(`CHAMFER_MODEL=${modelId} does not match any known model; ignoring`);
+  }
   return undefined;
 }
 

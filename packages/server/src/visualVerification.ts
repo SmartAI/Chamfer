@@ -7,6 +7,7 @@ import type {
   VisualVerificationRecordDto,
 } from "@chamfer/shared";
 import { listReferenceRecords } from "./referenceClassification";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 export class VisualVerificationError extends Error {
   constructor(message: string, readonly code: "invalid" | "conflict" = "invalid") { super(message); }
@@ -20,6 +21,7 @@ interface VerificationRow {
   artifact_id: string;
   artifact_version: number;
   inspection_sheet_id: string;
+  visual_comparison_evidence_id: string;
   covered_reference_ids_json: string;
   verdict: "match" | "needs-revision";
   observations_json: string;
@@ -32,6 +34,7 @@ interface BatchRow {
   artifact_id: string;
   artifact_version: number;
   inspection_sheet_id: string;
+  visual_comparison_evidence_id: string;
   image_limit: number;
   active_reference_ids_json: string;
   batch_index: number;
@@ -58,7 +61,7 @@ function currentSheetId(db: DatabaseSync, conversationId: string, artifact: Arti
         details?: { inspectionSheet?: { attachmentId?: unknown; code?: { artifactId?: unknown; artifactVersion?: unknown }; gate?: { status?: unknown } } };
       };
       const sheet = message.details?.inspectionSheet;
-      if (message.role === "toolResult" && message.toolName === "run_build123d" &&
+      if (message.role === "toolResult" && (message.toolName === "run_build123d" || message.toolName === "execute_cad_change") &&
           sheet?.gate?.status === "passed" && sheet.code?.artifactId === artifact.id &&
           sheet.code.artifactVersion === artifact.version && nonEmpty(sheet.attachmentId)) return sheet.attachmentId;
     } catch {
@@ -66,6 +69,21 @@ function currentSheetId(db: DatabaseSync, conversationId: string, artifact: Arti
     }
   }
   return undefined;
+}
+
+function currentComparisonEvidenceId(
+  db: DatabaseSync,
+  conversationId: string,
+  artifact: ArtifactRow,
+  inspectionSheetId: string,
+): string | undefined {
+  return [...projectEvidence(db, conversationId).visualComparisons]
+    .reverse()
+    .find((comparison) =>
+      comparison.candidate.artifactId === artifact.id &&
+      comparison.candidate.artifactVersion === artifact.version &&
+      comparison.candidate.inspectionSheetId === inspectionSheetId)
+    ?.evidenceId;
 }
 
 function validatedFusionTarget(
@@ -100,7 +118,7 @@ function currentVisualTarget(db: DatabaseSync, conversationId: string): Artifact
             || typeof visual?.artifactVersion !== "number" || !nonEmpty(visual.inspectionSheet?.attachmentId)) continue;
           return validatedFusionTarget(db, conversationId, visual.artifactId, visual.artifactVersion, visual.inspectionSheet.attachmentId);
         }
-        if (message.toolName !== "run_fusion_action") continue;
+        if (message.toolName !== "execute_cad_change") continue;
         if (message.isError === true || message.details?.status === "nonconforming") return undefined;
         if (message.details?.status === "rolled-back") continue;
         if (message.details?.status !== "completed") return undefined;
@@ -134,12 +152,16 @@ function validateObservations(observations: unknown): observations is VisualVeri
 }
 
 function toDto(row: VerificationRow): VisualVerificationRecordDto {
+  const visualComparisonEvidenceId = row.visual_comparison_evidence_id === "legacy-unmeasured"
+    ? `legacy-unmeasured:${row.artifact_id}:${row.artifact_version}:${row.inspection_sheet_id}`
+    : row.visual_comparison_evidence_id;
   return {
     id: row.id,
     conversationId: row.conversation_id,
     artifactId: row.artifact_id,
     artifactVersion: row.artifact_version,
     inspectionSheetId: row.inspection_sheet_id,
+    visualComparisonEvidenceId,
     coveredReferenceIds: JSON.parse(row.covered_reference_ids_json) as string[],
     verdict: row.verdict,
     observations: JSON.parse(row.observations_json) as VisualVerificationObservation[],
@@ -147,19 +169,23 @@ function toDto(row: VerificationRow): VisualVerificationRecordDto {
   };
 }
 
-export function listVisualVerifications(db: DatabaseSync, conversationId: string): VisualVerificationRecordDto[] {
+export function listLegacyVisualVerifications(db: DatabaseSync, conversationId: string): VisualVerificationRecordDto[] {
   const rows = db.prepare("SELECT * FROM visual_verifications WHERE conversation_id = ? ORDER BY recorded_at ASC, rowid ASC")
     .all(conversationId) as unknown as VerificationRow[];
   return rows.map(toDto);
 }
 
 function batchToDto(row: BatchRow, finalVerification?: VisualVerificationRecordDto): VisualVerificationBatchRecordDto {
+  const visualComparisonEvidenceId = row.visual_comparison_evidence_id === "legacy-unmeasured"
+    ? `legacy-unmeasured:${row.artifact_id}:${row.artifact_version}:${row.inspection_sheet_id}`
+    : row.visual_comparison_evidence_id;
   return {
     id: row.id,
     conversationId: row.conversation_id,
     artifactId: row.artifact_id,
     artifactVersion: row.artifact_version,
     inspectionSheetId: row.inspection_sheet_id,
+    visualComparisonEvidenceId,
     imageLimit: row.image_limit,
     activeReferenceIds: JSON.parse(row.active_reference_ids_json) as string[],
     batchIndex: row.batch_index,
@@ -173,10 +199,18 @@ function batchToDto(row: BatchRow, finalVerification?: VisualVerificationRecordD
   };
 }
 
-export function listVisualVerificationBatches(db: DatabaseSync, conversationId: string): VisualVerificationBatchRecordDto[] {
+export function listVisualVerifications(db: DatabaseSync, conversationId: string): VisualVerificationRecordDto[] {
+  return projectEvidence(db, conversationId).visualVerifications;
+}
+
+export function listLegacyVisualVerificationBatches(db: DatabaseSync, conversationId: string): VisualVerificationBatchRecordDto[] {
   const rows = db.prepare(`SELECT * FROM visual_verification_batches
     WHERE conversation_id = ? ORDER BY recorded_at ASC, rowid ASC`).all(conversationId) as unknown as BatchRow[];
   return rows.map((row) => batchToDto(row));
+}
+
+export function listVisualVerificationBatches(db: DatabaseSync, conversationId: string): VisualVerificationBatchRecordDto[] {
+  return projectEvidence(db, conversationId).visualVerificationBatches;
 }
 
 export function recordVisualVerificationBatch(
@@ -186,19 +220,21 @@ export function recordVisualVerificationBatch(
   idempotencyKey?: string,
 ): VisualVerificationBatchRecordDto {
   if (idempotencyKey) {
-    const existing = db.prepare("SELECT * FROM visual_verification_batches WHERE id = ?").get(idempotencyKey) as unknown as BatchRow | undefined;
-    if (existing) {
-      const exact = existing.conversation_id === conversationId && existing.artifact_id === input.artifactId &&
-        existing.artifact_version === input.artifactVersion && existing.inspection_sheet_id === input.inspectionSheetId &&
-        existing.image_limit === input.imageLimit && existing.active_reference_ids_json === JSON.stringify(input.activeReferenceIds) &&
-        existing.batch_index === input.batchIndex && existing.batch_count === input.batchCount &&
-        existing.covered_reference_ids_json === JSON.stringify(input.coveredReferenceIds) &&
-        existing.observations_json === JSON.stringify(input.observations) &&
-        (existing.final_verdict ?? undefined) === (input.finalVerdict ?? undefined) &&
-        (existing.synthesis ?? undefined) === (input.synthesis?.trim() || undefined);
+    const existing = projectEvidence(db, conversationId).events.find((event) =>
+      event.type === "visual-verification-batch.recorded" && event.data.commandIdempotencyKey === idempotencyKey);
+    if (existing?.type === "visual-verification-batch.recorded") {
+      const batch = existing.data.batch;
+      const exact = batch.conversationId === conversationId && batch.artifactId === input.artifactId &&
+        batch.artifactVersion === input.artifactVersion && batch.inspectionSheetId === input.inspectionSheetId &&
+        batch.visualComparisonEvidenceId === input.visualComparisonEvidenceId &&
+        batch.imageLimit === input.imageLimit && JSON.stringify(batch.activeReferenceIds) === JSON.stringify(input.activeReferenceIds) &&
+        batch.batchIndex === input.batchIndex && batch.batchCount === input.batchCount &&
+        JSON.stringify(batch.coveredReferenceIds) === JSON.stringify(input.coveredReferenceIds) &&
+        JSON.stringify(batch.observations) === JSON.stringify(input.observations) &&
+        (batch.finalVerdict ?? undefined) === (input.finalVerdict ?? undefined) &&
+        (batch.synthesis ?? undefined) === (input.synthesis?.trim() || undefined);
       if (!exact) throw new VisualVerificationError("idempotency key conflicts with an existing visual batch", "conflict");
-      const final = db.prepare("SELECT * FROM visual_verifications WHERE id = ?").get(`${idempotencyKey}:final`) as unknown as VerificationRow | undefined;
-      return batchToDto(existing, final ? toDto(final) : undefined);
+      return batch;
     }
   }
   const artifact = currentVisualTarget(db, conversationId);
@@ -208,6 +244,10 @@ export function recordVisualVerificationBatch(
   const sheetId = artifact.sheetId;
   if (!sheetId || sheetId !== input.inspectionSheetId) {
     throw new VisualVerificationError(`verification must target current inspection sheet${sheetId ? ` ${sheetId}` : ""}`);
+  }
+  const comparisonEvidenceId = currentComparisonEvidenceId(db, conversationId, artifact, sheetId);
+  if (!comparisonEvidenceId || comparisonEvidenceId !== input.visualComparisonEvidenceId) {
+    throw new VisualVerificationError(`verification must cite current measured comparison evidence${comparisonEvidenceId ? ` ${comparisonEvidenceId}` : ""}`);
   }
   const active = listReferenceRecords(db, conversationId)
     .filter((record) => record.status === "active" || record.status === "complementary")
@@ -235,16 +275,15 @@ export function recordVisualVerificationBatch(
   if (observationIds.join(",") !== input.coveredReferenceIds.join(",") || input.coveredReferenceIds.some((id) => !active.includes(id))) {
     throw new VisualVerificationError("batch coverage must contain one observation for each active reference in the batch");
   }
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const previous = db.prepare(`SELECT * FROM visual_verification_batches
-      WHERE conversation_id = ? AND artifact_id = ? AND artifact_version = ? AND inspection_sheet_id = ?
-      ORDER BY batch_index ASC`).all(conversationId, artifact.id, artifact.version, sheetId) as unknown as BatchRow[];
+    const previous = projectEvidence(db, conversationId).visualVerificationBatches.filter((batch) =>
+      batch.artifactId === artifact.id && batch.artifactVersion === artifact.version && batch.inspectionSheetId === sheetId);
     if (input.batchIndex !== previous.length) throw new VisualVerificationError(`expected batch ${previous.length}`);
-    if (previous.some((row) => row.batch_count !== input.batchCount || row.image_limit !== input.imageLimit || row.active_reference_ids_json !== JSON.stringify(active))) {
-      throw new VisualVerificationError("batch count or active reference set changed during verification");
+    if (previous.some((row) => row.batchCount !== input.batchCount || row.imageLimit !== input.imageLimit ||
+        JSON.stringify(row.activeReferenceIds) !== JSON.stringify(active) ||
+        row.visualComparisonEvidenceId !== comparisonEvidenceId)) {
+      throw new VisualVerificationError("batch count, active reference set, or measured comparison changed during verification");
     }
-    const alreadyCovered = new Set(previous.flatMap((row) => JSON.parse(row.covered_reference_ids_json) as string[]));
+    const alreadyCovered = new Set(previous.flatMap((row) => row.coveredReferenceIds));
     if (input.coveredReferenceIds.some((id) => alreadyCovered.has(id))) {
       throw new VisualVerificationError("batch coverage duplicates an earlier reference");
     }
@@ -260,36 +299,30 @@ export function recordVisualVerificationBatch(
       throw new VisualVerificationError(`final synthesis has missing coverage: ${active.filter((id) => !allCovered.includes(id)).join(", ")}`);
     }
 
-    const row: BatchRow = {
-      id: idempotencyKey ?? crypto.randomUUID(), conversation_id: conversationId, artifact_id: artifact.id,
-      artifact_version: artifact.version, inspection_sheet_id: sheetId,
-      image_limit: input.imageLimit,
-      active_reference_ids_json: JSON.stringify(active), batch_index: input.batchIndex,
-      batch_count: input.batchCount, covered_reference_ids_json: JSON.stringify(input.coveredReferenceIds),
-      observations_json: JSON.stringify(input.observations), final_verdict: input.finalVerdict ?? null,
-      synthesis: input.synthesis?.trim() ?? null, recorded_at: Date.now(),
+    const batch: VisualVerificationBatchRecordDto = {
+      id: idempotencyKey ?? crypto.randomUUID(), conversationId, artifactId: artifact.id,
+      artifactVersion: artifact.version, inspectionSheetId: sheetId,
+      visualComparisonEvidenceId: comparisonEvidenceId, imageLimit: input.imageLimit,
+      activeReferenceIds: active, batchIndex: input.batchIndex, batchCount: input.batchCount,
+      coveredReferenceIds: input.coveredReferenceIds, observations: input.observations,
+      ...(input.finalVerdict ? { finalVerdict: input.finalVerdict } : {}),
+      ...(input.synthesis?.trim() ? { synthesis: input.synthesis.trim() } : {}),
+      recordedAt: Date.now(),
     };
-    db.prepare(`INSERT INTO visual_verification_batches
-      (id, conversation_id, artifact_id, artifact_version, inspection_sheet_id, image_limit, active_reference_ids_json,
-       batch_index, batch_count, covered_reference_ids_json, observations_json, final_verdict, synthesis, recorded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(row.id, row.conversation_id, row.artifact_id, row.artifact_version, row.inspection_sheet_id,
-        row.image_limit, row.active_reference_ids_json, row.batch_index, row.batch_count, row.covered_reference_ids_json,
-        row.observations_json, row.final_verdict, row.synthesis, row.recorded_at);
-    let finalVerification: VisualVerificationRecordDto | undefined;
     if (isLast) {
-      const observations = [...previous.flatMap((item) => JSON.parse(item.observations_json) as VisualVerificationObservation[]), ...input.observations];
-      finalVerification = persistVisualVerification(db, conversationId, {
+      const observations = [...previous.flatMap((item) => item.observations), ...input.observations];
+      batch.finalVerification = validatedVisualVerification(db, conversationId, {
         artifactId: artifact.id, artifactVersion: artifact.version, inspectionSheetId: sheetId,
+        visualComparisonEvidenceId: comparisonEvidenceId,
         coveredReferenceIds: active, verdict: input.finalVerdict!, observations,
       }, true, idempotencyKey ? `${idempotencyKey}:final` : undefined);
     }
-    db.exec("COMMIT");
-    return batchToDto(row, finalVerification);
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+    appendEvidenceEvent(db, conversationId, {
+      id: `${conversationId}:visual-verification-batch:${batch.id}`,
+      type: "visual-verification-batch.recorded",
+      data: { batch, ...(idempotencyKey ? { commandIdempotencyKey: idempotencyKey } : {}) },
+    });
+    return batch;
 }
 
 export function recordVisualVerification(
@@ -298,10 +331,16 @@ export function recordVisualVerification(
   input: RecordVisualVerificationInput,
   idempotencyKey?: string,
 ): VisualVerificationRecordDto {
-  return persistVisualVerification(db, conversationId, input, false, idempotencyKey);
+  const verification = validatedVisualVerification(db, conversationId, input, false, idempotencyKey);
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:visual-verification:${verification.id}`,
+    type: "visual-verification.recorded",
+    data: { verification, ...(idempotencyKey ? { commandIdempotencyKey: idempotencyKey } : {}) },
+  });
+  return verification;
 }
 
-function persistVisualVerification(
+function validatedVisualVerification(
   db: DatabaseSync,
   conversationId: string,
   input: RecordVisualVerificationInput,
@@ -309,13 +348,16 @@ function persistVisualVerification(
   idempotencyKey?: string,
 ): VisualVerificationRecordDto {
   if (idempotencyKey) {
-    const existing = db.prepare("SELECT * FROM visual_verifications WHERE id = ?").get(idempotencyKey) as unknown as VerificationRow | undefined;
-    if (existing) {
-      const exact = existing.conversation_id === conversationId && existing.artifact_id === input.artifactId &&
-        existing.artifact_version === input.artifactVersion && existing.inspection_sheet_id === input.inspectionSheetId &&
-        existing.covered_reference_ids_json === JSON.stringify(input.coveredReferenceIds) &&
-        existing.verdict === input.verdict && existing.observations_json === JSON.stringify(input.observations);
-      if (exact) return toDto(existing);
+    const existing = projectEvidence(db, conversationId).events.find((event) =>
+      event.type === "visual-verification.recorded" && event.data.commandIdempotencyKey === idempotencyKey);
+    if (existing?.type === "visual-verification.recorded") {
+      const verification = existing.data.verification;
+      const exact = verification.conversationId === conversationId && verification.artifactId === input.artifactId &&
+        verification.artifactVersion === input.artifactVersion && verification.inspectionSheetId === input.inspectionSheetId &&
+        verification.visualComparisonEvidenceId === input.visualComparisonEvidenceId &&
+        JSON.stringify(verification.coveredReferenceIds) === JSON.stringify(input.coveredReferenceIds) &&
+        verification.verdict === input.verdict && JSON.stringify(verification.observations) === JSON.stringify(input.observations);
+      if (exact) return verification;
       throw new VisualVerificationError("idempotency key conflicts with an existing visual verification", "conflict");
     }
   }
@@ -327,6 +369,10 @@ function persistVisualVerification(
   const sheetId = artifact.sheetId;
   if (!sheetId || sheetId !== input.inspectionSheetId) {
     throw new VisualVerificationError(`verification must target current inspection sheet${sheetId ? ` ${sheetId}` : ""}`);
+  }
+  const comparisonEvidenceId = currentComparisonEvidenceId(db, conversationId, artifact, sheetId);
+  if (!comparisonEvidenceId || comparisonEvidenceId !== input.visualComparisonEvidenceId) {
+    throw new VisualVerificationError(`verification must cite current measured comparison evidence${comparisonEvidenceId ? ` ${comparisonEvidenceId}` : ""}`);
   }
   if (input.verdict !== "match" && input.verdict !== "needs-revision") {
     throw new VisualVerificationError("invalid visual verdict");
@@ -351,17 +397,11 @@ function persistVisualVerification(
     throw new VisualVerificationError("needs-revision requires an affected component");
   }
 
-  const row: VerificationRow = {
-    id: idempotencyKey ?? crypto.randomUUID(), conversation_id: conversationId, artifact_id: artifact.id,
-    artifact_version: artifact.version, inspection_sheet_id: sheetId,
-    covered_reference_ids_json: JSON.stringify(input.coveredReferenceIds), verdict: input.verdict,
-    observations_json: JSON.stringify(input.observations), recorded_at: Date.now(),
+  return {
+    id: idempotencyKey ?? crypto.randomUUID(), conversationId, artifactId: artifact.id,
+    artifactVersion: artifact.version, inspectionSheetId: sheetId,
+    visualComparisonEvidenceId: comparisonEvidenceId,
+    coveredReferenceIds: input.coveredReferenceIds, verdict: input.verdict,
+    observations: input.observations, recordedAt: Date.now(),
   };
-  db.prepare(`INSERT INTO visual_verifications
-    (id, conversation_id, artifact_id, artifact_version, inspection_sheet_id,
-     covered_reference_ids_json, verdict, observations_json, recorded_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(row.id, row.conversation_id, row.artifact_id, row.artifact_version, row.inspection_sheet_id,
-      row.covered_reference_ids_json, row.verdict, row.observations_json, row.recorded_at);
-  return toDto(row);
 }

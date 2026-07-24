@@ -19,11 +19,28 @@ def with_checks(checks_literal: str, body: str = BOX_BODY, expect: str = EXPECT_
 
 
 def gate_of(source: str) -> dict:
-    return harness.run_script(source)["gate"]
+    raw = harness.checks_literal(source)
+    return harness.run_script(source, frozen(raw) if raw is not None else None)["gate"]
 
 
 def agent_checks(gate: dict) -> list:
     return [c for c in gate["checks"] if c["name"].startswith("check:")]
+
+
+def frozen(checks: list[dict], revision: int = 1) -> dict:
+    return {
+        "contractId": "contract-1",
+        "revision": revision,
+        "checks": [
+            {
+                "id": f"check-{index + 1}",
+                "componentId": "part",
+                "kind": spec["kind"],
+                "criterion": spec,
+            }
+            for index, spec in enumerate(checks)
+        ],
+    }
 
 
 # ---------- parse_checks ----------
@@ -134,6 +151,27 @@ def test_wall_thickness_check_normalizes():
 
 # ---------- gate integration ----------
 
+def test_same_cad_code_is_graded_differently_by_separately_supplied_checks():
+    source = EXPECT_BOX + BOX_BODY
+    passing = harness.run_script(source, frozen([{"kind": "count_faces", "count": 6}]))
+    failing = harness.run_script(source, frozen([{"kind": "count_faces", "count": 7}], revision=2))
+
+    assert passing["gate"]["status"] == "passed"
+    assert failing["gate"]["status"] == "failed"
+    assert passing["gate"]["checkSet"] == {"contractId": "contract-1", "revision": 1}
+    assert agent_checks(passing["gate"])[0]["checkId"] == "part/check-1"
+
+
+def test_submitted_checks_block_is_ignored_with_a_notice():
+    source = with_checks('[{"kind": "count_faces", "count": 999}]')
+    result = harness.run_script(source, frozen([{"kind": "count_faces", "count": 6}]))
+
+    assert result["gate"]["status"] == "passed"
+    assert agent_checks(result["gate"])[0]["passed"] is True
+    assert result["notices"] == [
+        "Ignored CAD-code CHECKS declaration; the verify gate used loop-owned frozen checks from proof contract contract-1 revision 1."
+    ]
+
 def test_gate_without_checks_block_is_unchanged():
     gate = gate_of(EXPECT_BOX + BOX_BODY)
     assert gate["status"] == "passed"
@@ -144,7 +182,7 @@ def test_gate_without_checks_block_is_unchanged():
 def test_malformed_checks_block_fails_gate():
     gate = gate_of(with_checks('[{"kind": "warp", "factor": 9}]'))
     assert gate["status"] == "failed"
-    block = next(c for c in gate["checks"] if c["name"] == "checks_block")
+    block = next(c for c in gate["checks"] if c["name"] == "frozen_checks")
     assert not block["passed"]
     assert "unknown kind" in block["detail"]
 
@@ -268,6 +306,7 @@ def test_hole_through_check_passes_on_four_through_holes():
             "name": "check:hole_through[0]",
             "passed": True,
             "detail": "through holes d=6.5±0.5 mm: expected 4, found 4",
+            "checkId": "part/check-1",
         }
     ]
 

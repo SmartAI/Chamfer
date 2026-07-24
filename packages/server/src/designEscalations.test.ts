@@ -2,9 +2,45 @@ import { describe, expect, it } from "vitest";
 import { createConversation, createMessage } from "./conversationStore";
 import { openDb } from "./db";
 import { listDesignEscalations, openDesignEscalation } from "./designEscalations";
+import { appendEvidenceEvent } from "./evidenceStore";
 import { listSourceSpecifications, recordSourceSpecifications } from "./sourceSpecifications";
+import { listDurableNotes } from "./durableNotes";
 
 describe("durable design escalations", () => {
+  it("accepts a dedicated user-visible verification check relaxation", () => {
+    const db = openDb(":memory:");
+    const conversation = createConversation(db, "Check correction");
+    appendEvidenceEvent(db, conversation.id, {
+      id: "held-relax-volume-range",
+      type: "verification-checks.revision-attempted",
+      data: {
+        attempt: {
+          attemptId: "attempt-relax-volume-range",
+          planId: "plan-1",
+          proposedCriteriaRevision: 2,
+          proposedChecks: [],
+          comparison: { verdict: "loosen", checks: [] },
+          status: "held",
+          attemptedAt: 1,
+        },
+      },
+    });
+    const escalation = openDesignEscalation(db, conversation.id, {
+      escalationId: "relax-volume-range",
+      kind: "verification-check-relaxation",
+      question: "May I widen the frozen volume range from 10-20 to 8-22 cubic millimetres?",
+      affectedSpecificationIds: [],
+      basis: "The accepted check used the wrong derived manufacturing allowance.",
+      verificationCheckAttemptId: "attempt-relax-volume-range",
+    }, "relax-volume-range");
+
+    expect(escalation).toMatchObject({
+      kind: "verification-check-relaxation",
+      status: "pending",
+      verificationCheckAttemptId: "attempt-relax-volume-range",
+    });
+  });
+
   it("persists one focused question and resolves it only with later user source evidence", () => {
     const db = openDb(":memory:");
     const conversation = createConversation(db, "Conflict");
@@ -78,5 +114,9 @@ describe("durable design escalations", () => {
       { id: "width-12", status: "superseded", supersededBySpecificationId: "width-resolved" },
       { id: "width-resolved", status: "active", supersedesSpecificationIds: ["width-10", "width-12"] },
     ]);
+    expect(listDurableNotes(db, conversation.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "question:width-conflict", kind: "open-question", status: "resolved" }),
+      expect.objectContaining({ id: "decision:width-resolved", kind: "user-decision", status: "active" }),
+    ]));
   });
 });

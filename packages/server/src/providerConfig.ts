@@ -1,10 +1,4 @@
-import type { SettingsDto } from "@chamfer/shared";
-
-type ConfigurableProvider = "anthropic" | "openai" | "google";
-
-function isConfigurableProvider(value: unknown): value is ConfigurableProvider {
-  return value === "anthropic" || value === "openai" || value === "google";
-}
+import { isLlmProvider, type Provider, type SettingsDto } from "@chamfer/shared";
 
 export interface ResolvedProviderConfig {
   /** The model with any settings-level baseUrl override applied. */
@@ -20,8 +14,8 @@ export interface ResolvedProviderConfig {
  */
 export function resolveProviderConfig(settings: SettingsDto, model: unknown): ResolvedProviderConfig {
   const provider =
-    typeof model === "object" && model !== null && isConfigurableProvider((model as { provider?: unknown }).provider)
-      ? (model as { provider: ConfigurableProvider }).provider
+    typeof model === "object" && model !== null && isLlmProvider((model as { provider?: unknown }).provider)
+      ? (model as { provider: Provider }).provider
       : undefined;
   const apiKey = provider ? settings[`${provider}ApiKey`] : undefined;
   const baseUrl = provider ? settings[`${provider}BaseUrl`] : undefined;

@@ -5,6 +5,7 @@ import {
   sanitizeModelRequest,
   summarizeImageExposure,
 } from "./imageContextDiagnostics";
+import { classifyReference } from "./referenceClassification";
 
 describe("image context diagnostics", () => {
   it("captures exact image exposure without retaining image bytes or private request text", () => {
@@ -84,11 +85,15 @@ describe("image context diagnostics", () => {
       (id, message_id, kind, mime, content_hash, byte_size, blob_path, display_order)
       VALUES ('a1', 'm1', 'user-image', 'image/png', ?, 321, ?, 0)`)
       .run("0123456789abcdef".repeat(4), "images/01/absolute-content-is-private");
-    db.prepare(`INSERT INTO reference_classifications
-      (id, conversation_id, reference_id, status, purpose, relationships_json, rationale,
-       specification_links_json, no_specification_reason, actor, created_at)
-      VALUES ('rc1', 'c1', 'a1', 'active', 'private purpose', '[]', 'private rationale', '[]', NULL, 'agent', 2)`)
-      .run();
+    classifyReference(db, "c1", {
+      referenceId: "a1",
+      status: "active",
+      purpose: "private purpose",
+      relationships: [],
+      rationale: "private rationale",
+      specificationIds: [],
+      noSpecificationReason: "No extractable specification.",
+    }, "rc1");
 
     const first = buildConversationImageDiagnostics(db, "c1");
     const second = buildConversationImageDiagnostics(db, "c1");

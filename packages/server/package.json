@@ -18,8 +18,9 @@
   "dependencies": {
     "@chamfer/fusion-fixtures": "*",
     "@chamfer/shared": "*",
-    "@earendil-works/pi-agent-core": "^0.80.3",
-    "@earendil-works/pi-ai": "^0.80.3",
+    "@earendil-works/pi-agent-core": "^0.81.1",
+    "@earendil-works/pi-ai": "^0.81.1",
+    "@earendil-works/pi-coding-agent": "^0.81.1",
     "@hono/node-server": "^1.13.0",
     "@langfuse/client": "5.9.1",
     "@langfuse/core": "5.9.1",
@@ -29,9 +30,11 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
     "hono": "^4.6.0",
+    "lru-cache": "^10.4.3",
+    "pi-mcp-adapter": "2.11.0",
     "sharp": "^0.35.3",
     "tsx": "^4.19.0",
-    "zod": "^3.25.76"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

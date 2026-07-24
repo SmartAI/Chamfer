@@ -1,0 +1,49 @@
+# Copy to .dev.vars (gitignored) for local `wrangler dev`.
+
+# Sign every request in as a fixed dev user so the app works without OAuth
+# credentials. Local development only - never set this in production.
+CHAMFER_DEV_LOGIN=1
+
+# Server-held Anthropic key funding the free demo quota (optional locally).
+# Point the base URL at your own Anthropic-compatible gateway (e.g. a home server
+# exposed through a cloudflared tunnel) to fund the demo from it instead of a
+# metered Anthropic key. The base URL is the gateway root WITHOUT /v1 - both the
+# chat and agent paths append /v1/messages themselves.
+# CHAMFER_DEMO_ANTHROPIC_KEY=sk-ant-...
+# CHAMFER_DEMO_ANTHROPIC_BASE_URL=https://llm.example.com
+
+# Cloudflare Access service token for the demo gateway's tunnel (optional). Set
+# both to make the demo upstream calls present CF-Access-Client-Id/Secret, so
+# Cloudflare's edge admits only this Worker to the tunnel. Create the token in
+# the Zero Trust dashboard (Access -> Service Auth -> Service Tokens) and bind it
+# to an Allow policy on the tunnel hostname. Never sent on BYOK traffic.
+# CHAMFER_DEMO_ACCESS_CLIENT_ID=<uuid>.access
+# CHAMFER_DEMO_ACCESS_CLIENT_SECRET=...
+
+# Secret signing the short-lived conversation JWTs (HS256, jose) that authenticate
+# the container-facing LLM proxy (/api/llm/*). Unset keeps the proxy off (503)
+# and the deployment in the degraded no-agent-hosting posture - hosted agent
+# turns need it (together with CHAMFER_CONTAINER_LLM_ORIGIN below in dev).
+# In production set it as a secret:
+# `wrangler secret put CHAMFER_LLM_TOKEN_SECRET` (openssl rand -base64 32).
+# CHAMFER_LLM_TOKEN_SECRET=generate-with: openssl rand -base64 32
+
+# Origin the agent container uses to reach this Worker's LLM proxy from inside
+# Docker: wrangler dev's localhost is not reachable there, so point it at the
+# Docker host gateway (host.docker.internal on macOS/Windows Docker) with the
+# port you gave `wrangler dev`. Production leaves this unset and boots
+# containers with CHAMFER_APP_ORIGIN.
+# CHAMFER_CONTAINER_LLM_ORIGIN=http://host.docker.internal:8787
+
+# Required for real sign-in flows (not needed with CHAMFER_DEV_LOGIN=1):
+# BETTER_AUTH_SECRET=generate-with: openssl rand -base64 32
+# GOOGLE_CLIENT_ID=...
+# GOOGLE_CLIENT_SECRET=...
+# GITHUB_CLIENT_ID=...
+# GITHUB_CLIENT_SECRET=...
+
+# Worker error reporting (optional). Unset means Sentry initializes disabled and
+# sends nothing. In production set it as a secret: `wrangler secret put SENTRY_DSN`.
+# SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
+# SENTRY_ENVIRONMENT=production
+# CHAMFER_RELEASE=chamfer-online@<git-sha>

@@ -102,6 +102,29 @@ describe("envSettings", () => {
     expect(settings.modelJson).toBeUndefined();
   });
 
+  it("resolves the fake model as the configured model in fake-LLM mode", () => {
+    const settings = envSettings({
+      CHAMFER_FAKE_LLM: "1",
+      CHAMFER_MODEL: "chamfer-fake",
+      CHAMFER_PROVIDER: "anthropic",
+    }, () => []);
+
+    expect(JSON.parse(settings.modelJson ?? "null")).toMatchObject({
+      id: "chamfer-fake",
+      provider: "anthropic",
+    });
+  });
+
+  it("warns only once per distinct unknown CHAMFER_MODEL id", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    envSettings({ CHAMFER_MODEL: "missing-model-for-warning-dedupe" }, () => []);
+    envSettings({ CHAMFER_MODEL: "missing-model-for-warning-dedupe" }, () => []);
+
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it("maps CHAMFER_MAX_CAD_RUNS to maxCadRuns", () => {
     expect(envSettings({ CHAMFER_MAX_CAD_RUNS: "25" }).maxCadRuns).toBe("25");
   });

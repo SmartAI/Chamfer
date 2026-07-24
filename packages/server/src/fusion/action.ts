@@ -43,9 +43,6 @@ export interface FusionActionLeaseContext {
   diagnose?(document: FusionDocumentIdentityDto): Promise<CapturedFusionInspection>;
   execute(request: FusionActionRequestDto, resolvedReferences: Record<string, string>): Promise<FusionActionExecution>;
   undo(): Promise<void>;
-  /** Token-free engineering fingerprint of the current design; never reads
-   * entityToken, so it does not perturb the native Undo stack. */
-  engineeringFingerprint?(document: FusionDocumentIdentityDto): Promise<string>;
   /** Undo repeatedly until the token-free fingerprint matches `target`, bounded
    * by `maxSteps`. Returns whether the baseline geometry was restored. Lets the
    * rollback succeed even when trusted inspection pushed its own Undo entries. */
@@ -268,13 +265,12 @@ export class FusionActions {
           resolvedReferences[reference.id] = entity.nativeToken;
         }
 
-        // Capture a token-free baseline so the rollback path can verify that Undo
-        // restored the exact pre-action geometry, even though trusted inspection
-        // will push its own Undo entries. Best-effort: on failure the rollback
-        // falls back to a single blind Undo.
-        const beforeFingerprint = runtime.engineeringFingerprint
-          ? await runtime.engineeringFingerprint(binding.document).catch(() => undefined)
-          : undefined;
+        // Token-free baseline computed inside the same trusted execution as the
+        // before-inspection, so the rollback path can verify that Undo restored
+        // the exact pre-action geometry even though trusted inspection pushed
+        // its own Undo entries. Best-effort: when absent the rollback falls back
+        // to a single blind Undo.
+        const beforeFingerprint = before.fingerprint;
         if (requestSignal?.aborted) {
           const failureClass = executionFailureClass(requestSignal.reason);
           append("rejected", { observedRevision: before.revision, result: { reason: failureClass }, evidenceIds: [beforeRecorded.current.id] });
@@ -445,7 +441,7 @@ export class FusionActions {
             { views: after.screenshots.map((screenshot) => screenshot.view), cameraRestored: after.cameraRestored },
           ), cameraResult];
           const afterRecorded = recordFusionInspection(this.db, conversationId, after, checks);
-          const structuralFailure = checks.slice(0, structuralResults.length).some((check) => check.status !== "passed");
+          const structuralFailure = structuralResults.some((check) => check.status !== "passed");
           if (structuralFailure) {
             return rollback(checks, after.revision, [afterRecorded.current.id]);
           }

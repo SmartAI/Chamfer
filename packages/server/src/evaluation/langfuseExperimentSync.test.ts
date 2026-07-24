@@ -23,7 +23,7 @@ function cohort(): OfflineExperimentCohort {
     gating: "required",
     identities: {
       corpus: "corpus-sha256",
-      agentConfiguration: "agent-config-sha256",
+      agentConfiguration: { name: "current", identityHash: "a".repeat(64) },
       commit: "commit-sha",
       model: "scripted-model-v1",
       evaluator: "evaluator-sha256",
@@ -115,6 +115,14 @@ function recordingTransport() {
 }
 
 describe("syncOfflineExperiment", () => {
+  it("rejects a parallel experiment-only configuration identity", async () => {
+    const invalid = cohort() as unknown as { identities: { agentConfiguration: unknown } };
+    invalid.identities.agentConfiguration = "agent-config-sha256";
+
+    await expect(syncOfflineExperiment(invalid as OfflineExperimentCohort, { transport: recordingTransport().transport }))
+      .rejects.toThrow(/artifact-derived agent configuration identity/);
+  });
+
   it("maps one local-authoritative cohort into a comparable dataset run with measurements as scores", async () => {
     const { calls, transport } = recordingTransport();
 
@@ -174,6 +182,7 @@ describe("syncOfflineExperiment", () => {
       },
     });
     expect(calls.find(({ operation }) => operation === "trace")?.payload).toMatchObject({
+      version: "a".repeat(64),
       metadata: {
         case: { id: "text.precise.bracket", version: "1.0.0" },
         identities: cohort().identities,

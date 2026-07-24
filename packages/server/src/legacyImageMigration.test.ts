@@ -5,6 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AttachmentStore } from "./attachmentStore";
 import { openDb } from "./db";
 import { migrateLegacyImages } from "./legacyImageMigration";
+import {
+  ConversationEventStore,
+  migrateConversationEventLog,
+  refreshLegacyConversationEventLogs,
+} from "./conversationEventStore";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -48,8 +53,10 @@ describe("legacy image startup migration", () => {
     db.prepare(
       "INSERT INTO attachments (id, message_id, kind, mime, data) VALUES ('a1', 'm1', 'user-image', 'image/png', ?)",
     ).run(PNG_1X1);
+    migrateConversationEventLog(db);
 
     const report = await migrateLegacyImages(db, store);
+    refreshLegacyConversationEventLogs(db);
 
     expect(report).toMatchObject({ migrated: 1, broken: 0, normalizedMessages: 1 });
     expect(readFileSync(join(dataDir, "images", "43", PNG_HASH))).toEqual(PNG_1X1);
@@ -71,6 +78,15 @@ describe("legacy image startup migration", () => {
       { type: "attachment-reference", attachmentId: "a1", kind: "user-image", mimeType: "image/png" },
       { type: "text", text: "after" },
     ]);
+    const replayed = new ConversationEventStore(db).project("c1");
+    expect(JSON.parse(replayed.messages[0]!.contentJson)).toEqual(JSON.parse(row.content_json));
+    expect(replayed.attachments[0]).toMatchObject({
+      id: "a1",
+      contentHash: PNG_HASH,
+      byteSize: 68,
+      blobPath: `images/43/${PNG_HASH}`,
+    });
+    expect(JSON.stringify(replayed)).not.toContain(PNG_1X1_BASE64);
   });
 
   it("recovers missing logical rows, deduplicates payloads, preserves positions, and is idempotent", async () => {

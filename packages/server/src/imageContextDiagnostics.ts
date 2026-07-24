@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { AttachmentStorageError, type AttachmentStore } from "./attachmentStore";
+import { AttachmentStorageError, type ImageBlobStore } from "./imageBlobStore";
 import { getAttachment } from "./conversationStore";
+import { projectEvidence } from "./evidenceStore";
 
 export interface RequestImageDiagnostic {
   hashPrefix: string;
@@ -66,7 +67,7 @@ interface DiagnosticMessage {
   content?: unknown;
 }
 
-const BATCH_RECORD = /\[Visual verification batch (\d+)\/(\d+); artifact=([^@;\]]+)@(\d+); sheet=([^;\]]+); imageLimit=(\d+);[^\]]*?batchReferences=([^;\]]+); priorObservations=([^\]]*?)\.?\]/g;
+const BATCH_RECORD = /\[Visual verification batch (\d+)\/(\d+); artifact=([^@;\]]+)@(\d+); sheet=([^;\]]+); (?:measuredComparison=[^;\]]+; )?imageLimit=(\d+);[^\]]*?batchReferences=([^;\]]+); priorObservations=(.*?)(?=\. Compare only this batch against the shared current sheet\.|\])[^\]]*\]/g;
 
 function safeIdentity(value: string): string {
   return /^[a-zA-Z0-9_-]+$/.test(value) ? value : "redacted";
@@ -237,28 +238,28 @@ export function buildConversationImageDiagnostics(db: DatabaseSync, conversation
   attachments: Array<Omit<AttachmentLifecycleDiagnostic, "storageState"> & { metadataComplete: boolean }>;
 } {
   const current = currentSheetId(db, conversationId);
+  const projection = projectEvidence(db, conversationId);
+  const statusByReference = new Map(projection.referenceRecords.map((record) => [record.referenceId, record.status]));
+  const leasedEvidenceIds = new Set(projection.inspectionLeases
+    .filter((lease) => lease.status === "open")
+    .flatMap((lease) => lease.evidence.map((evidence) => evidence.attachmentId)));
   const rows = db.prepare(`
-    SELECT a.id AS attachment_id, a.kind, a.mime, a.content_hash, a.byte_size, a.blob_path,
-      rc.status,
-      EXISTS (
-        SELECT 1 FROM inspection_lease_evidence ile
-        JOIN inspection_leases il ON il.id = ile.lease_id
-        WHERE ile.attachment_id = a.id AND il.status = 'open'
-      ) AS active_lease,
-      NULL AS sheet_rank
+    SELECT a.id AS attachment_id, a.kind, a.mime, a.content_hash, a.byte_size, a.blob_path
     FROM attachments a
     JOIN messages m ON m.id = a.message_id
-    LEFT JOIN reference_classifications rc ON rc.rowid = (
-      SELECT current.rowid FROM reference_classifications current
-      WHERE current.conversation_id = m.conversation_id AND current.reference_id = a.id
-      ORDER BY current.created_at DESC, current.rowid DESC LIMIT 1
-    )
     WHERE m.conversation_id = ?
     ORDER BY m.seq ASC, a.display_order ASC, a.rowid ASC
-  `).all(conversationId) as unknown as AttachmentDiagnosticRow[];
+  `).all(conversationId) as Array<Omit<AttachmentDiagnosticRow, "status" | "active_lease" | "sheet_rank">>;
   return {
     conversationId,
-    attachments: rows.map((row) => ({
+    attachments: rows.map((stored) => {
+      const row: AttachmentDiagnosticRow = {
+        ...stored,
+        status: statusByReference.get(stored.attachment_id) ?? null,
+        active_lease: leasedEvidenceIds.has(stored.attachment_id) ? 1 : 0,
+        sheet_rank: null,
+      };
+      return {
       attachmentId: row.attachment_id,
       kind: row.kind,
       mimeType: row.mime,
@@ -266,14 +267,15 @@ export function buildConversationImageDiagnostics(db: DatabaseSync, conversation
       byteSize: row.byte_size ?? 0,
       lifecycle: lifecycleOf(row, current),
       metadataComplete: Boolean(row.content_hash && row.byte_size !== null && row.blob_path),
-    })),
+      };
+    }),
   };
 }
 
 export async function verifyConversationImageDiagnostics(
   db: DatabaseSync,
   conversationId: string,
-  store: AttachmentStore,
+  store: ImageBlobStore,
 ): Promise<{ conversationId: string; attachments: AttachmentLifecycleDiagnostic[] }> {
   const report = buildConversationImageDiagnostics(db, conversationId);
   return {

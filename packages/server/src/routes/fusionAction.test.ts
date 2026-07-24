@@ -68,6 +68,27 @@ describe("Fusion action route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: "completed", finalRevision: "rev-1", undoEntries: 1 });
 
+    const beforeDelivery = await (await app.request(`/api/designs/${conversation.designId}`)).json() as {
+      currentRevision: number;
+      fusionDocument: { id: string; name: string };
+    };
+    expect(beforeDelivery).toMatchObject({ currentRevision: null, fusionDocument: { id: "doc-1", name: "Cube" } });
+    const delivered = await app.request(`/api/designs/${conversation.designId}/fusion-revisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId: conversation.id, actionId: "action-1" }),
+    });
+    expect(delivered.status, JSON.stringify(await delivered.clone().json())).toBe(200);
+    expect(await (await app.request(`/api/designs/${conversation.designId}/revisions`)).json()).toEqual([
+      expect.objectContaining({
+        revision: 1,
+        pySource: null,
+        fusionRevision: "rev-1",
+        sourceFusionActionId: expect.stringMatching(/^sha256:/),
+        gate: expect.objectContaining({ status: "passed" }),
+      }),
+    ]);
+
     const history = await app.request(`/api/conversations/${conversation.id}/fusion-actions`);
     expect((await history.json()).map((record: { event: string }) => record.event)).toEqual(["attempt", "completed"]);
     expect((await app.request("/api/fusion/execute", { method: "POST" })).status).toBe(404);

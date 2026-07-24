@@ -1,3 +1,4 @@
+import type { ConversationDto } from "@chamfer/shared";
 import { Plus, Settings, Trash2 } from "lucide-react";
 import { SettingsModal } from "./SettingsModal";
 import { cn } from "@/lib/utils";
@@ -7,6 +8,40 @@ export interface SidebarProps {
   /** Settings modal state is owned by App so the chat panel's error banner can open it too. */
   settingsOpen: boolean;
   onSettingsOpenChange: (open: boolean) => void;
+}
+
+type ConversationStatus = "ongoing" | "passed" | "failed" | "error" | "none";
+
+interface ConversationStatusDot {
+  status: ConversationStatus;
+  /** Trailing Tailwind classes that paint the dot; a fill for a settled/active
+   * state, a hollow ring for "no run yet" so it never reads as a verdict. */
+  className: string;
+  label: string;
+}
+
+/** Every conversation shows exactly one dot so the list reads as a single
+ * consistent status column. An active headless run wins over the stale verdict;
+ * otherwise the last verify-gate result speaks; a fresh conversation is neutral. */
+function conversationStatusDot(conversation: ConversationDto): ConversationStatusDot {
+  const live = conversation.liveRun;
+  if (live && (live.status === "starting" || live.status === "running")) {
+    return {
+      status: "ongoing",
+      className: "animate-pulse bg-sky-500",
+      label: `Headless run active using ${live.modelName}`,
+    };
+  }
+  switch (conversation.lastGateStatus) {
+    case "passed":
+      return { status: "passed", className: "bg-emerald-500", label: "Last run verified" };
+    case "failed":
+      return { status: "failed", className: "bg-red-500", label: "Last run failed verification" };
+    case "error":
+      return { status: "error", className: "bg-amber-500", label: "Last run could not be verified" };
+    default:
+      return { status: "none", className: "border border-muted-foreground/50", label: "No run yet" };
+  }
 }
 
 export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {
@@ -39,6 +74,10 @@ export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {
           </button>
         </div>
       </div>
+      <div className="flex items-center justify-between px-3 pb-1 pt-3">
+        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Conversations</h2>
+        <span className="text-[10px] tabular-nums text-muted-foreground">{conversations.length}</span>
+      </div>
       {conversations.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-muted-foreground">
           No conversations yet
@@ -47,29 +86,23 @@ export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {
         <ul className="flex-1 space-y-0.5 overflow-y-auto p-2">
           {conversations.map((conversation) => {
             const active = conversation.id === activeConversationId;
+            const dot = conversationStatusDot(conversation);
             return (
               <li key={conversation.id}>
                 <div
                   className={cn(
-                    "group flex items-center gap-1 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent",
+                    "group flex items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent",
                     active && "bg-background font-medium shadow-sm ring-1 ring-border",
                   )}
                 >
-                  {conversation.lastGateStatus && (
-                    <span
-                      data-testid="convo-gate-dot"
-                      data-status={conversation.lastGateStatus}
-                      aria-label={
-                        conversation.lastGateStatus === "passed"
-                          ? "Last run verified"
-                          : "Last run not verified"
-                      }
-                      className={cn(
-                        "h-2 w-2 shrink-0 rounded-full",
-                        conversation.lastGateStatus === "passed" ? "bg-emerald-500" : "bg-red-500",
-                      )}
-                    />
-                  )}
+                  <span
+                    data-testid="convo-status-dot"
+                    data-status={dot.status}
+                    role="img"
+                    aria-label={dot.label}
+                    title={dot.label}
+                    className={cn("h-2 w-2 shrink-0 rounded-full", dot.className)}
+                  />
                   <button
                     type="button"
                     data-conversation-id={conversation.id}

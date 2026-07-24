@@ -22,33 +22,15 @@ const MEDIA_TYPES = new Map([
   ["webp", "image/webp"],
 ]);
 
-export type AttachmentStorageErrorCode =
-  | "missing"
-  | "corrupt"
-  | "unsupported-media"
-  | "path-rejected"
-  | "write-failed";
+import {
+  AttachmentStorageError,
+  type AttachmentFileMaintenanceReport,
+  type AttachmentMaintenanceOptions,
+  type ImageBlobMetadata,
+  type StoredImageBlob,
+} from "./imageBlobStore";
 
-export class AttachmentStorageError extends Error {
-  constructor(readonly code: AttachmentStorageErrorCode, options?: ErrorOptions) {
-    super(code, options);
-  }
-}
-
-export interface StoredImageBlob {
-  contentHash: string;
-  byteSize: number;
-  mime: string;
-  blobPath: string;
-  created: boolean;
-}
-
-export interface ImageBlobMetadata {
-  contentHash: string;
-  byteSize: number;
-  mime: string;
-  blobPath: string;
-}
+export * from "./imageBlobStore";
 
 export interface AttachmentFileSystem {
   rename(source: string, destination: string): void;
@@ -57,18 +39,6 @@ export interface AttachmentFileSystem {
 
 export interface AttachmentStoreOptions {
   fileSystem?: Partial<AttachmentFileSystem>;
-}
-
-export interface AttachmentMaintenanceOptions {
-  now?: () => number;
-  temporaryMaxAgeMs?: number;
-}
-
-export interface AttachmentFileMaintenanceReport {
-  fileSystemBefore: string[];
-  fileSystemAfter: string[];
-  removed: string[];
-  failed: string[];
 }
 
 const DEFAULT_TEMPORARY_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -91,6 +61,7 @@ function isContained(root: string, candidate: string): boolean {
   const pathFromRoot = relative(root, candidate);
   return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot));
 }
+
 
 export class AttachmentStore {
   private readonly root: string;

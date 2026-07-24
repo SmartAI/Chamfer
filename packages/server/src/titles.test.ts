@@ -5,10 +5,21 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_CONVERSATION_TITLE } from "@chamfer/shared";
+import { Hono } from "hono";
 import { openDb } from "./db";
 import { createApp } from "./app";
+import { conversationsRoutes } from "./routes/conversations";
 import { sanitizeTitle } from "./titles";
 import type { LlmStreamer } from "./llm";
+import type { ImageBlobStore } from "./imageBlobStore";
+
+/** generate-title never touches attachments; the store can be inert. */
+const unusedBlobStore: ImageBlobStore = {
+  write: async () => { throw new Error("unused"); },
+  read: async () => { throw new Error("unused"); },
+  remove: () => {},
+  maintain: () => ({ fileSystemBefore: [], fileSystemAfter: [], removed: [], failed: [] }),
+};
 
 const MODEL_JSON = JSON.stringify({ provider: "anthropic", id: "test-model" });
 
@@ -143,6 +154,71 @@ describe("POST /api/conversations/:id/generate-title", () => {
     const { app, conversationId } = await setup(textStreamer("x"), { modelJson: null });
     const res = await app.request(`/api/conversations/${conversationId}/generate-title`, { method: "POST" });
     expect(res.status).toBe(400);
+  });
+
+  it("falls back to the deployment's default model when the selected provider is unkeyed (issue #53)", async () => {
+    // The cross-surface disagreement from the #53 review: with Gemini
+    // selected and no Google key, the hosted turn falls back to the demo
+    // model - title generation must do the same instead of erroring "demo
+    // covers Anthropic only". Shell provider keys must not leak in.
+    for (const name of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]) {
+      vi.stubEnv(name, "");
+    }
+    try {
+      const gemini = JSON.stringify({ provider: "google", id: "gemini-test", name: "Gemini Test" });
+      const llm = textStreamer("Parametric Gear");
+      const db = openDb(":memory:");
+      const base = await setup(llm, { modelJson: gemini, db });
+      const app = new Hono();
+      app.route("/", conversationsRoutes(db, llm, unusedBlobStore,
+        { defaultModelJson: MODEL_JSON }));
+      const res = await app.request(`/api/conversations/${base.conversationId}/generate-title`, { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ title: "Parametric Gear", generated: true });
+      // The call ran on the fallback model, not the unkeyed Gemini selection.
+      expect(llm.calls).toHaveLength(1);
+      expect(llm.calls[0]!.model).toMatchObject({ provider: "anthropic", id: "test-model" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps the user's keyed model ahead of the fallback", async () => {
+    for (const name of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]) {
+      vi.stubEnv(name, "");
+    }
+    try {
+      const gemini = JSON.stringify({ provider: "google", id: "gemini-test", name: "Gemini Test" });
+      const llm = textStreamer("Parametric Gear");
+      const db = openDb(":memory:");
+      const base = await setup(llm, { modelJson: gemini, db });
+      const putKey = await base.app.request("/api/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ googleApiKey: "g-key" }),
+      });
+      expect(putKey.status).toBe(200);
+      const app = new Hono();
+      app.route("/", conversationsRoutes(db, llm, unusedBlobStore,
+        { defaultModelJson: MODEL_JSON }));
+      const res = await app.request(`/api/conversations/${base.conversationId}/generate-title`, { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(llm.calls[0]!.model).toMatchObject({ provider: "google", id: "gemini-test" });
+      expect(llm.calls[0]!.options.apiKey).toBe("g-key");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("falls back to the deployment's default model when settings name none (online demo path)", async () => {
+    const db = openDb(":memory:");
+    const { app, conversationId } = await setup(textStreamer("Parametric Gear"), { modelJson: null, db });
+    const withDefault = new Hono();
+    withDefault.route("/", conversationsRoutes(db, textStreamer("Parametric Gear"), unusedBlobStore,
+      { defaultModelJson: MODEL_JSON }));
+    const res = await withDefault.request(`/api/conversations/${conversationId}/generate-title`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ title: "Parametric Gear", generated: true });
   });
 
   it("returns 502 and keeps the default title when the LLM fails", async () => {

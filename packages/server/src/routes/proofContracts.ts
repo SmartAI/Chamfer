@@ -1,4 +1,3 @@
-import { Hono } from "hono";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   CreateProofContractInput,
@@ -6,8 +5,13 @@ import type {
   ProofContractDto,
 } from "@chamfer/shared";
 import { REFERENCE_PROOF_POLICY, TEXT_PROOF_POLICY } from "@chamfer/shared";
-import { conversationExists } from "../conversationStore";
-import { listReferenceRegistrations } from "../referenceRegistrations";
+import {
+  compareCheckSets,
+  frozenCheckSetFromContract,
+  verificationCheckRevisionGate,
+} from "@chamfer/shared";
+import { listLegacyReferenceRegistrations } from "../referenceRegistrations";
+import { appendEvidenceEvent, projectEvidence } from "../evidenceStore";
 
 interface ProofContractRow {
   contract_id: string;
@@ -27,7 +31,7 @@ function rows(db: DatabaseSync, conversationId: string): ProofContractRow[] {
 }
 
 function toDtos(db: DatabaseSync, conversationId: string, records: ProofContractRow[]): ProofContractDto[] {
-  const currentRegistrations = new Map(listReferenceRegistrations(db, conversationId)
+  const currentRegistrations = new Map(listLegacyReferenceRegistrations(db, conversationId)
     .filter((registration) => registration.status === "current")
     .map((registration) => [registration.registrationId, registration]));
   return records.map((row, index) => {
@@ -85,7 +89,7 @@ function registrationsAreCurrent(
   derivation: ProofContractDerivationDto,
 ): boolean {
   if (derivation.shapeProof.status === "not-applicable") return true;
-  const current = new Map(listReferenceRegistrations(db, conversationId)
+  const current = new Map(listLegacyReferenceRegistrations(db, conversationId)
     .filter((registration) => registration.status === "current")
     .map((registration) => [registration.registrationId, registration]));
   return derivation.shapeProof.registrations.every((binding) => {
@@ -96,75 +100,189 @@ function registrationsAreCurrent(
   });
 }
 
-export function proofContractRoutes(db: DatabaseSync): Hono {
-  const app = new Hono();
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  return leftSet.size === right.length && right.every((id) => leftSet.has(id));
+}
 
-  app.get("/api/conversations/:id/proof-contracts", (c) => {
-    const conversationId = c.req.param("id");
-    if (!conversationExists(db, conversationId)) return c.json({ error: "not found" }, 404);
-    return c.json(toDtos(db, conversationId, rows(db, conversationId)));
+/**
+ * A source correction replaces the frozen target instead of relaxing it.
+ * Only an exact active source set reached through explicit supersession may
+ * establish the replacement check baseline.
+ */
+function authoritativeSourceRevision(
+  projection: ReturnType<typeof projectEvidence>,
+  prior: ProofContractDto | undefined,
+  nextIds: readonly string[],
+): string[] | undefined {
+  if (!prior || sameIds(prior.derivation.sourceSpecificationIds, nextIds)) return undefined;
+  const activeIds = projection.sourceSpecifications
+    .filter((specification) => specification.status === "active")
+    .map((specification) => specification.id);
+  if (!sameIds(activeIds, nextIds)) return undefined;
+  const nextSet = new Set(nextIds);
+  const removed = prior.derivation.sourceSpecificationIds.filter((id) => !nextSet.has(id));
+  // A partial replacement cannot prove which planned checks belong only to the
+  // corrected source. Keep the frozen baseline unless every prior source is
+  // explicitly superseded, so an unchanged requirement cannot be relaxed as a
+  // side effect of correcting a different one.
+  if (removed.length !== prior.derivation.sourceSpecificationIds.length || removed.some((id) => {
+    const specification = projection.sourceSpecifications.find((candidate) => candidate.id === id);
+    return specification?.status !== "superseded" ||
+      !specification.supersededBySpecificationId ||
+      !nextSet.has(specification.supersededBySpecificationId);
+  })) return undefined;
+  return [...nextIds];
+}
+
+export class ProofContractError extends Error {
+  constructor(
+    message: string,
+    public readonly code: "invalid" | "conflict" = "invalid",
+    public readonly commitEvidence = false,
+  ) {
+    super(message);
+  }
+}
+
+export function listLegacyProofContracts(db: DatabaseSync, conversationId: string): ProofContractDto[] {
+  return toDtos(db, conversationId, rows(db, conversationId));
+}
+
+export function freezeProofContract(
+  db: DatabaseSync,
+  conversationId: string,
+  input: CreateProofContractInput,
+): ProofContractDto {
+  if (!validDerivation(input.derivation)) {
+    throw new ProofContractError("a valid proof-contract derivation is required");
+  }
+  const projection = projectEvidence(db, conversationId);
+  const currentRegistrations = new Map(projection.referenceRegistrations
+    .filter((registration) => registration.status === "current")
+    .map((registration) => [registration.registrationId, registration]));
+  const registrationsCurrent = input.derivation.shapeProof.status === "not-applicable" ||
+    input.derivation.shapeProof.registrations.every((binding) => {
+      const registration = currentRegistrations.get(binding.registrationId);
+      return registration?.referenceId === binding.referenceId &&
+        registration.revision === binding.revision &&
+        registration.eligibility.status === binding.eligibility;
+    });
+  if (!registrationsCurrent) {
+    throw new ProofContractError("proof-contract reference registrations must be current and conversation-owned");
+  }
+  const payloadJson = JSON.stringify(input.derivation);
+  const bindingKey = registrationKey(input.derivation);
+  const existing = projection.proofContracts.find((contract) =>
+    contract.derivation.planId === input.derivation.planId &&
+    contract.derivation.criteriaRevision === input.derivation.criteriaRevision &&
+    registrationKey(contract.derivation) === bindingKey);
+  if (existing) {
+    if (JSON.stringify(existing.derivation) !== payloadJson) {
+      throw new ProofContractError("the proof contract for this criteria revision is already frozen with different derivation", "conflict");
+    }
+    return existing;
+  }
+  const priorForPlan = projection.proofContracts
+    .filter((contract) => contract.derivation.planId === input.derivation.planId)
+    .sort((left, right) => right.revision - left.revision)[0];
+  if (priorForPlan && input.derivation.criteriaRevision < priorForPlan.derivation.criteriaRevision) {
+    throw new ProofContractError("proof-contract criteria revisions must advance monotonically", "conflict");
+  }
+  const authorization = input.relaxationEscalationId
+    ? projection.designEscalations.find((escalation) =>
+      escalation.escalationId === input.relaxationEscalationId &&
+      escalation.kind === "verification-check-relaxation" &&
+      escalation.status === "resolved")
+    : undefined;
+  if (input.relaxationEscalationId && !authorization) {
+    throw new ProofContractError("check relaxation requires the named resolved verification-check-relaxation escalation", "conflict");
+  }
+  const sourceRevisionIds = authoritativeSourceRevision(
+    projection,
+    priorForPlan,
+    input.derivation.sourceSpecificationIds,
+  );
+  const beforeChecks = priorForPlan && !sourceRevisionIds
+    ? frozenCheckSetFromContract(priorForPlan).checks
+    : [];
+  const afterChecks = frozenCheckSetFromContract({
+    contractId: priorForPlan?.contractId ?? "proposed",
+    revision: (priorForPlan?.revision ?? 0) + 1,
+    derivation: input.derivation,
+  }).checks;
+  if (authorization) {
+    const heldAttempt = projection.verificationCheckRevisionAttempts.find((attempt) =>
+      attempt.attemptId === authorization.verificationCheckAttemptId &&
+      attempt.status === "held" &&
+      attempt.planId === input.derivation.planId);
+    if (!heldAttempt || compareCheckSets(heldAttempt.proposedChecks, afterChecks).verdict === "loosen") {
+      throw new ProofContractError(
+        "the resolved check-relaxation escalation does not authorize this proposal",
+        "conflict",
+      );
+    }
+  }
+  const comparison = compareCheckSets(beforeChecks, afterChecks);
+  const revisionGate = verificationCheckRevisionGate(beforeChecks, afterChecks, authorization?.escalationId);
+  const attemptId = crypto.randomUUID();
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:verification-check-revision:${attemptId}`,
+    type: "verification-checks.revision-attempted",
+    data: {
+      attempt: {
+        attemptId,
+        planId: input.derivation.planId,
+        ...(priorForPlan
+          ? { priorContractId: priorForPlan.contractId, priorContractRevision: priorForPlan.revision }
+          : {}),
+        proposedCriteriaRevision: input.derivation.criteriaRevision,
+        proposedChecks: afterChecks,
+        comparison,
+        status: revisionGate.passed ? "accepted" : "held",
+        ...(!revisionGate.passed ? { reason: revisionGate.reason } : {}),
+        ...(revisionGate.passed && revisionGate.verdict === "loosen"
+          ? { authorizedByEscalationId: revisionGate.authorizedByEscalationId }
+          : {}),
+        ...(sourceRevisionIds
+          ? { authorizedBySourceSpecificationIds: sourceRevisionIds }
+          : {}),
+        attemptedAt: Date.now(),
+      },
+    },
   });
-
-  app.post("/api/conversations/:id/proof-contracts", async (c) => {
-    const conversationId = c.req.param("id");
-    if (!conversationExists(db, conversationId)) return c.json({ error: "not found" }, 404);
-    const input = await c.req.json<CreateProofContractInput>().catch(() => undefined);
-    if (!input || !validDerivation(input.derivation)) {
-      return c.json({ error: "a valid proof-contract derivation is required" }, 400);
-    }
-    if (!registrationsAreCurrent(db, conversationId, input.derivation)) {
-      return c.json({ error: "proof-contract reference registrations must be current and conversation-owned" }, 400);
-    }
-    const payloadJson = JSON.stringify(input.derivation);
-    const bindingKey = registrationKey(input.derivation);
-    const existing = db.prepare(
-      "SELECT * FROM proof_contracts WHERE conversation_id = ? AND plan_id = ? AND criteria_revision = ? AND registration_key = ?",
-    ).get(conversationId, input.derivation.planId, input.derivation.criteriaRevision, bindingKey) as unknown as ProofContractRow | undefined;
-    if (existing) {
-      if (existing.payload_json !== payloadJson) {
-        return c.json({ error: "the proof contract for this criteria revision is already frozen with different derivation" }, 409);
-      }
-      const existingDto = toDtos(db, conversationId, rows(db, conversationId)).find((contract) =>
-        contract.contractId === existing.contract_id && contract.revision === existing.revision,
-      )!;
-      return c.json(existingDto);
-    }
-
-    const priorForPlan = db.prepare(
-      "SELECT * FROM proof_contracts WHERE conversation_id = ? AND plan_id = ? ORDER BY revision DESC LIMIT 1",
-    ).get(conversationId, input.derivation.planId) as unknown as ProofContractRow | undefined;
-    if (priorForPlan && input.derivation.criteriaRevision < priorForPlan.criteria_revision) {
-      return c.json({ error: "proof-contract criteria revisions must advance monotonically" }, 409);
-    }
-    const contractId = priorForPlan?.contract_id ?? crypto.randomUUID();
-    const revision = (priorForPlan?.revision ?? 0) + 1;
-    const frozenAt = Date.now();
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      db.prepare(`INSERT INTO proof_contracts
-        (contract_id, conversation_id, revision, plan_id, criteria_revision, registration_key, payload_json, frozen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(
-          contractId,
-          conversationId,
-          revision,
-          input.derivation.planId,
-          input.derivation.criteriaRevision,
-          bindingKey,
-          payloadJson,
-          frozenAt,
-        );
-      db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(frozenAt, conversationId);
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-    const created = toDtos(db, conversationId, rows(db, conversationId)).find((contract) =>
-      contract.contractId === contractId && contract.revision === revision,
-    )!;
-    return c.json(created);
+  if (!revisionGate.passed) {
+    throw new ProofContractError(
+      `proof-contract checks would loosen the frozen contract: ${revisionGate.reason}`,
+      "conflict",
+      true,
+    );
+  }
+  const contractId = priorForPlan?.contractId ?? crypto.randomUUID();
+  const revision = (priorForPlan?.revision ?? 0) + 1;
+  const frozenAt = Date.now();
+  const contract: ProofContractDto = {
+    contractId,
+    conversationId,
+    revision,
+    status: "current",
+    proofStatus: "pending",
+    frozenAt,
+    derivation: input.derivation,
+    checkRevision: {
+      comparison,
+      ...(revisionGate.verdict === "loosen"
+        ? { authorizedByEscalationId: revisionGate.authorizedByEscalationId }
+        : {}),
+      ...(sourceRevisionIds
+        ? { authorizedBySourceSpecificationIds: sourceRevisionIds }
+        : {}),
+    },
+  };
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:proof-contract:${contract.contractId}:${contract.revision}`,
+    type: "proof-contract.frozen",
+    data: { contract },
   });
-
-  return app;
+  return contract;
 }

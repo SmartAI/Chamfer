@@ -22,7 +22,7 @@ it.runIf(smokeEnabled)("synchronizes one privacy-safe tracer case into the confi
     gating: "non-gating",
     identities: {
       corpus: "smoke-corpus-v1",
-      agentConfiguration: "smoke-agent-configuration-v1",
+      agentConfiguration: { name: "current", identityHash: "a".repeat(64) },
       commit: "smoke",
       model: "scripted-smoke-model-v1",
       evaluator: "smoke-evaluator-v1",

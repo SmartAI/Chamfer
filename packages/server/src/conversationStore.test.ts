@@ -107,4 +107,69 @@ describe("last_gate_status migration", () => {
     const fresh = createConversation(db, "Fresh after migration");
     expect(fresh.sourceSpecificationsRequired).toBe(true);
   });
+
+  it("migrates legacy delivered artifacts into independent passing design revisions", () => {
+    const db = openDb(":memory:");
+    db.prepare(`INSERT INTO conversations
+      (id, title, cad_environment, created_at, updated_at, source_specifications_required, design_id)
+      VALUES ('legacy-part-chat', 'Legacy plate', 'build123d', 1, 2, 0, NULL)`).run();
+    db.prepare(`INSERT INTO artifacts
+      (id, conversation_id, version, py_source, params_json, gate_json, measurements_json, created_at)
+      VALUES ('passing-artifact', 'legacy-part-chat', 1, 'result = Box(10, 20, 3)', '[]', NULL, NULL, 1),
+             ('intermediate-artifact', 'legacy-part-chat', 2, 'result = Box(1, 1, 1)', '[]', NULL, NULL, 2)`).run();
+    db.prepare(`INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at)
+      VALUES ('accepted-result', 'legacy-part-chat', 0, 'toolResult', ?, 1)`).run(JSON.stringify({
+      role: "toolResult",
+      details: {
+        code: { toolCallId: "run-1", artifactId: "passing-artifact", artifactVersion: 1 },
+        gate: { status: "passed", checks: [{ name: "valid", passed: true, detail: "valid" }] },
+        measurements: { bboxMm: [10, 20, 3], volumeMm3: 600, areaMm2: 580, children: [] },
+      },
+    }));
+
+    migrateDb(db);
+    migrateDb(db);
+
+    const migrated = getConversation(db, "legacy-part-chat")!;
+    expect(migrated.designId).toBe("legacy-design:legacy-part-chat");
+    const migratedDesignId = migrated.designId!;
+    expect(db.prepare("SELECT name, current_revision AS currentRevision FROM designs WHERE id = ?")
+      .get(migratedDesignId)).toEqual({ name: "Legacy plate", currentRevision: 1 });
+    expect(db.prepare(`SELECT revision, py_source AS pySource, source_artifact_id AS sourceArtifactId
+      FROM design_revisions WHERE design_id = ?`).all(migratedDesignId)).toEqual([{
+      revision: 1,
+      pySource: "result = Box(10, 20, 3)",
+      sourceArtifactId: "passing-artifact",
+    }]);
+  });
+
+  it("migrates the latest completed legacy Fusion result without cataloging intermediate actions", () => {
+    const db = openDb(":memory:");
+    db.prepare(`INSERT INTO conversations
+      (id, title, cad_environment, created_at, updated_at, source_specifications_required, design_id)
+      VALUES ('legacy-fusion-chat', 'Fusion bracket', 'fusion', 1, 4, 0, NULL)`).run();
+    const insertAction = db.prepare(`INSERT INTO fusion_action_ledger
+      (id, conversation_id, action_id, event, recorded_at, document_json, expected_revision,
+       observed_revision, final_revision, model_json, skills_json, policy_version, intent, body_sha256,
+       affected_references_json, expected_effects_json, result_json, evidence_ids_json)
+      VALUES (?, 'legacy-fusion-chat', ?, 'completed', ?, '{}', 'rev-0', ?, ?, '{}', '{}', 'v1',
+       'legacy action', 'hash', '[]', '[]', ?, '[]')`);
+    const result = (label: string) => JSON.stringify({
+      status: "completed",
+      checks: [{ kind: "body-count", status: "passed", detail: label }],
+    });
+    insertAction.run("ledger-1", "action-1", 2, "rev-1", "rev-1", result("first"));
+    insertAction.run("ledger-2", "action-2", 3, "rev-2", "rev-2", result("final"));
+
+    migrateDb(db);
+
+    const designId = getConversation(db, "legacy-fusion-chat")!.designId!;
+    expect(db.prepare(`SELECT revision, fusion_revision AS fusionRevision,
+        source_fusion_action_id AS sourceActionId
+      FROM design_revisions WHERE design_id = ?`).all(designId)).toEqual([{
+      revision: 1,
+      fusionRevision: "rev-2",
+      sourceActionId: "action-2",
+    }]);
+  });
 });

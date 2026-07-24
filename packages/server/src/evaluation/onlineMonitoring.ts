@@ -95,16 +95,18 @@ export function recordCompletedRunMonitoring(
     if (run.status !== "completed") return undefined;
     const conversation = db.prepare("SELECT last_gate_status FROM conversations WHERE id = ?")
       .get(run.conversationId) as { last_gate_status: string | null } | undefined;
-    if (!conversation) return undefined;
     const diagnostics = eventDiagnostics(db, run.id);
     const messageEvidence = structuredMessageEvidence(db, run.conversationId);
-    const gate = conversation.last_gate_status === "passed" ? "passed"
-      : conversation.last_gate_status === "failed" ? "failed"
+    const gate = conversation?.last_gate_status === "passed" ? "passed"
+      : conversation?.last_gate_status === "failed" ? "failed"
       : "unavailable";
     const evidence: OnlineRunEvidence = {
       runId: run.id,
       release: run.release,
-      agentConfigurationHash: run.agentConfiguration.identityHash,
+      configuration: {
+        name: run.agentConfiguration.name,
+        identityHash: run.agentConfiguration.identityHash,
+      },
       provider: run.agentConfiguration.provider,
       model: run.agentConfiguration.model,
       modality: observableModality(db, run.conversationId),
@@ -114,6 +116,7 @@ export function recordCompletedRunMonitoring(
       requiredEvidence: gate === "unavailable" ? 0 : 1,
       observedEvidence: gate === "unavailable" ? 0 : 1,
       completionClaimed: run.outcome === "completed",
+      toolCalls: run.counters.toolCalls,
       toolErrors: diagnostics.toolErrors,
       cadFailures: diagnostics.cadFailures,
       retries: run.counters.retries,

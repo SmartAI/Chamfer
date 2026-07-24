@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { isAgentConfigurationIdentity, type AgentConfigurationIdentity } from "@chamfer/shared";
 
 export type ScoreDataType = "NUMERIC" | "CATEGORICAL" | "BOOLEAN" | "TEXT";
 
 export interface ExperimentIdentities {
   corpus: string;
-  agentConfiguration: string;
+  agentConfiguration: AgentConfigurationIdentity;
   commit: string;
   model: string;
   evaluator: string;
@@ -187,6 +188,10 @@ export async function syncOfflineExperiment(
   cohort: OfflineExperimentCohort,
   options: SyncOfflineExperimentOptions,
 ): Promise<LangfuseSyncResult> {
+  const configuration = cohort.identities.agentConfiguration;
+  if (!isAgentConfigurationIdentity(configuration)) {
+    throw new Error("Experiment sync requires an artifact-derived agent configuration identity");
+  }
   if (!options.transport) return { status: "skipped", reason: "missing_credentials" };
   if (cohort.cases.length === 0) throw new Error("Cannot synchronize an empty offline cohort");
   const transport = options.transport;
@@ -261,7 +266,7 @@ export async function syncOfflineExperiment(
         input: item.input,
         output: item.output,
         release: cohort.release,
-        version: cohort.identities.runner,
+        version: configuration.identityHash,
         environment: "evaluation",
         tags,
         metadata: {

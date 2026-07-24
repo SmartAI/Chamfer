@@ -6,9 +6,10 @@ import type {
   ReferenceRecordDto,
   ReferenceRelationship,
 } from "@chamfer/shared";
-import { AttachmentStore } from "./attachmentStore";
+import type { ImageBlobStore } from "./imageBlobStore";
 import { getAttachment } from "./conversationStore";
 import { listSourceSpecifications } from "./sourceSpecifications";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 interface ReferenceRow {
   reference_id: string;
@@ -86,7 +87,7 @@ function historyFor(db: DatabaseSync, conversationId: string, referenceId: strin
   });
 }
 
-export function listReferenceRecords(db: DatabaseSync, conversationId: string): ReferenceRecordDto[] {
+export function listLegacyReferenceRecords(db: DatabaseSync, conversationId: string): ReferenceRecordDto[] {
   const rows = db.prepare(`
     SELECT a.id AS reference_id, m.conversation_id,
       rc.id AS classification_id, rc.status, rc.purpose, rc.relationships_json,
@@ -124,9 +125,29 @@ export function listReferenceRecords(db: DatabaseSync, conversationId: string): 
   });
 }
 
+export function listReferenceRecords(db: DatabaseSync, conversationId: string): ReferenceRecordDto[] {
+  const projected = new Map(projectEvidence(db, conversationId).referenceRecords
+    .map((record) => [record.referenceId, record]));
+  const references = db.prepare(`SELECT a.id AS referenceId
+    FROM attachments a JOIN messages m ON m.id = a.message_id
+    WHERE m.conversation_id = ? AND a.kind = 'user-image'
+    ORDER BY m.seq ASC, a.display_order ASC, a.rowid ASC`)
+    .all(conversationId) as Array<{ referenceId: string }>;
+  return references.map(({ referenceId }) => projected.get(referenceId) ?? {
+    referenceId,
+    conversationId,
+    attachmentAvailable: true,
+    status: "unclassified",
+    relationships: [],
+    specificationIds: [],
+    specificationLinks: [],
+    history: [],
+  });
+}
+
 export async function listReferenceRecordsWithAvailability(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   conversationId: string,
 ): Promise<ReferenceRecordDto[]> {
   return Promise.all(listReferenceRecords(db, conversationId).map(async (record) => {
@@ -202,10 +223,7 @@ function assertSpecificationOwnership(
   for (const specificationId of specificationIds) {
     const specification = specifications.get(specificationId);
     if (!specification) {
-      const foreign = db.prepare("SELECT 1 FROM source_specifications WHERE id = ? LIMIT 1").get(specificationId);
-      throw new ReferenceClassificationError(foreign
-        ? `specification ${specificationId} does not belong to this conversation`
-        : `specification ${specificationId} does not exist`);
+      throw new ReferenceClassificationError(`specification ${specificationId} does not exist`);
     }
     if (specification.status !== "active") {
       throw new ReferenceClassificationError(`specification ${specificationId} is superseded`);
@@ -273,12 +291,10 @@ export function classifyReference(
     ...(input.noSpecificationReason ? { noSpecificationReason: input.noSpecificationReason.trim() } : {}),
   };
   if (idempotencyKey) {
-    const row = db.prepare(`SELECT reference_id, conversation_id, id AS classification_id, status, purpose,
-      relationships_json, rationale, specification_links_json, specification_ids_json,
-      legacy_specification_links_json, no_specification_reason, actor, created_at
-      FROM reference_classifications WHERE id = ?`).get(idempotencyKey) as unknown as ReferenceRow | undefined;
-    if (row) {
-      const existing = toClassification(row)!;
+    const existing = projectEvidence(db, conversationId).referenceRecords
+      .flatMap((record) => record.history)
+      .find((classification) => classification.id === idempotencyKey);
+    if (existing) {
       const exact = existing.conversationId === conversationId && existing.referenceId === normalized.referenceId &&
         existing.status === normalized.status && existing.purpose === normalized.purpose &&
         JSON.stringify(existing.relationships) === JSON.stringify(normalized.relationships) &&
@@ -298,7 +314,7 @@ export function classifyReference(
     }
     assertOwnership(db, conversationId, relationship.referenceId);
   }
-  assertNoSupersessionCycle(listReferenceRecords(db, conversationId), input);
+  assertNoSupersessionCycle(projectEvidence(db, conversationId).referenceRecords, input);
   const classification: ReferenceClassificationDto = {
     ...normalized,
     id: idempotencyKey ?? crypto.randomUUID(),
@@ -306,26 +322,10 @@ export function classifyReference(
     actor: "agent",
     timestamp: Date.now(),
   };
-  db.prepare(`
-    INSERT INTO reference_classifications
-      (id, conversation_id, reference_id, status, purpose, relationships_json,
-       rationale, specification_links_json, specification_ids_json,
-       legacy_specification_links_json, no_specification_reason, actor, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    classification.id,
-    conversationId,
-    classification.referenceId,
-    classification.status,
-    classification.purpose,
-    JSON.stringify(classification.relationships),
-    classification.rationale,
-    JSON.stringify(classification.legacySpecificationLinks ?? []),
-    JSON.stringify(classification.specificationIds),
-    classification.legacySpecificationLinks ? JSON.stringify(classification.legacySpecificationLinks) : null,
-    classification.noSpecificationReason ?? null,
-    classification.actor,
-    classification.timestamp,
-  );
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:reference-classification:${classification.id}`,
+    type: "reference.classified",
+    data: { classification, attachmentAvailable: true },
+  });
   return classification;
 }

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
   classifyReference,
+  startHeadlessRun,
   openInspectionLease,
   recordInspectionObservation,
   recordVisualVerification,
@@ -11,14 +12,14 @@ import {
 
 afterEach(() => vi.unstubAllGlobals());
 
-it("sends the agent tool call ID as Idempotency-Key on mutation requests", async () => {
+it("sends evidence mutations with the agent tool call ID", async () => {
   const fetch = vi.fn(async (_input: string, _init?: RequestInit) =>
     new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
   vi.stubGlobal("fetch", fetch);
   const classify = { referenceId: "ref", status: "active" as const, purpose: "p", relationships: [], rationale: "r", specificationLinks: ["s"] };
   const observation = { relevantViews: ["front"], facts: ["f"], affectedSpecifications: ["s"], affectedComponents: [] };
-  const visual = { artifactId: "a", artifactVersion: 1, inspectionSheetId: "sheet", coveredReferenceIds: [], verdict: "match" as const, observations: [] };
-  const batch = { artifactId: "a", artifactVersion: 1, inspectionSheetId: "sheet", imageLimit: 2, activeReferenceIds: ["ref"], batchIndex: 0, batchCount: 1, coveredReferenceIds: ["ref"], observations: [], finalVerdict: "match" as const, synthesis: "s" };
+  const visual = { artifactId: "a", artifactVersion: 1, inspectionSheetId: "sheet", visualComparisonEvidenceId: "comparison-a", coveredReferenceIds: [], verdict: "match" as const, observations: [] };
+  const batch = { artifactId: "a", artifactVersion: 1, inspectionSheetId: "sheet", visualComparisonEvidenceId: "comparison-a", imageLimit: 2, activeReferenceIds: ["ref"], batchIndex: 0, batchCount: 1, coveredReferenceIds: ["ref"], observations: [], finalVerdict: "match" as const, synthesis: "s" };
   const specifications = { specifications: [{ id: "size", requirement: "Honor size.", source: { messageId: "m", text: "size", start: 0, end: 4 } }] };
 
   await classifyReference("c", classify, "classify-key");
@@ -38,6 +39,27 @@ it("sends the agent tool call ID as Idempotency-Key on mutation requests", async
     engineeringEvidenceId: "run",
   }, "report-key");
 
-  expect(fetch.mock.calls.map((call) => (call[1]?.headers as Record<string, string>)["Idempotency-Key"]))
-    .toEqual(["classify-key", "lease-key", "observation-key", "visual-key", "batch-key", "specification-key", "report-key"]);
+  expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+    ...Array(4).fill("/api/conversations/c/evidence"),
+    "/api/conversations/c/visual-verification-batches",
+    "/api/conversations/c/evidence",
+    ...Array(2).fill("/api/conversations/c/evidence"),
+  ]);
+  expect(fetch.mock.calls.filter((call) => call[1]?.method === "POST").map((call) => {
+    const headers = call[1]?.headers as Record<string, string> | undefined;
+    return headers?.["Idempotency-Key"] ?? JSON.parse(String(call[1]?.body)).idempotencyKey;
+  })).toEqual(["classify-key", "lease-key", "observation-key", "visual-key", "batch-key", "specification-key", "report-key"]);
+});
+
+it("preserves the HTTP status on a failed headless-run start", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(
+    JSON.stringify({ error: "no model configured" }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  )));
+
+  await expect(startHeadlessRun("conversation-1", { text: "Build a box" })).rejects.toMatchObject({
+    name: "HttpError",
+    status: 400,
+    message: "no model configured",
+  });
 });

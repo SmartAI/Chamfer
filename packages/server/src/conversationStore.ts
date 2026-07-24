@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { AttachmentDto, CadEnvironment, ConversationDto, Gate, MessageDto } from "@chamfer/shared";
+import { createDesign } from "./designStore";
+import { withImmediateTransaction } from "./dbTransaction";
+import { ConversationEventStore } from "./conversationEventStore";
 
 interface ConversationRow {
   id: string;
@@ -9,22 +12,10 @@ interface ConversationRow {
   updated_at: number;
   last_gate_status: string | null;
   source_specifications_required: number;
+  design_id: string | null;
 }
 
 const GATE_STATUSES: ReadonlySet<string> = new Set(["passed", "failed", "error"]);
-
-/** Verify-gate verdict carried by a toolResult message's contentJson, or undefined.
- * Tolerates any malformed input: rollup extraction must never block persistence. */
-function gateStatusOf(role: string, contentJson: string): Gate["status"] | undefined {
-  if (role !== "toolResult") return undefined;
-  try {
-    const parsed = JSON.parse(contentJson) as { details?: { gate?: { status?: unknown } } };
-    const status = parsed?.details?.gate?.status;
-    return typeof status === "string" && GATE_STATUSES.has(status) ? (status as Gate["status"]) : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 interface MessageRow {
   id: string;
@@ -51,6 +42,7 @@ function toConversationDto(row: ConversationRow): ConversationDto {
   return {
     id: row.id,
     title: row.title,
+    designId: row.design_id,
     cadEnvironment: row.cad_environment,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -88,19 +80,37 @@ export function createConversation(
   db: DatabaseSync,
   title: string,
   cadEnvironment: CadEnvironment = "build123d",
+  designId?: string,
+  designName?: string,
 ): ConversationDto {
   const id = crypto.randomUUID();
   const now = Date.now();
-  db.prepare(
-    "INSERT INTO conversations (id, title, cad_environment, created_at, updated_at, source_specifications_required) VALUES (?, ?, ?, ?, ?, 1)",
-  ).run(
-    id,
-    title,
-    cadEnvironment,
-    now,
-    now,
-  );
-  return { id, title, cadEnvironment, createdAt: now, updatedAt: now, sourceSpecificationsRequired: true };
+  return withImmediateTransaction(db, () => {
+    const boundDesignId = designId ?? createDesign(
+      db,
+      designName ?? (title === "New chat" ? "Untitled design" : title),
+      cadEnvironment,
+    ).id;
+    new ConversationEventStore(db).append(id, {
+      recordedAt: now,
+      type: "conversation.created",
+      data: {
+        title,
+        cadEnvironment,
+        designId: boundDesignId,
+        sourceSpecificationsRequired: true,
+      },
+    });
+    return {
+      id,
+      title,
+      designId: boundDesignId,
+      cadEnvironment,
+      createdAt: now,
+      updatedAt: now,
+      sourceSpecificationsRequired: true,
+    };
+  });
 }
 
 export function getConversation(db: DatabaseSync, id: string): ConversationDto | undefined {
@@ -133,12 +143,12 @@ export function getMessage(db: DatabaseSync, id: string): MessageDto | undefined
 /** Internal-only title setter: titles are server-generated (see routes'
  * generate-title); there is no user-facing rename endpoint. */
 export function setConversationTitle(db: DatabaseSync, id: string, title: string): boolean {
-  const result = db.prepare("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?").run(
-    title,
-    Date.now(),
-    id,
-  );
-  return result.changes > 0;
+  if (!conversationExists(db, id)) return false;
+  new ConversationEventStore(db).append(id, {
+    type: "conversation.title-updated",
+    data: { title },
+  });
+  return true;
 }
 
 export function createMessage(
@@ -147,15 +157,7 @@ export function createMessage(
   message: { id: string; seq: number; role: string; contentJson: string },
 ): MessageDto {
   const now = Date.now();
-  db.prepare(
-    "INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(message.id, conversationId, message.seq, message.role, message.contentJson, now);
-  db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(now, conversationId);
-  const gateStatus = gateStatusOf(message.role, message.contentJson);
-  if (gateStatus) {
-    db.prepare("UPDATE conversations SET last_gate_status = ? WHERE id = ?").run(gateStatus, conversationId);
-  }
-  return {
+  const dto = {
     id: message.id,
     conversationId,
     seq: message.seq,
@@ -163,6 +165,12 @@ export function createMessage(
     contentJson: message.contentJson,
     createdAt: now,
   };
+  new ConversationEventStore(db).append(conversationId, {
+    recordedAt: now,
+    type: "message.appended",
+    data: { message: dto, attachments: [] },
+  });
+  return dto;
 }
 
 export function listMessages(db: DatabaseSync, conversationId: string): MessageDto[] {
@@ -170,6 +178,17 @@ export function listMessages(db: DatabaseSync, conversationId: string): MessageD
     .prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq ASC")
     .all(conversationId) as unknown as MessageRow[];
   return rows.map(toMessageDto);
+}
+
+/** Highest stored message seq for the conversation; -1 for an empty
+ * transcript. This is both the watermark of the container seed/transcript
+ * protocol and the append cursor of turn persistence - one definition so the
+ * two sides can never disagree. */
+export function maxMessageSeq(db: DatabaseSync, conversationId: string): number {
+  const row = db
+    .prepare("SELECT COALESCE(MAX(seq), -1) AS max_seq FROM messages WHERE conversation_id = ?")
+    .get(conversationId) as { max_seq: number };
+  return row.max_seq;
 }
 
 export function createAttachment(
@@ -183,21 +202,7 @@ export function createAttachment(
     "SELECT COALESCE(MAX(display_order), -1) + 1 AS display_order FROM attachments WHERE message_id = ?",
   ).get(messageId) as { display_order: number };
   const displayOrder = orderRow.display_order;
-  db.prepare(
-    `INSERT INTO attachments
-      (id, message_id, kind, mime, content_hash, byte_size, blob_path, display_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    messageId,
-    kind,
-    blob.mime,
-    blob.contentHash,
-    blob.byteSize,
-    blob.blobPath,
-    displayOrder,
-  );
-  return {
+  const attachment = {
     id,
     messageId,
     kind: kind as AttachmentDto["kind"],
@@ -206,6 +211,14 @@ export function createAttachment(
     byteSize: blob.byteSize,
     displayOrder,
   };
+  const row = db.prepare("SELECT conversation_id AS conversationId FROM messages WHERE id = ?")
+    .get(messageId) as { conversationId: string } | undefined;
+  if (!row) throw new Error("Message not found");
+  new ConversationEventStore(db).append(row.conversationId, {
+    type: "attachment.appended",
+    data: { attachment: { ...attachment, blobPath: blob.blobPath } },
+  });
+  return attachment;
 }
 
 export function createMessageWithAttachments(
@@ -218,18 +231,33 @@ export function createMessageWithAttachments(
     blob: { mime: string; contentHash: string; byteSize: number; blobPath: string };
   }>,
 ): MessageDto {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const created = createMessage(db, conversationId, message);
-    for (const attachment of attachments) {
-      createAttachment(db, message.id, attachment.kind, attachment.blob, attachment.id);
-    }
-    db.exec("COMMIT");
-    return created;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  const now = Date.now();
+  const created: MessageDto = {
+    id: message.id,
+    conversationId,
+    seq: message.seq,
+    role: message.role,
+    contentJson: message.contentJson,
+    createdAt: now,
+  };
+  new ConversationEventStore(db).append(conversationId, {
+    recordedAt: now,
+    type: "message.appended",
+    data: {
+      message: created,
+      attachments: attachments.map((attachment, displayOrder) => ({
+        id: attachment.id,
+        messageId: message.id,
+        kind: attachment.kind as AttachmentDto["kind"],
+        mime: attachment.blob.mime,
+        contentHash: attachment.blob.contentHash,
+        byteSize: attachment.blob.byteSize,
+        blobPath: attachment.blob.blobPath,
+        displayOrder,
+      })),
+    },
+  });
+  return created;
 }
 
 export function getAttachment(db: DatabaseSync, id: string):

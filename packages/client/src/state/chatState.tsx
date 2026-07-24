@@ -8,49 +8,40 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   DEFAULT_CAD_ENVIRONMENT,
   DEFAULT_CONVERSATION_TITLE,
   type CadEnvironment,
   type ConversationDto,
+  type OnlineBudgetDto,
 } from "@chamfer/shared";
 import * as rest from "@/api/rest";
 import {
-  createSession,
-  FUSION_RECONCILIATION_MARKER,
-  registerMessagePersistenceId,
-  DEFAULT_MAX_CAD_RUNS,
-  type ChatSession,
+  openAgentEvents,
+  postAgentAbort,
+  postAgentMessage,
+  type AgentImagePayload,
+  type AgentStreamEvent,
+} from "@/api/agentTransport";
+import {
+  applyAgentStreamEvent,
+  classifySessionError,
+  EMPTY_SESSION_STATE,
   type SessionState,
-} from "@/agent/session";
-import { latestGateSummary } from "@/agent/gateSummary";
-import { PROBE_COMPONENT, runComponentIds } from "@/agent/plan";
-import { resolveAblationSkill } from "@/agent/ablation";
-import { evaluationTraceIdentity } from "@/agent/agentRunLifecycle";
-import { assembleAgentPrompt } from "@/agent/build123dSkill";
-import { runtimePrompt } from "@/agent/prompt";
-import { fusionRuntimePrompt } from "@/agent/fusionPrompt";
-import { createSearchFusionDocsTool } from "@/agent/tools/searchFusionDocs";
-import { createInspectFusionTool } from "@/agent/tools/inspectFusion";
-import { createRunBuild123dTool } from "@/agent/tools/runBuild123d";
-import { createLookupDocsTool } from "@/agent/tools/lookupDocs";
-import { createSearchDocsTool } from "@/agent/tools/searchDocs";
+} from "@/state/agentEventFold";
+import {
+  resolveTurnFundingDisplay,
+  type FundingCapabilities,
+  type FundingSettings,
+} from "@/state/turnFunding";
 import { useOptionalAppState } from "@/state/appState";
 import { CadEnvironmentDialog } from "@/components/CadEnvironmentDialog";
 import { useOptionalFusionReadiness } from "@/state/fusionReadiness";
 
-const EMPTY_SESSION_STATE: SessionState = {
-  messages: [],
-  referenceRecords: [],
-  sourceSpecifications: [],
-  proofContracts: [],
-  proofReports: [],
-  designEscalations: [],
-  referenceRegistrations: [],
-  streaming: false,
-};
+export type { SessionState } from "@/state/agentEventFold";
+
 const CAD_ENVIRONMENT_PREFERENCE_KEY = "chamfer.cad-environment.v1";
+const ACTIVE_CONVERSATION_SESSION_KEY = "chamfer.active-conversation.v1";
 
 function rememberedCadEnvironment(): CadEnvironment {
   try {
@@ -61,97 +52,164 @@ function rememberedCadEnvironment(): CadEnvironment {
   }
 }
 
-/** A message the user sent while the agent was busy, waiting for its own turn. */
-export interface QueuedMessage {
-  id: string;
-  text: string;
-  images: File[];
+// Anthropic recommends a long edge <= 1568 px; larger buys no model fidelity
+// and costs tokens. Downscaling here also keeps the persisted message under the
+// server's 1 MB conversation-event cap, which a raw phone photo blows past -
+// the cause of the "conversation shows in the list but its history won't load"
+// bug (the whole turn, including the generated CAD code, failed to persist).
+const MAX_IMAGE_EDGE = 1568;
+// A file already this small and within the edge limit is sent as-is, preserving
+// its format (notably PNG transparency) instead of re-encoding to JPEG.
+const DOWNSCALE_BYTE_THRESHOLD = 512 * 1024;
+
+/** Long-edge-capped dimensions preserving aspect ratio. Pure and exported so
+ * the scaling contract is unit-tested without a DOM. */
+export function scaledDimensions(
+  width: number,
+  height: number,
+  maxEdge: number,
+): { width: number; height: number } {
+  const longEdge = Math.max(width, height);
+  if (longEdge <= maxEdge) return { width, height };
+  const ratio = maxEdge / longEdge;
+  return { width: Math.max(1, Math.round(width * ratio)), height: Math.max(1, Math.round(height * ratio)) };
+}
+
+/** Reconstructs an in-memory Blob from an already-read base64 payload, so the
+ * downscale decode runs against bytes we hold - never a second read of the
+ * OS-backed File. */
+function payloadToBlob(payload: AgentImagePayload): Blob {
+  const binary = atob(payload.data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: payload.mimeType });
+}
+
+/** Downscales+re-encodes an oversized image to JPEG via a canvas, decoding from
+ * the bytes we already read (never the File itself). Returns undefined - so the
+ * caller keeps the original bytes - when the platform lacks canvas/createImageBitmap
+ * (jsdom, older browsers), the decode fails, or the image is already small enough
+ * to keep verbatim. `original` carries the source bytes and `byteSize` its size. */
+async function downscaleImage(
+  original: AgentImagePayload,
+  byteSize: number,
+): Promise<AgentImagePayload | undefined> {
+  if (typeof document === "undefined" || typeof createImageBitmap !== "function") return undefined;
+  let bitmap: ImageBitmap;
+  try {
+    // Decode from an in-memory Blob, not the original File: re-reading the
+    // OS-backed File a second time (createImageBitmap after FileReader) throws
+    // NotReadableError on real Chrome, whose <input> File reads lazily from disk.
+    bitmap = await createImageBitmap(payloadToBlob(original));
+  } catch {
+    return undefined;
+  }
+  try {
+    const { width, height } = scaledDimensions(bitmap.width, bitmap.height, MAX_IMAGE_EDGE);
+    const alreadySmall = width === bitmap.width && height === bitmap.height && byteSize <= DOWNSCALE_BYTE_THRESHOLD;
+    if (alreadySmall) return undefined;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return undefined;
+    context.drawImage(bitmap, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    if (!dataUrl.startsWith("data:image/jpeg") || !dataUrl.includes(",")) return undefined;
+    return { data: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: "image/jpeg" };
+  } catch {
+    return undefined;
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+/** Reads the OS-backed File exactly once, into a base64 data URL. */
+function readOriginalImage(file: File): Promise<AgentImagePayload> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read attached image"));
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string" || !result.includes(",")) {
+        reject(new Error("Attached image did not produce a data URL"));
+        return;
+      }
+      resolve({ data: result.slice(result.indexOf(",") + 1), mimeType: file.type || "image/png" });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Reads the File once, then downscales from the bytes in hand. Reading the File
+ * a second time (the earlier createImageBitmap(file) + FileReader(file) pair) let
+ * a large attachment fail the whole turn with a NotReadableError on real Chrome. */
+export async function readPromptImage(file: File): Promise<AgentImagePayload> {
+  const original = await readOriginalImage(file);
+  const downscaled = await downscaleImage(original, file.size).catch(() => undefined);
+  return downscaled ?? original;
 }
 
 export interface ChatContextValue {
   conversations: ConversationDto[];
   activeConversationId: string | undefined;
-  session: ChatSession | null;
   sessionState: SessionState;
   settingsPresent: boolean;
+  /** True when this deployment cannot run agent turns at all (the hosted
+   * Worker after the pi pivot); ChatPanel shows a notice and disables sends. */
+  agentHostingOffline: boolean;
   loading: boolean;
-  /** Provider-level failure (conversation create/delete, conversation load, artifact
-   * persistence); rendered by ChatPanel as a dismissible banner. */
+  /** Provider-level failure (conversation create/delete, conversation load);
+   * rendered by ChatPanel as a dismissible banner. */
   error: string | null;
-  /** Dismisses the provider-level error banner. */
   clearError: () => void;
   selectConversation: (id: string) => void;
   /** Opens the CAD-environment dialog; confirming it creates a conversation and switches to it. */
   newConversation: () => void;
   removeConversation: (id: string) => Promise<void>;
-  /** Re-fetches /api/settings (e.g. after saving in SettingsModal) so settings-gated UI
-   * such as the preset prompt cards enables without a reload. */
+  /** Re-fetches /api/settings (e.g. after saving in SettingsModal). */
   refreshSettings: () => Promise<void>;
-  /** Messages pending pi consumption or waiting for an idle recovery send, in send order. */
-  queuedMessages: QueuedMessage[];
-  /** True after stopAgent(): queued messages stay put until the user resumes
-   * (by sending anything, or sendQueuedNow on a specific item). */
-  queuePaused: boolean;
-  /** Sends a new run when idle and steers the active pi run when streaming. */
+  /** POSTs a prompt to the server-hosted agent session. */
   sendMessage: (text: string, images: File[]) => void;
-  /** Aborts the in-flight turn and pauses queue draining. */
+  /** Aborts the in-flight agent turn. */
   stopAgent: () => void;
-  /** Cancels stale work and queues one trusted continuation after an unambiguous
-   * authoritative Fusion reconciliation. */
+  /** Queues one trusted continuation after an authoritative Fusion reconciliation. */
   resumeAfterFusionReconciliation: (summary: string) => void;
-  /** Drops a queued message without sending it. */
-  removeQueued: (id: string) => void;
-  /** Moves a queued message to the front and resumes draining. */
-  sendQueuedNow: (id: string) => void;
-  /** Display name of the configured model (null when none is configured). */
+  /** Display label of the model the next turn will actually run (Settings
+   * model when funded, demo model "(demo)" when the demo fallback funds it);
+   * null when none is configured. */
   modelName: string | null;
-  /** Effective run_build123d cap per turn (settings value or the default). */
-  maxCadRuns: number;
-  /** Whether chat renders CAD code bodies (CHAMFER_SHOW_CAD_CODE / the showCadCode
-   * setting). Hidden by default. */
+  /** Display name of the provider whose missing API key blocks the next turn
+   * (issue #53); null when the turn is fundable. ChatPanel gates the composer
+   * on it with a hint naming the fix. */
+  missingProviderKey: string | null;
+  /** Whether chat renders CAD code bodies (CHAMFER_SHOW_CAD_CODE). */
   showCadCode: boolean;
+  /** This account's free-demo dollar balance on the hosted deployment, refreshed
+   * after every turn; null when the deployment has no demo quota (e.g. local). */
+  demoBudget: OnlineBudgetDto | null;
 }
 
-/** Display name from a settings modelJson payload; null when absent or unparseable. */
-function modelNameOf(modelJson: string | undefined): string | null {
-  if (!modelJson) return null;
-  try {
-    const parsed = JSON.parse(modelJson) as { name?: unknown; id?: unknown };
-    if (typeof parsed.name === "string" && parsed.name) return parsed.name;
-    if (typeof parsed.id === "string" && parsed.id) return parsed.id;
-  } catch {
-    // Fall through: a corrupt modelJson simply shows no model.
-  }
-  return null;
+/** The funding inputs from one GET /api/settings response: the selected model
+ * plus which provider keys exist (values arrive masked; presence is enough). */
+function fundingSettingsOf(settings: {
+  modelJson?: string;
+  anthropicApiKey?: string;
+  openaiApiKey?: string;
+  googleApiKey?: string;
+}): FundingSettings {
+  return {
+    modelJson: settings.modelJson,
+    anthropicApiKey: settings.anthropicApiKey,
+    openaiApiKey: settings.openaiApiKey,
+    googleApiKey: settings.googleApiKey,
+  };
 }
 
-/** Effective per-turn CAD-run cap from the string-encoded setting. */
-function capOf(maxCadRuns: string | undefined): number {
-  const parsed = Number(maxCadRuns);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CAD_RUNS;
-}
-
-/** Whether the string-encoded showCadCode setting turns code bodies on. */
-function showCadCodeOf(showCadCode: string | undefined): boolean {
-  return showCadCode === "1";
-}
-
-/** Exported so tests can render `ChatContext.Provider` directly with a fake value (e.g. a
- * scripted fake `ChatSession`) instead of going through `ChatProvider`'s real REST/session
- * wiring. */
+/** Exported so tests can render `ChatContext.Provider` directly with a fake value. */
 export const ChatContext = createContext<ChatContextValue | undefined>(undefined);
 
-export interface ChatProviderProps {
-  children: ReactNode;
-  /**
-   * Internal test-only override for session creation. Production callers must not set this;
-   * it exists so tests can inject a fake ChatSession (e.g. to assert abort() behavior) without
-   * mocking the whole agent/session module, mirroring session.ts's __streamFn seam.
-   */
-  __createSession?: typeof createSession;
-}
-
-export function ChatProvider({ children, __createSession }: ChatProviderProps) {
+export function ChatProvider({ children }: { children: ReactNode }) {
   const fusionContext = useOptionalFusionReadiness();
   const fusion = {
     enabled: fusionContext?.enabled ?? false,
@@ -159,268 +217,132 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     integrity: fusionContext?.integrity,
   };
   const appState = useOptionalAppState();
-  if (!appState && !__createSession) {
-    throw new Error("ChatProvider must be used within an AppStateProvider");
-  }
-  const cad = appState?.cad ?? null;
-  const publishCadResult = appState?.publishCadResult;
-  const restoreScript = appState?.restoreScript;
-  const setCurrentArtifact = appState?.setCurrentArtifact;
+  const loadArtifact = appState?.loadArtifact;
   const clearWorkspace = appState?.clearWorkspace;
-  const runScript = appState?.runScript;
   const [conversations, setConversations] = useState<ConversationDto[]>([]);
-  const conversationsRef = useRef<ConversationDto[]>([]);
-  conversationsRef.current = conversations;
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>(undefined);
-  const [session, setSession] = useState<ChatSession | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>(EMPTY_SESSION_STATE);
   const [settingsPresent, setSettingsPresent] = useState(false);
+  const [agentHostingOffline, setAgentHostingOffline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
-  const [queuePaused, setQueuePaused] = useState(false);
-  const [modelName, setModelName] = useState<string | null>(null);
-  const [maxCadRuns, setMaxCadRuns] = useState<number>(DEFAULT_MAX_CAD_RUNS);
+  const [fundingSettings, setFundingSettings] = useState<FundingSettings>({});
+  const [fundingCapabilities, setFundingCapabilities] = useState<FundingCapabilities>({ demoQuota: false });
+  const [demoBudget, setDemoBudget] = useState<OnlineBudgetDto | null>(null);
   const [showCadCode, setShowCadCode] = useState(false);
   const [creationOpen, setCreationOpen] = useState(false);
   const [creationEnvironment, setCreationEnvironment] = useState<CadEnvironment>(rememberedCadEnvironment);
   const [creationPending, setCreationPending] = useState(false);
   const [creationError, setCreationError] = useState<string>();
   const creationOpenRef = useRef(false);
-  // True from a send() call until its promise settles (the real session resolves send()
-  // only when the whole agent turn is done). Guards the drain effect against firing a
-  // second send into a turn whose streaming flag has not propagated yet.
-  const sendInFlightRef = useRef(false);
-  const steeringInFlightRef = useRef(new Set<string>());
-  // Bumped when a send settles, so the drain effect re-runs even though a promise
-  // resolution alone triggers no render.
-  const [drainTick, setDrainTick] = useState(0);
-
-  const buildSession = __createSession ?? createSession;
 
   // Guards against a stale async conversation-switch overwriting a newer one.
   const switchTokenRef = useRef(0);
-
-  // Tracks the live ChatSession instance outside React state so switchTo (a useCallback with
-  // empty deps) can always abort the actual outgoing session instead of a stale closure over
-  // `session`. Updated everywhere setSession is called.
-  const sessionRef = useRef<ChatSession | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  useEffect(() => () => eventSourceRef.current?.close(), []);
   const didRestoreInitialConversationRef = useRef(false);
-  // One title-generation attempt per conversation per *visit*: a failure keeps
-  // the default title for the rest of the current view (no render-driven retry
-  // loop against the LLM), and switchTo re-arms the id so clicking the
-  // conversation again retries.
+  // One title-generation attempt per conversation per visit.
   const titleAttemptedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
-    // Settings are also fetched on mount (not only inside switchTo) so the no-conversation
-    // empty state knows whether the preset prompt cards can start a chat.
     rest
       .getSettings()
       .then((settings) => {
         if (cancelled) return;
         setSettingsPresent(Boolean(settings.modelJson));
-        setModelName(modelNameOf(settings.modelJson));
-        setMaxCadRuns(capOf(settings.maxCadRuns));
-        setShowCadCode(showCadCodeOf(settings.showCadCode));
+        setFundingSettings(fundingSettingsOf(settings));
+        setShowCadCode(settings.showCadCode === "1");
       })
       .catch(() => {
-        // Leave settingsPresent false; switchTo re-fetches settings and surfaces errors.
+        // Leave settingsPresent false; switchTo re-fetches settings.
+      });
+    rest
+      .getRuntimeCapabilities()
+      .then((capabilities) => {
+        if (cancelled) return;
+        setAgentHostingOffline(!capabilities.agentHosting);
+        setFundingCapabilities({ demoQuota: capabilities.demoQuota, demoModel: capabilities.demoModel });
+        // Seed the demo balance once we know this deployment funds keyless turns;
+        // deployments without demo quota never mount the route (the fetch nulls).
+        if (capabilities.demoQuota) {
+          void rest.getOnlineBudget().then((budget) => {
+            if (!cancelled) setDemoBudget(budget);
+          });
+        }
+      })
+      .catch(() => {
+        // The probe is advisory; on failure assume capable so chat still works.
       });
     rest
       .listConversations()
       .then((list) => {
-        if (cancelled) return;
-        setConversations(list);
+        if (!cancelled) setConversations(list);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
-        if (cancelled) return;
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  /** Folds one server-sent agent event into the visible session state. The
+   * folding rule itself lives in agentEventFold.ts (pure, unit-tested): turn
+   * status keys only on agent_start / agent_settled / agent_status /
+   * agent_error, never on agent_end (continuations follow it), message-level
+   * events, or stream silence. */
+  const applyAgentEvent = useCallback((conversationId: string, event: AgentStreamEvent) => {
+    if (event.type === "artifact_updated") {
+      void loadArtifact?.(conversationId);
+      return;
+    }
+    setSessionState((current) => applyAgentStreamEvent(current, event));
+  }, [loadArtifact]);
+
   const switchTo = useCallback((id: string | undefined, conversationOverride?: ConversationDto) => {
-    // Abort whatever session is currently live before tearing it down: an in-flight agent
-    // turn must not keep streaming headless (burning tokens, persisting messages to a
-    // possibly-deleted conversation) after the user navigates away from it.
-    sessionRef.current?.abort();
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
 
     const token = ++switchTokenRef.current;
     setActiveConversationId(id);
-    // Re-arm auto-titling for this conversation: a generation that failed on a
-    // previous visit gets another attempt now that the user opened it again.
+    try {
+      if (id) sessionStorage.setItem(ACTIVE_CONVERSATION_SESSION_KEY, id);
+      else sessionStorage.removeItem(ACTIVE_CONVERSATION_SESSION_KEY);
+    } catch {
+      // Session restoration is a convenience and must not block navigation.
+    }
     if (id) titleAttemptedRef.current.delete(id);
-    sessionRef.current = null;
-    steeringInFlightRef.current.clear();
-    setSession(null);
     setSessionState(EMPTY_SESSION_STATE);
-    // The queue is conversation-scoped: messages typed for one conversation must
-    // never fire into another.
-    setQueuedMessages([]);
-    setQueuePaused(false);
-    // CAD output is conversation scoped. Clear the mesh, measurements,
-    // parameters, and script before restoring the target artifact below.
-    if (clearWorkspace) clearWorkspace();
-    else restoreScript?.(null);
+    clearWorkspace?.();
 
     if (!id) return;
+    void conversationOverride;
 
-    Promise.all([
-      rest.getConversation(id),
-      rest.getSettings(),
-      rest.listMessages(id),
-      rest.listArtifacts(id),
-      rest.listReferenceRecords(id),
-      rest.listOpenInspectionLeases(id),
-      rest.listVisualVerifications(id),
-      rest.listVisualVerificationBatches(id),
-      rest.listSourceSpecifications(id),
-      rest.listProofContracts(id),
-      rest.listProofReports(id),
-      rest.listDesignEscalations(id),
-      rest.listReferenceRegistrations(id),
-    ])
-      .then(async ([
-        loadedConversation,
-        settings,
-        messages,
-        artifacts,
-        referenceRecords,
-        openInspectionLeases,
-        visualVerifications,
-        visualVerificationBatches,
-        sourceSpecifications,
-        proofContracts,
-        proofReports,
-        designEscalations,
-        referenceRegistrations,
-      ]) => {
+    Promise.all([rest.getSettings(), rest.listMessages(id)])
+      .then(([settings, messages]) => {
         if (cancelled()) return;
-        const conversation = conversationOverride ?? loadedConversation;
-
-        const modelJson = settings.modelJson;
-        setSettingsPresent(Boolean(modelJson));
-        setModelName(modelNameOf(modelJson));
-        setMaxCadRuns(capOf(settings.maxCadRuns));
-        setShowCadCode(showCadCodeOf(settings.showCadCode));
+        setSettingsPresent(Boolean(settings.modelJson));
+        setFundingSettings(fundingSettingsOf(settings));
+        setShowCadCode(settings.showCadCode === "1");
 
         const priorMessages = messages
           .slice()
           .sort((a, b) => a.seq - b.seq)
-          .map((m) => {
-            const parsed = JSON.parse(m.contentJson) as unknown;
-            registerMessagePersistenceId(parsed, m.id);
-            return parsed;
-          });
-        const nextMessageSeq = messages.length === 0
-          ? 0
-          : messages.reduce((maximum, message) => Math.max(maximum, message.seq), -1) + 1;
+          .map((message) => JSON.parse(message.contentJson) as unknown);
+        setSessionState({ messages: priorMessages, streaming: false });
 
-        // History remains readable even before model credentials are set.
-        setSessionState({
-          messages: priorMessages,
-          referenceRecords,
-          sourceSpecifications,
-          proofContracts,
-          proofReports,
-          designEscalations,
-          referenceRegistrations,
-          streaming: false,
+        // Live-only stream: persisted history above covers everything earlier.
+        eventSourceRef.current = openAgentEvents(id, (event) => {
+          if (cancelled()) return;
+          applyAgentEvent(id, event);
         });
 
-        if (modelJson) {
-          // Every conversation receives exactly one environment catalog.
-          const tools: AgentTool[] = conversation.cadEnvironment === "build123d"
-            ? [createLookupDocsTool(), createSearchDocsTool()]
-            : [
-                createSearchFusionDocsTool({ search: rest.searchFusionDocumentation }),
-                createInspectFusionTool({ inspect: (checks) => rest.inspectFusionDocument(id, checks) }),
-              ];
-          if (conversation.cadEnvironment === "build123d" && cad && publishCadResult) {
-            tools.unshift(
-              createRunBuild123dTool({
-                cad,
-                onSuccess: async ({ code, mesh, measurements }) => {
-                  // Probe runs (COMPONENT = "probe") are diagnostics the agent uses to
-                  // interrogate the gate; they must never displace the deliverable in
-                  // the viewer, the script panel, or the artifact store.
-                  const declaration = runComponentIds(measurements);
-                  if (declaration?.length === 1 && declaration[0] === PROBE_COMPONENT) return;
-                  publishCadResult({ mesh, measurements });
-                  restoreScript?.(code);
-                  try {
-                    const artifact = await rest.postArtifact(id, { pySource: code, paramsJson: null });
-                    setCurrentArtifact?.({ id: artifact.id, version: artifact.version });
-                    return { artifactId: artifact.id, artifactVersion: artifact.version };
-                  } catch (artifactError) {
-                    setError(artifactError instanceof Error ? artifactError.message : String(artifactError));
-                    return undefined;
-                  }
-                },
-              }),
-            );
-          }
-
-          // Settings values travel as strings; the session falls back to its
-          // built-in cap when the value is missing or not a positive integer.
-          const parsedMaxCadRuns = Number(settings.maxCadRuns);
-          const maxCadRuns =
-            Number.isInteger(parsedMaxCadRuns) && parsedMaxCadRuns > 0 ? parsedMaxCadRuns : undefined;
-
-          const skillMode = conversation.cadEnvironment === "build123d"
-            ? resolveAblationSkill(window.location.search, import.meta.env.DEV)
-            : "none";
-          const newSession = buildSession({
-            conversationId: id,
-            cadEnvironment: conversation.cadEnvironment,
-            modelJson,
-            systemPrompt: conversation.cadEnvironment === "build123d"
-              ? assembleAgentPrompt(runtimePrompt, { skill: skillMode })
-              : fusionRuntimePrompt,
-            tools,
-            priorMessages,
-            nextMessageSeq,
-            referenceRecords,
-            openInspectionLeases,
-            visualVerifications,
-            visualVerificationBatches,
-            sourceSpecifications,
-            proofContracts,
-            proofReports,
-            designEscalations,
-            referenceRegistrations,
-            sourceSpecificationsRequired: conversation?.sourceSpecificationsRequired === true,
-            maxCadRuns,
-            skillMode,
-            executeFusionAction: conversation.cadEnvironment === "fusion"
-              ? (input, signal) => rest.executeFusionAction(id, input, signal)
-              : undefined,
-            evaluationIdentity: evaluationTraceIdentity(window.location.search),
-          });
-          sessionRef.current = newSession;
-          setSession(newSession);
-        }
-
-        // Message replay is already visible. Rendering the latest artifact can
-        // now take as long as needed without blocking the conversation.
-        if (conversation.cadEnvironment === "build123d" && Array.isArray(artifacts) && artifacts.length > 0) {
-          const latest = artifacts.reduce((a, b) => (b.version > a.version ? b : a));
-          if (cad && runScript) {
-            const restored = await runScript(latest.pySource);
-            if (restored) setCurrentArtifact?.({ id: latest.id, version: latest.version });
-          } else {
-            restoreScript?.(latest.pySource);
-            setCurrentArtifact?.({ id: latest.id, version: latest.version });
-          }
-        }
+        // Restore the latest exported artifact into the viewer, if one exists.
+        void loadArtifact?.(id);
       })
       .catch((err: unknown) => {
         if (cancelled()) return;
@@ -430,34 +352,33 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     function cancelled() {
       return switchTokenRef.current !== token;
     }
-  }, [buildSession, cad, clearWorkspace, publishCadResult, restoreScript, runScript, setCurrentArtifact]);
+  }, [applyAgentEvent, clearWorkspace, loadArtifact]);
 
   useEffect(() => {
     if (loading || didRestoreInitialConversationRef.current) return;
-    if (__createSession) return;
-    if (!activeConversationId && conversations[0]) {
-      // Burn the ref only when a restore actually happens: the first non-loading
-      // render can see an empty list, and consuming the one-shot there would
-      // disable restoration for conversations that appear later.
-      didRestoreInitialConversationRef.current = true;
-      switchTo(conversations[0].id);
+    if (activeConversationId) return;
+    let rememberedId: string | null = null;
+    try {
+      rememberedId = sessionStorage.getItem(ACTIVE_CONVERSATION_SESSION_KEY);
+    } catch {
+      // A storage-restricted tab starts without an active conversation.
     }
-  }, [__createSession, activeConversationId, conversations, loading, switchTo]);
-
-  useEffect(() => {
-    if (!session) return;
-    const unsubscribe = session.subscribe((state) => {
-      setSessionState(state);
-    });
-    return unsubscribe;
-  }, [session]);
+    didRestoreInitialConversationRef.current = true;
+    if (rememberedId && conversations.some((conversation) => conversation.id === rememberedId)) {
+      switchTo(rememberedId);
+      return;
+    }
+    if (rememberedId) {
+      try { sessionStorage.removeItem(ACTIVE_CONVERSATION_SESSION_KEY); } catch { /* stale key is harmless */ }
+    }
+    const localConversation = conversations.find((conversation) => conversation.cadEnvironment === "build123d");
+    if (localConversation) {
+      switchTo(localConversation.id);
+    }
+  }, [activeConversationId, conversations, loading, switchTo]);
 
   // Auto-title: once the conversation has an assistant reply and streaming is
-  // over, ask the server to summarize the first exchange into a title. Titles
-  // are exclusively server-generated (there is no rename endpoint); only
-  // conversations still carrying the creation default are eligible, so a
-  // previously generated title is never regenerated. Failures are non-fatal:
-  // the sidebar keeps the default title until the conversation is opened again.
+  // over, ask the server to summarize the first exchange into a title.
   useEffect(() => {
     const id = activeConversationId;
     if (!id || sessionState.streaming) return;
@@ -479,125 +400,69 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       });
   }, [activeConversationId, conversations, sessionState]);
 
-  // Keep the sidebar's gate dot live for the active conversation: the server rolls the
-  // verdict up on message persistence, but the already-fetched list would only show it
-  // after a reload. Once a turn finishes, mirror the session's latest verdict locally.
+  // Re-read the free-demo balance when a turn finishes streaming: the server
+  // debits it once the run settles, so the meter is stale until then. Gated on
+  // demoBudget having been seeded, so non-demo deployments never poll the route.
+  const wasStreamingRef = useRef(false);
   useEffect(() => {
-    const id = activeConversationId;
-    if (!id || sessionState.streaming) return;
-    const status = latestGateSummary(sessionState.messages)?.status;
-    if (!status) return;
-    setConversations((prev) => {
-      const target = prev.find((c) => c.id === id);
-      if (!target || target.lastGateStatus === status) return prev;
-      return prev.map((c) => (c.id === id ? { ...c, lastGateStatus: status } : c));
+    const streaming = sessionState.streaming;
+    const justFinished = wasStreamingRef.current && !streaming;
+    wasStreamingRef.current = streaming;
+    if (!justFinished || demoBudget === null) return;
+    void rest.getOnlineBudget().then((budget) => {
+      if (budget) setDemoBudget(budget);
     });
-  }, [activeConversationId, sessionState]);
-
-  /** Fires a send on the live session and keeps the in-flight guard accurate for
-   * the whole turn (send() resolves when the turn is fully over). */
-  const dispatchSend = useCallback((text: string, images: File[]) => {
-    const live = sessionRef.current;
-    if (!live) return;
-    sendInFlightRef.current = true;
-    void live.send(text, images).finally(() => {
-      sendInFlightRef.current = false;
-      setDrainTick((tick) => tick + 1);
-    });
-  }, []);
-
-  const dispatchSteering = useCallback((message: QueuedMessage) => {
-    const live = sessionRef.current;
-    if (!live || steeringInFlightRef.current.has(message.id)) return;
-    steeringInFlightRef.current.add(message.id);
-    void live.steer(message.id, message.text, message.images).then((outcome) => {
-      steeringInFlightRef.current.delete(message.id);
-      if (outcome === "consumed") {
-        setQueuedMessages((prev) => prev.filter((candidate) => candidate.id !== message.id));
-      }
-      setDrainTick((tick) => tick + 1);
-    }).catch(() => {
-      steeringInFlightRef.current.delete(message.id);
-      setDrainTick((tick) => tick + 1);
-    });
-  }, []);
+  }, [sessionState.streaming, demoBudget]);
 
   const sendMessage = useCallback(
     (text: string, images: File[]) => {
-      if (!sessionRef.current) return;
-      // Any explicit send is the user asking for the agent to run again, so a
-      // Stop-induced pause ends here.
-      setQueuePaused(false);
-      if (sessionState.streaming || sendInFlightRef.current) {
-        const message = { id: crypto.randomUUID(), text, images };
-        setQueuedMessages((prev) => [...prev, message]);
-        if (sessionState.streaming) dispatchSteering(message);
-        return;
-      }
-      dispatchSend(text, images);
+      const id = activeConversationId;
+      if (!id) return;
+      // Optimistically show the user's prompt and a "starting" hint the instant
+      // they hit send. On a cold hosted container the first stream event is tens
+      // of seconds out; without this the screen sits unchanged and reads as
+      // frozen. Held as pendingPrompt (not appended to messages) so pi's own echo
+      // of the prompt, which arrives once the turn starts, replaces it cleanly
+      // instead of duplicating it - the fold clears it on the first live event.
+      setSessionState((current) => ({
+        ...current,
+        submitting: true,
+        pendingPrompt: text,
+        error: undefined,
+      }));
+      void (async () => {
+        const payloads = await Promise.all(images.map(readPromptImage));
+        await postAgentMessage(id, text, payloads);
+      })().catch((err: unknown) => {
+        setSessionState((current) => ({
+          ...current,
+          submitting: false,
+          pendingPrompt: undefined,
+          error: classifySessionError(err instanceof Error ? err.message : String(err)),
+        }));
+      });
     },
-    [dispatchSend, dispatchSteering, sessionState.streaming],
+    [activeConversationId],
   );
 
   const stopAgent = useCallback(() => {
-    // Pause before aborting: abort synchronously flips streaming off inside the same
-    // batch, and the drain effect must already see the pause when it re-runs.
-    setQueuePaused(true);
-    sessionRef.current?.abort();
-  }, []);
+    const id = activeConversationId;
+    if (!id) return;
+    void postAgentAbort(id).catch(() => {
+      // Abort is best-effort; the turn also ends on its own.
+    });
+  }, [activeConversationId]);
 
   const resumeAfterFusionReconciliation = useCallback((summary: string) => {
-    if (!sessionRef.current) return;
-    const message: QueuedMessage = {
-      id: crypto.randomUUID(),
-      text: `${FUSION_RECONCILIATION_MARKER} Fusion changed outside Chamfer and trusted inspection accepted the new engineering state: ${summary}. Re-inspect the current evidence, discard stale plan assumptions, and continue the user's unfinished request from this authoritative revision.`,
-      images: [],
-    };
-    // Abort first so no stale tool call can cross the revision boundary. Queue
-    // draining resumes only after the active send promise settles.
-    sessionRef.current.abort();
-    setQueuedMessages((prev) => [...prev, message]);
-    setQueuePaused(false);
-  }, []);
-
-  const removeQueued = useCallback((id: string) => {
-    sessionRef.current?.cancelSteering(id);
-    steeringInFlightRef.current.delete(id);
-    setQueuedMessages((prev) => prev.filter((message) => message.id !== id));
-  }, []);
-
-  const sendQueuedNow = useCallback((id: string) => {
-    // Move to the front and resume; the drain effect below delivers it as soon as
-    // the agent is idle (immediately, when nothing is in flight).
-    setQueuedMessages((prev) => {
-      const chosen = prev.find((message) => message.id === id);
-      if (!chosen) return prev;
-      return [chosen, ...prev.filter((message) => message.id !== id)];
-    });
-    sessionRef.current?.prioritizeSteering(id);
-    setQueuePaused(false);
-  }, []);
-
-  // Busy-session delivery uses pi steering. Messages remain in queuedMessages so
-  // pending controls stay visible until the session reports consumption.
-  useEffect(() => {
-    if (!sessionState.streaming || queuePaused || sessionState.error) return;
-    for (const message of queuedMessages) dispatchSteering(message);
-  }, [dispatchSteering, queuePaused, queuedMessages, sessionState.error, sessionState.streaming]);
-
-  // Queue drain: whenever the agent is idle, nothing is paused or errored, and a
-  // message is waiting, send exactly one. Each drained turn re-triggers this effect
-  // via drainTick when it settles, delivering the rest FIFO.
-  useEffect(() => {
-    void drainTick;
-    if (sessionState.streaming || sendInFlightRef.current) return;
-    if (queuePaused || sessionState.error) return;
-    const next = queuedMessages[0];
-    if (!next || !sessionRef.current) return;
-    if (steeringInFlightRef.current.has(next.id)) return;
-    setQueuedMessages((prev) => prev.slice(1));
-    dispatchSend(next.text, next.images);
-  }, [dispatchSend, drainTick, queuePaused, queuedMessages, sessionState]);
+    const id = activeConversationId;
+    if (!id) return;
+    void postAgentAbort(id).catch(() => undefined);
+    sendMessage(
+      `Fusion changed outside this chat and the new state was accepted: ${summary}. ` +
+        "Re-inspect the live document state, discard stale assumptions, and continue the request from there.",
+      [],
+    );
+  }, [activeConversationId, sendMessage]);
 
   const clearError = useCallback(() => {
     setError(null);
@@ -614,8 +479,6 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
   const newConversation = useCallback((): void => {
     if (creationOpenRef.current) return;
     creationOpenRef.current = true;
-    // A direct user action wins over the mount-time auto-restore effect, even
-    // when the conversation list and create request resolve in the same frame.
     didRestoreInitialConversationRef.current = true;
     setError(null);
     setCreationError(undefined);
@@ -631,22 +494,26 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     setCreationError(undefined);
   }, [creationPending]);
 
+  const createBoundConversation = useCallback(async (
+    cadEnvironment: CadEnvironment,
+  ): Promise<ConversationDto> => {
+    const created = await rest.createConversation(DEFAULT_CONVERSATION_TITLE, cadEnvironment);
+    if (cadEnvironment !== "fusion") return created;
+    try {
+      await rest.bindFusionDocument(created.id);
+      return created;
+    } catch (bindingError) {
+      await rest.deleteConversation(created.id).catch(() => undefined);
+      throw bindingError;
+    }
+  }, []);
+
   const confirmConversationCreation = useCallback(async () => {
     if (creationPending || !creationOpenRef.current) return;
     setCreationPending(true);
     setCreationError(undefined);
     try {
-      const created = await rest.createConversation(DEFAULT_CONVERSATION_TITLE, creationEnvironment);
-      if (creationEnvironment === "fusion") {
-        try {
-          await rest.bindFusionDocument(created.id);
-        } catch (bindingError) {
-          // Do not leave an unbound Fusion conversation behind when trusted
-          // inspection or endpoint ownership rejects creation.
-          await rest.deleteConversation(created.id).catch(() => undefined);
-          throw bindingError;
-        }
-      }
+      const created = await createBoundConversation(creationEnvironment);
       try {
         localStorage.setItem(CAD_ENVIRONMENT_PREFERENCE_KEY, creationEnvironment);
       } catch {
@@ -665,26 +532,18 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     } finally {
       setCreationPending(false);
     }
-  }, [creationEnvironment, creationPending, switchTo]);
+  }, [createBoundConversation, creationEnvironment, creationPending, switchTo]);
 
   const refreshSettings = useCallback(async () => {
     try {
       const settings = await rest.getSettings();
-      const present = Boolean(settings.modelJson);
-      setSettingsPresent(present);
-      setModelName(modelNameOf(settings.modelJson));
-      setMaxCadRuns(capOf(settings.maxCadRuns));
-      setShowCadCode(showCadCodeOf(settings.showCadCode));
-      // A conversation opened before a model was configured never had its session built
-      // (switchTo bails without modelJson); re-switch to build it now. There is no live
-      // session to abort in that case.
-      if (present && activeConversationId && !sessionRef.current) {
-        switchTo(activeConversationId);
-      }
+      setSettingsPresent(Boolean(settings.modelJson));
+      setFundingSettings(fundingSettingsOf(settings));
+      setShowCadCode(settings.showCadCode === "1");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [activeConversationId, switchTo]);
+  }, []);
 
   const removeConversation = useCallback(
     async (id: string) => {
@@ -702,13 +561,18 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
     [activeConversationId, switchTo],
   );
 
+  const funding = useMemo(
+    () => resolveTurnFundingDisplay(fundingSettings, fundingCapabilities),
+    [fundingSettings, fundingCapabilities],
+  );
+
   const value = useMemo<ChatContextValue>(
     () => ({
       conversations,
       activeConversationId,
-      session,
       sessionState,
       settingsPresent,
+      agentHostingOffline,
       loading,
       error,
       clearError,
@@ -716,23 +580,20 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       newConversation,
       removeConversation,
       refreshSettings,
-      queuedMessages,
-      queuePaused,
       sendMessage,
       stopAgent,
       resumeAfterFusionReconciliation,
-      removeQueued,
-      sendQueuedNow,
-      modelName,
-      maxCadRuns,
+      modelName: funding.modelName,
+      missingProviderKey: funding.missingProviderKey,
       showCadCode,
+      demoBudget,
     }),
     [
       conversations,
       activeConversationId,
-      session,
       sessionState,
       settingsPresent,
+      agentHostingOffline,
       loading,
       error,
       clearError,
@@ -740,16 +601,12 @@ export function ChatProvider({ children, __createSession }: ChatProviderProps) {
       newConversation,
       removeConversation,
       refreshSettings,
-      queuedMessages,
-      queuePaused,
       sendMessage,
       stopAgent,
       resumeAfterFusionReconciliation,
-      removeQueued,
-      sendQueuedNow,
-      modelName,
-      maxCadRuns,
+      funding,
       showCadCode,
+      demoBudget,
     ],
   );
 

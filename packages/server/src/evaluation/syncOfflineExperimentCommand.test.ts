@@ -21,7 +21,7 @@ it("persists direct comparison references in a local sync report", async () => {
     gating: "non-gating",
     identities: {
       corpus: "corpus",
-      agentConfiguration: "agent",
+      agentConfiguration: { name: "current", identityHash: "a".repeat(64) },
       commit: "commit",
       model: "model",
       evaluator: "evaluator",

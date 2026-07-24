@@ -10,9 +10,10 @@ import {
   PerspectiveCamera,
   useBounds,
 } from "@react-three/drei";
-import { Box, Focus, Grid3x3, Rotate3d, Scan } from "lucide-react";
+import { Box, Download, Focus, Grid3x3, LoaderCircle, Rotate3d, Scan } from "lucide-react";
 import type * as THREE from "three";
 import { technicalEdges } from "./meshToGeometry";
+import { EXPORT_FORMATS, exportModelBlob, type ExportFormatId } from "./exportModel";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,10 @@ const AUTO_ROTATE_MAX_SPEED = 10;
 
 interface ViewerProps {
   geometry: THREE.BufferGeometry | null;
+  /** Raw bytes of the loaded artifact; enables the export menu when present. */
+  artifactData?: ArrayBuffer | null;
+  /** Filename stem for exported files (e.g. the conversation title's slug). */
+  exportName?: string;
 }
 
 type Projection = "orthographic" | "perspective";
@@ -109,16 +114,46 @@ function ProjectionButton({
   );
 }
 
-export function Viewer({ geometry }: ViewerProps) {
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export function Viewer({ geometry, artifactData = null, exportName = "model" }: ViewerProps) {
   const [projection, setProjection] = useState<Projection>("perspective");
   const [showEdges, setShowEdges] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
   const [autoRotateSpeed, setAutoRotateSpeed] = useState(AUTO_ROTATE_DEFAULT_SPEED);
   const [fitRequest, setFitRequest] = useState(0);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<ExportFormatId | null>(null);
+
+  // A cleared workspace (conversation switch) takes the export menu with it.
+  useEffect(() => {
+    if (!geometry || !artifactData) setExportOpen(false);
+  }, [geometry, artifactData]);
 
   function selectProjection(next: Projection) {
     setProjection(next);
     setFitRequest((value) => value + 1);
+  }
+
+  async function exportAs(format: ExportFormatId) {
+    if (!geometry || !artifactData || exporting) return;
+    setExporting(format);
+    try {
+      downloadBlob(await exportModelBlob(format, { artifactData, geometry }), `${exportName}.${format}`);
+      setExportOpen(false);
+    } catch {
+      // Conversion failures leave the menu open so the user can pick STL,
+      // which never converts and cannot fail.
+    } finally {
+      setExporting(null);
+    }
   }
 
   return (
@@ -210,28 +245,73 @@ export function Viewer({ geometry }: ViewerProps) {
         >
           <Rotate3d className="h-4 w-4" />
         </ProjectionButton>
+        <div className="mx-0.5 h-5 w-px bg-border" />
+        <button
+          type="button"
+          data-testid="viewer-export"
+          aria-label="Export model"
+          title="Export model"
+          aria-expanded={exportOpen}
+          disabled={!geometry || !artifactData}
+          onClick={() => setExportOpen((value) => !value)}
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+            exportOpen && "bg-foreground text-background hover:bg-foreground hover:text-background",
+          )}
+        >
+          <Download className="h-4 w-4" />
+        </button>
       </div>
 
-      {autoRotate && (
-        <div
-          data-testid="auto-rotate-speed"
-          className="absolute left-3 top-14 z-10 flex w-44 items-center gap-2 rounded-md border bg-background/95 px-3 py-2 shadow-sm backdrop-blur-sm"
-        >
-          <Rotate3d className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <Slider
-            min={AUTO_ROTATE_MIN_SPEED}
-            max={AUTO_ROTATE_MAX_SPEED}
-            step={0.5}
-            value={[autoRotateSpeed]}
-            onValueChange={(next) => {
-              if (next[0] !== undefined) setAutoRotateSpeed(next[0]);
-            }}
-            aria-label="Auto-rotate speed"
-            className="min-w-0"
-          />
-          <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-            {autoRotateSpeed.toFixed(1)}
-          </span>
+      {(autoRotate || exportOpen) && (
+        <div className="absolute left-3 top-14 z-10 flex flex-col items-start gap-2">
+          {autoRotate && (
+            <div
+              data-testid="auto-rotate-speed"
+              className="flex w-44 items-center gap-2 rounded-md border bg-background/95 px-3 py-2 shadow-sm backdrop-blur-sm"
+            >
+              <Rotate3d className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <Slider
+                min={AUTO_ROTATE_MIN_SPEED}
+                max={AUTO_ROTATE_MAX_SPEED}
+                step={0.5}
+                value={[autoRotateSpeed]}
+                onValueChange={(next) => {
+                  if (next[0] !== undefined) setAutoRotateSpeed(next[0]);
+                }}
+                aria-label="Auto-rotate speed"
+                className="min-w-0"
+              />
+              <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+                {autoRotateSpeed.toFixed(1)}
+              </span>
+            </div>
+          )}
+          {exportOpen && (
+            <div
+              data-testid="viewer-export-menu"
+              className="w-48 rounded-md border bg-background/95 p-1 shadow-sm backdrop-blur-sm"
+            >
+              {EXPORT_FORMATS.map((format) => (
+                <button
+                  key={format.id}
+                  type="button"
+                  data-testid={`viewer-export-${format.id}`}
+                  disabled={exporting !== null}
+                  onClick={() => void exportAs(format.id)}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+                >
+                  {exporting === format.id ? (
+                    <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  <span className="font-medium">{format.label}</span>
+                  <span className="ml-auto text-muted-foreground">{format.hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

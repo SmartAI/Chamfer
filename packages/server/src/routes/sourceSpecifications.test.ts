@@ -31,17 +31,17 @@ it("serves the durable source-specification projection with retry, conflict, and
     }],
   };
   const post = (conversationId: string, body: unknown, key: string) => app.request(
-    `/api/conversations/${conversationId}/source-specifications`,
+    `/api/conversations/${conversationId}/evidence`,
     {
       method: "POST",
-      headers: { "content-type": "application/json", "Idempotency-Key": key },
-      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "record-source-specifications", input: body, idempotencyKey: key }),
     },
   );
 
   const firstResponse = await post(conversation.id, input, "mutation-1");
   expect(firstResponse.status).toBe(200);
-  const first = (await firstResponse.json()) as SourceSpecificationDto[];
+  const first = ((await firstResponse.json()) as { result: SourceSpecificationDto[] }).result;
   expect(first).toMatchObject([{
     id: "plate-width",
     conversationId: conversation.id,
@@ -49,8 +49,9 @@ it("serves the durable source-specification projection with retry, conflict, and
     status: "active",
     source: { messageId: "message-1", text: "30 mm plate", start: 8, end: 19 },
   }]);
-  expect(await (await post(conversation.id, input, "mutation-1")).json()).toEqual(first);
-  expect(await (await app.request(`/api/conversations/${conversation.id}/source-specifications`)).json()).toEqual(first);
+  expect(((await (await post(conversation.id, input, "mutation-1")).json()) as { result: SourceSpecificationDto[] }).result).toEqual(first);
+  const projection = await (await app.request(`/api/conversations/${conversation.id}/evidence`)).json() as { sourceSpecifications: SourceSpecificationDto[] };
+  expect(projection.sourceSpecifications).toEqual(first);
 
   const conflict = structuredClone(input);
   conflict.specifications[0]!.requirement = "The plate may be any width.";

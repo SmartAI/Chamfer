@@ -10,13 +10,21 @@ import { executeFusionScript, isRecord, stableJson } from "./mcpPayload";
 
 const UPDATE_TOOL = "fusion_mcp_update";
 
+/** Canonical hash of a token-free fingerprint payload. The trusted inspection
+ * snapshot (which computes the fingerprint in the same in-Fusion execution)
+ * and the standalone script below must both hash through this function, or a
+ * rollback target captured by one could never match the other. */
+export function hashFusionEngineeringFingerprint(fingerprint: Record<string, unknown>): string {
+  return createHash("sha256").update(stableJson(fingerprint)).digest("hex");
+}
+
 /** Token-free engineering fingerprint of the active design. It never reads
  * entityToken, so it leaves the native Undo stack untouched and is safe to
  * call inside a rollback loop. */
 export async function fingerprintFusionEngineering(client: FusionMcpClient, documentId: string): Promise<string> {
   const payload = await executeFusionScript(client, fingerprintEngineeringScript(documentId));
   if (!isRecord(payload.fingerprint)) throw new Error("Fusion fingerprint inspector returned no fingerprint");
-  return createHash("sha256").update(stableJson(payload.fingerprint)).digest("hex");
+  return hashFusionEngineeringFingerprint(payload.fingerprint);
 }
 
 /** One native Undo, strict: anything but an explicit success is a failure. */

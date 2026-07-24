@@ -10,6 +10,8 @@ import { getAttachment } from "./conversationStore";
 import { openDb } from "./db";
 import { runAttachmentMaintenance } from "./attachmentMaintenance";
 import { prepareImageStorage } from "./startupImageStorage";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
+import { classifyReference } from "./referenceClassification";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -54,48 +56,73 @@ describe("image blob garbage collection", () => {
     await prepareImageStorage(db, dataDir);
     const first = await addAttachment(app, "first", "first-image");
     const second = await addAttachment(app, "second", "second-image");
-    db.prepare(
-      `INSERT INTO reference_classifications
-        (id, conversation_id, reference_id, status, purpose, relationships_json, rationale,
-         specification_links_json, no_specification_reason, actor, created_at)
-       VALUES ('classification-1', ?, ?, 'classified', 'geometry', '[]', 'relevant', '[]', NULL, 'agent', 1)`,
-    ).run(first.conversation.id, first.attachment.id);
-    db.prepare(
-      `INSERT INTO inspection_leases
-        (id, conversation_id, purpose, status, opened_at, closed_at)
-       VALUES ('lease-1', ?, 'inspect', 'closed', 1, 2)`,
-    ).run(first.conversation.id);
-    db.prepare(
-      "INSERT INTO inspection_lease_evidence (lease_id, attachment_id, display_order) VALUES ('lease-1', ?, 0)",
-    ).run(first.attachment.id);
-    db.prepare(
-      `INSERT INTO inspection_observations
-        (id, lease_id, relevant_views_json, facts_json, affected_specifications_json,
-         affected_components_json, no_affected_entity_reason, recorded_at)
-       VALUES ('observation-1', 'lease-1', '[]', '[]', '[]', '[]', NULL, 2)`,
-    ).run();
+    classifyReference(db, first.conversation.id, {
+      referenceId: first.attachment.id,
+      status: "active",
+      purpose: "geometry",
+      relationships: [],
+      rationale: "relevant",
+      specificationIds: [],
+      noSpecificationReason: "No extractable specification.",
+    }, "classification-1");
+    appendEvidenceEvent(db, first.conversation.id, {
+      id: `${first.conversation.id}:lease-1`,
+      type: "inspection-lease.opened",
+      data: { lease: {
+        id: "lease-1",
+        conversationId: first.conversation.id,
+        purpose: "inspect",
+        status: "open",
+        evidence: [{ attachmentId: first.attachment.id, kind: "user-image", mime: "image/png" }],
+        openedAt: 1,
+      } },
+    });
     db.prepare(
       `INSERT INTO image_migration_diagnostics (attachment_id, message_id, code, created_at)
        VALUES (?, ?, 'recoverable', 1)`,
     ).run(first.attachment.id, first.message.id);
     db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, created_at) VALUES ('artifact-delete', ?, 1, 'box', 1)")
       .run(first.conversation.id);
-    db.prepare(`INSERT INTO visual_verifications
-      (id, conversation_id, artifact_id, artifact_version, inspection_sheet_id,
-       covered_reference_ids_json, verdict, observations_json, recorded_at)
-      VALUES ('visual-delete', ?, 'artifact-delete', 1, ?, '[]', 'match', '[]', 1)`)
-      .run(first.conversation.id, first.attachment.id);
+    appendEvidenceEvent(db, first.conversation.id, {
+      id: `${first.conversation.id}:comparison-delete`,
+      type: "visual-comparison.recorded",
+      data: { comparison: {
+        evidenceId: "comparison-delete", status: "match",
+        policy: { id: "test", version: 1 }, algorithm: { id: "test", version: 1 },
+        thresholds: { silhouetteOverlapMin: 1, edgeAlignmentMin: 1, edgeTolerancePx: 0 },
+        candidate: { artifactId: "artifact-delete", artifactVersion: 1, inspectionSheetId: first.attachment.id },
+        comparisons: [],
+      } },
+    });
+    appendEvidenceEvent(db, first.conversation.id, {
+      id: `${first.conversation.id}:visual-delete`,
+      type: "visual-verification.recorded",
+      data: { verification: {
+        id: "visual-delete",
+        conversationId: first.conversation.id,
+        artifactId: "artifact-delete",
+        artifactVersion: 1,
+        inspectionSheetId: first.attachment.id,
+        visualComparisonEvidenceId: "comparison-delete",
+        coveredReferenceIds: [first.attachment.id],
+        verdict: "match",
+        observations: [{
+          referenceId: first.attachment.id,
+          relevantViews: ["front"],
+          findings: ["Matches."],
+          affectedComponents: [],
+        }],
+        recordedAt: 1,
+      } },
+    });
     const blob = join(dataDir, "images", "43", first.attachment.contentHash);
 
     const response = await app.request(`/api/conversations/${first.conversation.id}`, { method: "DELETE" });
 
     expect(response.status).toBe(200);
     expect(db.prepare("SELECT id FROM attachments WHERE id = ?").get(first.attachment.id)).toBeUndefined();
-    expect(db.prepare("SELECT id FROM inspection_leases WHERE id = 'lease-1'").get()).toBeUndefined();
-    expect(db.prepare("SELECT * FROM inspection_lease_evidence WHERE lease_id = 'lease-1'").get()).toBeUndefined();
-    expect(db.prepare("SELECT id FROM inspection_observations WHERE id = 'observation-1'").get()).toBeUndefined();
-    expect(db.prepare("SELECT id FROM reference_classifications WHERE id = 'classification-1'").get()).toBeUndefined();
-    expect(db.prepare("SELECT id FROM visual_verifications WHERE id = 'visual-delete'").get()).toBeUndefined();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM evidence_events WHERE conversation_id = ?")
+      .get(first.conversation.id)).toEqual({ count: 0 });
     expect(db.prepare("SELECT code FROM image_migration_diagnostics WHERE attachment_id = ?").get(first.attachment.id))
       .toBeUndefined();
     expect(existsSync(blob)).toBe(true);
@@ -109,19 +136,47 @@ describe("image blob garbage collection", () => {
   it("rolls back evidence and logical attachment deletion when any database delete fails", async () => {
     const { app, dataDir, db } = fixture();
     const item = await addAttachment(app, "atomic", "atomic-image");
-    db.prepare(
-      "INSERT INTO inspection_leases (id, conversation_id, purpose, status, opened_at) VALUES ('lease-atomic', ?, 'inspect', 'open', 1)",
-    ).run(item.conversation.id);
-    db.prepare(
-      "INSERT INTO inspection_lease_evidence (lease_id, attachment_id, display_order) VALUES ('lease-atomic', ?, 0)",
-    ).run(item.attachment.id);
+    appendEvidenceEvent(db, item.conversation.id, {
+      id: `${item.conversation.id}:lease-atomic`,
+      type: "inspection-lease.opened",
+      data: { lease: {
+        id: "lease-atomic",
+        conversationId: item.conversation.id,
+        purpose: "inspect",
+        status: "open",
+        evidence: [{ attachmentId: item.attachment.id, kind: "user-image", mime: "image/png" }],
+        openedAt: 1,
+      } },
+    });
     db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, created_at) VALUES ('artifact-atomic', ?, 1, 'box', 1)")
       .run(item.conversation.id);
-    db.prepare(`INSERT INTO visual_verifications
-      (id, conversation_id, artifact_id, artifact_version, inspection_sheet_id,
-       covered_reference_ids_json, verdict, observations_json, recorded_at)
-      VALUES ('visual-atomic', ?, 'artifact-atomic', 1, ?, '[]', 'match', '[]', 1)`)
-      .run(item.conversation.id, item.attachment.id);
+    appendEvidenceEvent(db, item.conversation.id, {
+      id: `${item.conversation.id}:comparison-atomic`,
+      type: "visual-comparison.recorded",
+      data: { comparison: {
+        evidenceId: "comparison-atomic", status: "match",
+        policy: { id: "test", version: 1 }, algorithm: { id: "test", version: 1 },
+        thresholds: { silhouetteOverlapMin: 1, edgeAlignmentMin: 1, edgeTolerancePx: 0 },
+        candidate: { artifactId: "artifact-atomic", artifactVersion: 1, inspectionSheetId: item.attachment.id },
+        comparisons: [],
+      } },
+    });
+    appendEvidenceEvent(db, item.conversation.id, {
+      id: `${item.conversation.id}:visual-atomic`,
+      type: "visual-verification.recorded",
+      data: { verification: {
+        id: "visual-atomic",
+        conversationId: item.conversation.id,
+        artifactId: "artifact-atomic",
+        artifactVersion: 1,
+        inspectionSheetId: item.attachment.id,
+        visualComparisonEvidenceId: "comparison-atomic",
+        coveredReferenceIds: [],
+        verdict: "match",
+        observations: [],
+        recordedAt: 1,
+      } },
+    });
     db.exec(`CREATE TRIGGER reject_attachment_delete BEFORE DELETE ON attachments
       BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END`);
 
@@ -132,9 +187,10 @@ describe("image blob garbage collection", () => {
     expect(response.status).toBe(500);
     expect(db.prepare("SELECT id FROM conversations WHERE id = ?").get(item.conversation.id)).toBeDefined();
     expect(db.prepare("SELECT id FROM attachments WHERE id = ?").get(item.attachment.id)).toBeDefined();
-    expect(db.prepare("SELECT id FROM inspection_leases WHERE id = 'lease-atomic'").get()).toBeDefined();
-    expect(db.prepare("SELECT * FROM inspection_lease_evidence WHERE lease_id = 'lease-atomic'").get()).toBeDefined();
-    expect(db.prepare("SELECT id FROM visual_verifications WHERE id = 'visual-atomic'").get()).toBeDefined();
+    expect(projectEvidence(db, item.conversation.id)).toMatchObject({
+      inspectionLeases: [{ id: "lease-atomic" }],
+      visualVerifications: [{ id: "visual-atomic" }],
+    });
     expect(existsSync(join(dataDir, "images", "43", item.attachment.contentHash))).toBe(true);
   });
 
@@ -159,7 +215,7 @@ describe("image blob garbage collection", () => {
     writeFileSync(partial, PNG);
     utimesSync(partial, new Date(0), new Date(0));
 
-    const report = runAttachmentMaintenance(db, store, { now: () => 86_400_000, temporaryMaxAgeMs: 1_000 });
+    const report = await runAttachmentMaintenance(db, store, { now: () => 86_400_000, temporaryMaxAgeMs: 1_000 });
 
     expect(report.metadataBefore).toEqual([{
       attachmentId: "broken",
@@ -192,7 +248,7 @@ describe("image blob garbage collection", () => {
     movedDb.close();
   });
 
-  it("reports a failed removal and removes the same orphan on a later maintenance retry", () => {
+  it("reports a failed removal and removes the same orphan on a later maintenance retry", async () => {
     const { dataDir, db } = fixture();
     const orphan = join(dataDir, "images", "ff", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     mkdirSync(dirname(orphan), { recursive: true });
@@ -202,9 +258,9 @@ describe("image blob garbage collection", () => {
     }).mockImplementation(rmSync);
     const store = new AttachmentStore(dataDir, { fileSystem: { remove } });
 
-    expect(runAttachmentMaintenance(db, store).failed).toEqual(["images/ff/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]);
+    expect((await runAttachmentMaintenance(db, store)).failed).toEqual(["images/ff/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]);
     expect(existsSync(orphan)).toBe(true);
-    expect(runAttachmentMaintenance(db, store).removed).toEqual(["images/ff/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]);
+    expect((await runAttachmentMaintenance(db, store)).removed).toEqual(["images/ff/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]);
     expect(existsSync(orphan)).toBe(false);
   });
 

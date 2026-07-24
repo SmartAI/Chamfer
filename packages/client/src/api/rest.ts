@@ -1,3 +1,5 @@
+import { captureError } from "../telemetry";
+import { isLlmProvider } from "@chamfer/shared";
 import type {
   ArtifactDto,
   AttachmentDto,
@@ -34,6 +36,10 @@ import type {
   CreateProofContractInput,
   ProofContractDto,
   DesignEscalationDto,
+  DurableNoteDto,
+  Gate,
+  Measurements,
+  MeasuredVisualComparisonEvidence,
   OpenDesignEscalationInput,
   CreateReferenceRegistrationInput,
   ReferenceRegistrationDto,
@@ -43,8 +49,29 @@ import type {
   AgentRunLifecycleDto,
   AgentRunFeedbackDto,
   AgentRunFeedbackRating,
+  HeadlessRunDto,
+  HeadlessRuntimeCapabilitiesDto,
+  OnlineBudgetDto,
+  StartHeadlessRunInput,
+  SteerHeadlessRunInput,
+  EvidenceCommand,
+  EvidenceEvent,
+  EvidenceEventDraft,
+  EvidenceProjection,
+  ConversationEvent,
+  ConversationProjection,
 } from "@chamfer/shared";
 import type { ImageContent } from "@earendil-works/pi-ai";
+
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
 
 async function throwOnError(res: Response): Promise<void> {
   if (res.ok) return;
@@ -57,7 +84,12 @@ async function throwOnError(res: Response): Promise<void> {
   } catch {
     // response wasn't JSON; fall back to status text
   }
-  throw new Error(message);
+  const error = new HttpError(message, res.status);
+  // Only server errors are unambiguously "something is broken". A 404 is often a
+  // legitimately deleted resource; route-surface 404s are caught by the online
+  // health probe and the CI route-parity test instead, not by noisy client reports.
+  if (res.status >= 500) captureError(error, { url: res.url, status: res.status });
+  throw error;
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -83,6 +115,35 @@ function idempotentJsonInit(method: string, body: unknown, idempotencyKey?: stri
   const init = jsonInit(method, body);
   if (idempotencyKey) (init.headers as Record<string, string>)["Idempotency-Key"] = idempotencyKey;
   return init;
+}
+
+function evidenceCommand<T>(conversationId: string, command: EvidenceCommand): Promise<T> {
+  return requestJson<{ result: T; projection: EvidenceProjection }>(
+    `/api/conversations/${conversationId}/evidence`,
+    jsonInit("POST", command),
+  ).then(({ result, projection }) => {
+    publishEvidenceProjection(conversationId, projection);
+    return result;
+  });
+}
+
+const evidenceProjectionListeners = new Map<string, Set<(projection: EvidenceProjection) => void>>();
+
+function publishEvidenceProjection(conversationId: string, projection: EvidenceProjection): void {
+  for (const listener of evidenceProjectionListeners.get(conversationId) ?? []) listener(projection);
+}
+
+export function subscribeEvidenceProjection(
+  conversationId: string,
+  listener: (projection: EvidenceProjection) => void,
+): () => void {
+  const listeners = evidenceProjectionListeners.get(conversationId) ?? new Set();
+  listeners.add(listener);
+  evidenceProjectionListeners.set(conversationId, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) evidenceProjectionListeners.delete(conversationId);
+  };
 }
 
 // ---------- Settings ----------
@@ -172,7 +233,10 @@ export function listConversations(): Promise<ConversationDto[]> {
   return requestJson<ConversationDto[]>("/api/conversations");
 }
 
-export function createConversation(title: string, cadEnvironment: CadEnvironment): Promise<ConversationDto> {
+export function createConversation(
+  title: string,
+  cadEnvironment: CadEnvironment,
+): Promise<ConversationDto> {
   return requestJson<ConversationDto>("/api/conversations", jsonInit("POST", { title, cadEnvironment }));
 }
 
@@ -190,8 +254,139 @@ export function deleteConversation(id: string): Promise<void> {
   return requestVoid(`/api/conversations/${id}`, { method: "DELETE" });
 }
 
+// ---------- Headless runtime ----------
+
+export async function getRuntimeCapabilities(): Promise<HeadlessRuntimeCapabilitiesDto> {
+  // Deployments that never mounted the probe (older local servers) all host
+  // the agent in-process, so absence or a malformed body means fully capable;
+  // only an explicit agentHosting:false turns the composer off. demoQuota
+  // defaults false: without an explicit demo capability, only a per-provider
+  // key funds a turn.
+  const fallback: HeadlessRuntimeCapabilitiesDto = { headlessRuns: false, agentHosting: true, demoQuota: false };
+  const response = await fetch("/api/runtime/capabilities");
+  if (response.status === 404) return fallback;
+  await throwOnError(response);
+  try {
+    const body = await response.json() as Partial<HeadlessRuntimeCapabilitiesDto>;
+    const demoModel =
+      typeof body.demoModel === "object" && body.demoModel !== null &&
+      typeof body.demoModel.id === "string" && typeof body.demoModel.name === "string" &&
+      isLlmProvider(body.demoModel.provider)
+        ? { id: body.demoModel.id, name: body.demoModel.name, provider: body.demoModel.provider }
+        : undefined;
+    return {
+      headlessRuns: body.headlessRuns === true,
+      agentHosting: body.agentHosting !== false,
+      demoQuota: body.demoQuota === true && demoModel !== undefined,
+      ...(body.demoQuota === true && demoModel ? { demoModel } : {}),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * This account's free-demo dollar balance, or null when the deployment has no
+ * demo quota (the local server never mounts the route -> 404). Best-effort: any
+ * failure returns null so the meter simply hides rather than surfacing an error.
+ */
+export async function getOnlineBudget(): Promise<OnlineBudgetDto | null> {
+  try {
+    const response = await fetch("/api/online/budget");
+    if (!response.ok) return null;
+    const body = await response.json() as Partial<OnlineBudgetDto>;
+    if (
+      typeof body.spentUsd !== "number" || typeof body.capUsd !== "number" ||
+      typeof body.spentMicroUsd !== "number" || typeof body.capMicroUsd !== "number"
+    ) {
+      return null;
+    }
+    return {
+      spentUsd: body.spentUsd,
+      capUsd: body.capUsd,
+      spentMicroUsd: body.spentMicroUsd,
+      capMicroUsd: body.capMicroUsd,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getHeadlessRun(conversationId: string): Promise<HeadlessRunDto> {
+  return requestJson<HeadlessRunDto>(`/api/conversations/${conversationId}/headless-run`);
+}
+
+export function startHeadlessRun(conversationId: string, input: StartHeadlessRunInput): Promise<HeadlessRunDto> {
+  return requestJson<HeadlessRunDto>(
+    `/api/conversations/${conversationId}/headless-runs`, jsonInit("POST", input),
+  );
+}
+
+export function steerHeadlessRun(runId: string, input: SteerHeadlessRunInput): Promise<void> {
+  return requestVoid(`/api/headless-runs/${runId}/steer`, jsonInit("POST", input));
+}
+
+export function stopHeadlessRun(runId: string): Promise<void> {
+  return requestVoid(`/api/headless-runs/${runId}/stop`, { method: "POST" });
+}
+
+export function headlessRunEventsUrl(runId: string, after = 0): string {
+  return `/api/headless-runs/${encodeURIComponent(runId)}/events?after=${after}`;
+}
+
+export function getEvidenceProjection(conversationId: string): Promise<EvidenceProjection> {
+  return requestJson<EvidenceProjection>(`/api/conversations/${conversationId}/evidence`)
+    .then((projection) => {
+      publishEvidenceProjection(conversationId, projection);
+      return projection;
+    });
+}
+
+export function recordPlanEvidence(
+  conversationId: string,
+  event: Extract<EvidenceEventDraft, { type: "plan.recorded" }>,
+): Promise<EvidenceEvent> {
+  return evidenceCommand(conversationId, {
+    type: "record-plan",
+    event: {
+      id: event.id,
+      type: event.type,
+      data: event.data,
+      recordedAt: event.recordedAt,
+    },
+  });
+}
+
+export function recordEnvironmentVerificationEvidence(
+  conversationId: string,
+  event: Extract<EvidenceEventDraft, { type: "environment-verification.recorded" }>,
+): Promise<EvidenceEvent> {
+  return evidenceCommand(conversationId, { type: "record-environment-verification", event });
+}
+
+export function recordVerificationCheckRevisionAttempt(
+  conversationId: string,
+  event: Extract<EvidenceEventDraft, { type: "verification-checks.revision-attempted" }>,
+): Promise<EvidenceEvent> {
+  return evidenceCommand(conversationId, {
+    type: "record-verification-check-revision-attempt",
+    event,
+  });
+}
+
+export function recordVisualComparisonEvidence(
+  conversationId: string,
+  input: MeasuredVisualComparisonEvidence,
+): Promise<EvidenceEvent> {
+  return evidenceCommand(conversationId, {
+    type: "record-visual-comparison",
+    input,
+    idempotencyKey: input.evidenceId,
+  });
+}
+
 export function listSourceSpecifications(conversationId: string): Promise<SourceSpecificationDto[]> {
-  return requestJson<SourceSpecificationDto[]>(`/api/conversations/${conversationId}/source-specifications`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.sourceSpecifications);
 }
 
 export function recordSourceSpecifications(
@@ -199,28 +394,30 @@ export function recordSourceSpecifications(
   input: RecordSourceSpecificationsInput,
   idempotencyKey?: string,
 ): Promise<SourceSpecificationDto[]> {
-  return requestJson<SourceSpecificationDto[]>(
-    `/api/conversations/${conversationId}/source-specifications`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, {
+    type: "record-source-specifications",
+    input,
+    idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+  });
 }
 
 export function listProofContracts(conversationId: string): Promise<ProofContractDto[]> {
-  return requestJson<ProofContractDto[]>(`/api/conversations/${conversationId}/proof-contracts`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.proofContracts);
 }
 
 export function freezeProofContract(
   conversationId: string,
   input: CreateProofContractInput,
 ): Promise<ProofContractDto> {
-  return requestJson<ProofContractDto>(
-    `/api/conversations/${conversationId}/proof-contracts`,
-    jsonInit("POST", input),
-  );
+  return evidenceCommand(conversationId, {
+    type: "freeze-proof-contract",
+    input,
+    idempotencyKey: crypto.randomUUID(),
+  });
 }
 
 export function listProofReports(conversationId: string): Promise<ProofReportDto[]> {
-  return requestJson<ProofReportDto[]>(`/api/conversations/${conversationId}/proof-reports`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.proofReports);
 }
 
 export function createProofReport(
@@ -228,14 +425,15 @@ export function createProofReport(
   input: CreateProofReportInput,
   idempotencyKey: string,
 ): Promise<ProofReportDto> {
-  return requestJson<ProofReportDto>(
-    `/api/conversations/${conversationId}/proof-reports`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, { type: "create-proof-report", input, idempotencyKey });
 }
 
 export function listDesignEscalations(conversationId: string): Promise<DesignEscalationDto[]> {
-  return requestJson<DesignEscalationDto[]>(`/api/conversations/${conversationId}/design-escalations`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.designEscalations);
+}
+
+export function listDurableNotes(conversationId: string): Promise<DurableNoteDto[]> {
+  return requestJson<DurableNoteDto[]>(`/api/conversations/${conversationId}/durable-notes`);
 }
 
 export function openDesignEscalation(
@@ -243,10 +441,7 @@ export function openDesignEscalation(
   input: OpenDesignEscalationInput,
   idempotencyKey: string,
 ): Promise<DesignEscalationDto> {
-  return requestJson<DesignEscalationDto>(
-    `/api/conversations/${conversationId}/design-escalations`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, { type: "open-design-escalation", input, idempotencyKey });
 }
 
 export function postAgentRunEvents(
@@ -288,6 +483,33 @@ export function listMessages(conversationId: string): Promise<MessageDto[]> {
   return requestJson<MessageDto[]>(`/api/conversations/${conversationId}/messages`);
 }
 
+export function getConversationState(conversationId: string): Promise<ConversationProjection> {
+  return requestJson<ConversationProjection>(`/api/conversations/${conversationId}/conversation-state`);
+}
+
+export function observeConversationEvents(
+  conversationId: string,
+  after: number,
+  onEvent: (event: ConversationEvent) => void,
+): EventSource {
+  const source = new EventSource(`/api/conversations/${conversationId}/events?after=${after}`);
+  for (const type of [
+    "conversation.created",
+    "conversation.title-updated",
+    "conversation.design-detached",
+    "message.appended",
+    "attachment.appended",
+    "artifact.stored",
+    "evidence.linked",
+    "ui.state-updated",
+    "agent-run.lifecycle-recorded",
+    "headless-run.recorded",
+  ] as const) {
+    source.addEventListener(type, (message) => onEvent(JSON.parse(message.data) as ConversationEvent));
+  }
+  return source;
+}
+
 export interface PostMessageInput {
   id: string;
   seq: number;
@@ -318,7 +540,12 @@ export function listArtifacts(conversationId: string): Promise<ArtifactDto[]> {
 
 export function postArtifact(
   conversationId: string,
-  artifact: { pySource: string; paramsJson?: string | null },
+  artifact: {
+    pySource: string;
+    paramsJson?: string | null;
+    gate?: Gate;
+    measurements?: Measurements;
+  },
 ): Promise<ArtifactDto> {
   return requestJson<ArtifactDto>(
     `/api/conversations/${conversationId}/artifacts`,
@@ -349,7 +576,7 @@ export function listAttachments(messageId: string): Promise<AttachmentDto[]> {
 }
 
 export function listReferenceRecords(conversationId: string): Promise<ReferenceRecordDto[]> {
-  return requestJson<ReferenceRecordDto[]>(`/api/conversations/${conversationId}/references`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.referenceRecords);
 }
 
 export function classifyReference(
@@ -357,14 +584,15 @@ export function classifyReference(
   input: ClassifyReferenceInput,
   idempotencyKey?: string,
 ): Promise<ReferenceClassificationDto> {
-  return requestJson<ReferenceClassificationDto>(
-    `/api/conversations/${conversationId}/reference-classifications`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, {
+    type: "classify-reference",
+    input,
+    idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+  });
 }
 
 export function listReferenceRegistrations(conversationId: string): Promise<ReferenceRegistrationDto[]> {
-  return requestJson<ReferenceRegistrationDto[]>(`/api/conversations/${conversationId}/reference-registrations`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.referenceRegistrations);
 }
 
 export function registerReference(
@@ -372,14 +600,16 @@ export function registerReference(
   input: CreateReferenceRegistrationInput,
   idempotencyKey?: string,
 ): Promise<ReferenceRegistrationDto> {
-  return requestJson<ReferenceRegistrationDto>(
-    `/api/conversations/${conversationId}/reference-registrations`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, {
+    type: "register-reference",
+    input,
+    idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+  });
 }
 
 export function listOpenInspectionLeases(conversationId: string): Promise<InspectionLeaseDto[]> {
-  return requestJson<InspectionLeaseDto[]>(`/api/conversations/${conversationId}/inspection-leases?status=open`);
+  return getEvidenceProjection(conversationId).then((projection) =>
+    projection.inspectionLeases.filter((lease) => lease.status === "open"));
 }
 
 export function openInspectionLease(
@@ -387,10 +617,11 @@ export function openInspectionLease(
   input: InspectEvidenceInput,
   idempotencyKey?: string,
 ): Promise<InspectionLeaseDto> {
-  return requestJson<InspectionLeaseDto>(
-    `/api/conversations/${conversationId}/inspection-leases`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, {
+    type: "open-inspection-lease",
+    input,
+    idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+  });
 }
 
 export function recordInspectionObservation(
@@ -399,14 +630,16 @@ export function recordInspectionObservation(
   input: InspectionObservationInput,
   idempotencyKey?: string,
 ): Promise<InspectionLeaseDto> {
-  return requestJson<InspectionLeaseDto>(
-    `/api/conversations/${conversationId}/inspection-leases/${leaseId}/observations`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, {
+    type: "record-inspection-observation",
+    leaseId,
+    input,
+    idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+  });
 }
 
 export function listVisualVerifications(conversationId: string): Promise<VisualVerificationRecordDto[]> {
-  return requestJson<VisualVerificationRecordDto[]>(`/api/conversations/${conversationId}/visual-verifications`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.visualVerifications);
 }
 
 export function recordVisualVerification(
@@ -414,14 +647,15 @@ export function recordVisualVerification(
   input: RecordVisualVerificationInput,
   idempotencyKey?: string,
 ): Promise<VisualVerificationRecordDto> {
-  return requestJson<VisualVerificationRecordDto>(
-    `/api/conversations/${conversationId}/visual-verifications`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+  return evidenceCommand(conversationId, {
+    type: "record-visual-verification",
+    input,
+    idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+  });
 }
 
 export function listVisualVerificationBatches(conversationId: string): Promise<VisualVerificationBatchRecordDto[]> {
-  return requestJson<VisualVerificationBatchRecordDto[]>(`/api/conversations/${conversationId}/visual-verification-batches`);
+  return getEvidenceProjection(conversationId).then((projection) => projection.visualVerificationBatches);
 }
 
 export function recordVisualVerificationBatch(
@@ -431,8 +665,11 @@ export function recordVisualVerificationBatch(
 ): Promise<VisualVerificationBatchRecordDto> {
   return requestJson<VisualVerificationBatchRecordDto>(
     `/api/conversations/${conversationId}/visual-verification-batches`,
-    idempotentJsonInit("POST", input, idempotencyKey),
-  );
+    idempotentJsonInit("POST", input, idempotencyKey ?? crypto.randomUUID()),
+  ).then(async (record) => {
+    await getEvidenceProjection(conversationId);
+    return record;
+  });
 }
 
 export function attachmentUrl(id: string): string {

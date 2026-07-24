@@ -2,7 +2,7 @@
 
 **Describe it. Watch it take shape.**
 
-[Project page](https://smartai.github.io/Chamfer/) · [npm](https://www.npmjs.com/package/chamfer) · [Apache-2.0](LICENSE)
+[Try it online](https://chamferonline.com) · [npm](https://www.npmjs.com/package/chamfer) · [Apache-2.0](LICENSE)
 
 ## What is Chamfer
 
@@ -38,7 +38,9 @@ CAD execution, native geometry and Fusion files, unrelated documents and project
 
 ## How to use it
 
-Requires Node.js >= 22.19.
+The fastest way is the hosted app at **[chamferonline.com](https://chamferonline.com)** - sign in with Google and start designing in your browser, no install. build123d runs client-side; the Autodesk Fusion connector is local-only, so use the CLI below for that.
+
+To run it yourself (requires Node.js >= 22.19):
 
 ```bash
 npx chamfer
@@ -59,6 +61,50 @@ Values found in the environment appear pre-filled in Settings with a `.env` badg
 npm install
 npm run dev
 ```
+
+Agent configuration changes are checked against the incumbent with a deterministic two-fixture smoke tier.
+Run the same gate locally with one command, using the intended merge base:
+
+```bash
+npm run eval:smoke -- --base=origin/main
+```
+
+The command writes the scorecard under `.agent/evaluations/` and updates the tracked configuration probe pin after a passing comparison.
+Commit that pin with the configuration change.
+
+A deliberately accepted regression requires one JSON waiver added or modified under `.github/agent-bench-waivers/` in the same change.
+The waiver must bind to the candidate runtime configuration hash, name every regressed pillar, and explain both what regressed and why it is accepted:
+
+```json
+{
+  "schemaVersion": 1,
+  "candidateConfigurationHash": "64-character SHA-256 hash from the failing scorecard",
+  "regressedPillars": ["taskSuccess"],
+  "regression": "Describe the measured regression in at least 20 characters.",
+  "reason": "Explain why maintainers deliberately accept it in at least 20 characters."
+}
+```
+
+CI accepts only a waiver changed by that pull request and reports the result as a warning instead of silently passing it.
+
+The deterministic full tier covers every versioned evaluation fixture and runs on demand rather than on every pull request:
+
+```bash
+npm run eval:full -- --configuration=current
+```
+
+Add `--incumbent=<configuration>` plus `--incumbent-root=<worktree>` when a paired scorecard diff is required.
+The release workflow runs that paired full tier against the preceding accepted release before publishing.
+
+The fixture-set version and content hash are pinned in `packages/client/eval/golden/agent-configuration-full-v1.scorecards.json`.
+Any fixture JSON or asset change must increment the version in `packages/client/eval/fixtureSet.ts`, then regenerate the expected scorecards in the same change:
+
+```bash
+npm run eval:full:update-golden
+```
+
+The test suite fails with this regeneration command when the checked-in pin is stale.
+Run `npm run eval:full:test` to repeat the real fake-LLM full-tier determinism and identity meta-test against the pin.
 
 ## License
 

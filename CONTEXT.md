@@ -1,6 +1,6 @@
 # Chamfer
 
-An AI CAD designer that runs in the browser: an LLM writes build123d Python, a client-side geometry kernel executes and verifies it, and the user sees the resulting model and evidence.
+An AI CAD designer used through the browser: an LLM-driven agent writes build123d Python, a geometry kernel executes and verifies it, and the user sees the resulting model and evidence.
 
 ## Language
 
@@ -12,12 +12,45 @@ _Avoid_: Python (the language, not the artifact), script, generated code
 A complete, self-contained snapshot of CAD code submitted for execution.
 Each successful deliverable version is stored as a full artifact rather than reconstructed from patches.
 
+**Design**:
+The first-class aggregate for one part, independent of the conversations that discuss it.
+It owns its name, description, CAD environment, ordered accepted revision history, current revision, parameter schema, and fork provenance.
+For a Fusion design, the bound live Fusion document remains authoritative and the aggregate records its identity and accepted evidence without duplicating native model state.
+
+**Design revision**:
+An immutable accepted deliverable in a design's ordered history.
+A Local build123d design revision stores the complete CAD code version, parameter schema, measurements, and passing verify-gate evidence.
+A Fusion design revision records the authoritative Fusion engineering revision and its passing completion evidence after the conversation run delivers it.
+_Avoid_: using the generic term when the narrower Fusion design revision fingerprint is meant.
+
+**Design working candidate**:
+A conversation-scoped CAD result produced while an agent run is in flight.
+It may be inspected during the run, but it does not enter design history or change the design's current revision until delivery finishes with passing evidence.
+
+**Current design revision**:
+The latest accepted design revision, which remains stable for other conversations while an agent run is in flight.
+Parameter editing, export, and a new conversation about an existing design start from this accepted revision rather than from an intermediate working candidate.
+
 **Script**:
 Ad-hoc CAD code a developer types into the dev Script panel; not agent-authored.
 _Avoid_: using "script" for agent-written CAD code
 
 **CAD code visibility**:
 Whether CAD code bodies are rendered in the chat window. Hidden by default; enabling it is a deployment-level configuration, not a per-user preference.
+
+**Local deployment**:
+Chamfer installed from npm and run entirely on the user's own machine.
+The full product: every capability, including the Autodesk Fusion connector, is available here.
+_Avoid_: client-side version, local version
+
+**Hosted deployment**:
+The Chamfer service operated on shared infrastructure at chamferonline.com and used from a browser with no installation.
+It runs the same agent as the local deployment; capabilities that require the user's own machine (such as the Fusion connector) are permanently absent from it.
+_Avoid_: online version, cloud version, the Worker (an implementation detail)
+
+**Agent hosting**:
+Whether a deployment is able to run agent turns.
+A deployment without agent hosting still authenticates users and shows existing conversations, but declares itself degraded and does not accept prompts.
 
 **CAD environment**:
 The conversation-bound system in which Chamfer creates, edits, inspects, and verifies a design.

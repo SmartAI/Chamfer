@@ -1,3 +1,5 @@
+import { engineeringFingerprintCollector } from "./integrityScripts";
+
 function pythonString(value: unknown): string {
   return JSON.stringify(JSON.stringify(value));
 }
@@ -24,7 +26,7 @@ export function engineeringSnapshotScript(): string {
 import adsk.core
 import adsk.fusion
 import json
-
+${engineeringFingerprintCollector}
 ATTR_GROUP = "com.chamfer.entity"
 ATTR_NAME = "uuid"
 ATTR_DESCRIPTOR = "semantic"
@@ -561,6 +563,7 @@ def run(_context: str):
             "dataFileId": data_file.id if data_file else None,
         },
         "snapshot": snapshot,
+        "fingerprint": _chamfer_engineering_fingerprint(design),
     }, sort_keys=True))
 `;
 }

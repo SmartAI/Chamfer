@@ -11,10 +11,11 @@ import type {
   ShapeProofRecord,
 } from "@chamfer/shared";
 import { SHAPE_PROOF_POLICY } from "@chamfer/shared";
-import { listReferenceRecords } from "./referenceClassification";
-import { listReferenceRegistrations } from "./referenceRegistrations";
-import { listSourceSpecifications } from "./sourceSpecifications";
-import { listVisualVerifications } from "./visualVerification";
+import { listLegacyReferenceRecords, listReferenceRecords } from "./referenceClassification";
+import { listLegacyReferenceRegistrations, listReferenceRegistrations } from "./referenceRegistrations";
+import { listLegacySourceSpecifications, listSourceSpecifications } from "./sourceSpecifications";
+import { listLegacyVisualVerifications, listVisualVerifications } from "./visualVerification";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 type ReportStatus = ProofReportDto["status"];
 
@@ -130,7 +131,8 @@ function latestPlan(records: readonly MessageRecord[]): DomainPlanRecord | undef
 
 function evidenceRecord(records: readonly MessageRecord[], evidenceId: string): MessageRecord | undefined {
   return records.find((record) =>
-    record.role === "toolResult" && record.toolName === "run_build123d" && record.toolCallId === evidenceId,
+    record.role === "toolResult" && (record.toolName === "run_build123d" || record.toolName === "execute_cad_change") &&
+      record.toolCallId === evidenceId,
   );
 }
 
@@ -309,14 +311,14 @@ function reportIsStale(db: DatabaseSync, row: ProofReportRow, report: ProofRepor
   if (!contract || contract.contract_id !== row.proof_contract_id || contract.revision !== row.proof_contract_revision) return true;
   const plan = latestPlan(messages(db, row.conversation_id));
   if (!plan || plan.domain.plan_id !== row.plan_id || plan.domain.criteria_revision !== row.criteria_revision) return true;
-  const activeSpecificationIds = listSourceSpecifications(db, row.conversation_id)
+  const activeSpecificationIds = listLegacySourceSpecifications(db, row.conversation_id)
     .filter((specification) => specification.status === "active")
     .map((specification) => specification.id);
   if (!sameStrings(activeSpecificationIds, report.sourceSpecifications.map((specification) => specification.id))) return true;
-  const activeReferenceIds = listReferenceRecords(db, row.conversation_id)
+  const activeReferenceIds = listLegacyReferenceRecords(db, row.conversation_id)
     .filter((reference) => reference.status === "active" || reference.status === "complementary")
     .map((reference) => reference.referenceId);
-  const registrationIds = listReferenceRegistrations(db, row.conversation_id)
+  const registrationIds = listLegacyReferenceRegistrations(db, row.conversation_id)
     .filter((registration) => registration.status === "current" && activeReferenceIds.includes(registration.referenceId))
     .map((registration) => `${registration.registrationId}@${registration.revision}`);
   const reportRegistrationIds = (report.referenceRegistrations ?? [])
@@ -328,7 +330,7 @@ function reportIsStale(db: DatabaseSync, row: ProofReportRow, report: ProofRepor
   )) return true;
   if (report.visualVerification.state !== "not-applicable") {
     const visual = report.visualVerification.record;
-    const latestVisual = listVisualVerifications(db, row.conversation_id).at(-1);
+    const latestVisual = listLegacyVisualVerifications(db, row.conversation_id).at(-1);
     if (!visual) return latestVisual !== undefined;
     if (!sameStrings(activeReferenceIds, visual.coveredReferenceIds) || latestVisual?.id !== visual.id) return true;
   }
@@ -349,11 +351,15 @@ function toDto(db: DatabaseSync, row: ProofReportRow): ProofReportDto {
   };
 }
 
-export function listProofReports(db: DatabaseSync, conversationId: string): ProofReportDto[] {
+export function listLegacyProofReports(db: DatabaseSync, conversationId: string): ProofReportDto[] {
   const rows = db.prepare(
     "SELECT * FROM proof_reports WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC",
   ).all(conversationId) as unknown as ProofReportRow[];
   return rows.map((row) => toDto(db, row));
+}
+
+export function listProofReports(db: DatabaseSync, conversationId: string): ProofReportDto[] {
+  return projectEvidence(db, conversationId).proofReports;
 }
 
 function validateInput(input: CreateProofReportInput): void {
@@ -380,31 +386,27 @@ export function createProofReport(
 ): ProofReportDto {
   validateInput(input);
   if (!idempotencyKey.trim()) throw new ProofReportError("Idempotency-Key is required");
-  const requestJson = JSON.stringify(input);
-  const replay = db.prepare(`SELECT request_json, report_id FROM proof_report_requests
-    WHERE conversation_id = ? AND idempotency_key = ?`).get(conversationId, idempotencyKey) as
-    { request_json: string; report_id: string } | undefined;
-  if (replay) {
-    if (replay.request_json !== requestJson) {
+  const projection = projectEvidence(db, conversationId);
+  const replay = projection.events.find((event) => event.type === "proof-report.recorded" &&
+    event.data.commandIdempotencyKey === idempotencyKey);
+  if (replay?.type === "proof-report.recorded") {
+    if (JSON.stringify(replay.data.request) !== JSON.stringify(input)) {
       throw new ProofReportError("idempotency key conflicts with an existing proof report request", "conflict");
     }
-    const existing = db.prepare("SELECT * FROM proof_reports WHERE report_id = ?").get(replay.report_id) as unknown as ProofReportRow;
-    return toDto(db, existing);
+    return replay.data.report;
   }
 
   const records = messages(db, conversationId);
-  const plan = latestPlan(records);
+  const plan = isDomainPlan(projection.activePlan) ? projection.activePlan : undefined;
   if (!plan || plan.domain.plan_id !== input.planId || plan.domain.revision !== input.planRevision ||
     plan.domain.criteria_revision !== input.criteriaRevision) {
     throw new ProofReportError("the accepted design-plan identity is stale or belongs to another conversation", "conflict");
   }
-  const contractRow = exactContract(db, conversationId, input.proofContractId, input.proofContractRevision);
-  const currentContract = latestContract(db, conversationId);
-  if (!contractRow || !currentContract || currentContract.contract_id !== input.proofContractId ||
-    currentContract.revision !== input.proofContractRevision) {
+  const contract = projection.proofContracts.find((candidate) => candidate.contractId === input.proofContractId &&
+    candidate.revision === input.proofContractRevision && candidate.status === "current");
+  if (!contract) {
     throw new ProofReportError("the proof-contract identity is stale or belongs to another conversation", "conflict");
   }
-  const contract = contractDto(contractRow);
   if (contract.derivation.planId !== input.planId || contract.derivation.criteriaRevision !== input.criteriaRevision ||
     contract.derivation.planRevision > input.planRevision) {
     throw new ProofReportError("the proof contract does not govern the accepted design plan", "conflict");
@@ -543,6 +545,7 @@ export function createProofReport(
         state: gateState,
         verdict: gate?.status ?? "unavailable",
         checks: gate?.checks ?? [],
+        ...(gate?.checkSet ? { checkSet: gate.checkSet } : {}),
       },
       planConformance: {
         state: conformanceState,
@@ -573,55 +576,24 @@ export function createProofReport(
     unavailableEvidence: contract.derivation.unavailableEvidence,
   };
 
-  const existingTarget = db.prepare(`SELECT * FROM proof_reports
-    WHERE conversation_id = ? AND artifact_id = ? AND artifact_version = ?`).get(
-    conversationId,
-    input.artifactId,
-    input.artifactVersion,
-  ) as unknown as ProofReportRow | undefined;
+  const existingTarget = projection.proofReports.find((candidate) =>
+    candidate.cadArtifact.id === input.artifactId && candidate.cadArtifact.version === input.artifactVersion);
   if (existingTarget) {
-    const existingReport = JSON.parse(existingTarget.payload_json) as ProofReportDto;
-    const sameTarget = existingReport.proofContract.contractId === input.proofContractId &&
-      existingReport.proofContract.revision === input.proofContractRevision &&
-      existingReport.acceptedPlan.planId === input.planId &&
-      existingReport.acceptedPlan.revision === input.planRevision &&
-      existingReport.engineering.evidenceId === input.engineeringEvidenceId &&
-      (existingReport.visualVerification.state === "not-applicable"
+    const sameTarget = existingTarget.proofContract.contractId === input.proofContractId &&
+      existingTarget.proofContract.revision === input.proofContractRevision &&
+      existingTarget.acceptedPlan.planId === input.planId &&
+      existingTarget.acceptedPlan.revision === input.planRevision &&
+      existingTarget.engineering.evidenceId === input.engineeringEvidenceId &&
+      (existingTarget.visualVerification.state === "not-applicable"
         ? input.visualVerificationId === undefined
-        : existingReport.visualVerification.record?.id === input.visualVerificationId);
+        : existingTarget.visualVerification.record?.id === input.visualVerificationId);
     if (!sameTarget) throw new ProofReportError("the CAD artifact already has a conflicting proof report", "conflict");
-    db.prepare(`INSERT INTO proof_report_requests
-      (conversation_id, idempotency_key, report_id, request_json, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(conversationId, idempotencyKey, existingTarget.report_id, requestJson, createdAt);
-    return toDto(db, existingTarget);
+    return existingTarget;
   }
-
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`INSERT INTO proof_reports
-      (report_id, conversation_id, proof_contract_id, proof_contract_revision, plan_id,
-       criteria_revision, artifact_id, artifact_version, payload_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(
-        report.reportId,
-        conversationId,
-        input.proofContractId,
-        input.proofContractRevision,
-        input.planId,
-        input.criteriaRevision,
-        input.artifactId,
-        input.artifactVersion,
-        JSON.stringify(report),
-        createdAt,
-      );
-    db.prepare(`INSERT INTO proof_report_requests
-      (conversation_id, idempotency_key, report_id, request_json, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(conversationId, idempotencyKey, report.reportId, requestJson, createdAt);
-    db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(createdAt, conversationId);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:proof-report:${report.reportId}`,
+    type: "proof-report.recorded",
+    data: { report, commandIdempotencyKey: idempotencyKey, request: input },
+  });
   return report;
 }

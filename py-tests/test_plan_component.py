@@ -34,7 +34,24 @@ EXPECT_PLATE_AND_PIN = (
 
 
 def run(source: str) -> dict:
-    return harness.run_script(source)
+    try:
+        raw = harness.checks_literal(source)
+    except ValueError:
+        raw = None
+    supplied = None if raw is None else {
+        "contractId": "contract-1",
+        "revision": 1,
+        "checks": [
+            {
+                "id": f"check-{index + 1}",
+                "componentId": "part",
+                "kind": check["kind"],
+                "criterion": check,
+            }
+            for index, check in enumerate(raw)
+        ],
+    }
+    return harness.run_script(source, supplied)
 
 
 def check_by_name(gate: dict, name: str):
@@ -103,10 +120,15 @@ def test_run_script_echoes_component_and_raw_checks():
     )
     m = run(source)["measurements"]
     assert m["component"] == "lid"
-    assert m["checks"] == [{"kind": "bbox", "size_mm": [10, 20, 30]}]
+    assert m["checks"] == [{
+        "id": "check-1",
+        "componentId": "part",
+        "kind": "bbox",
+        "size_mm": [10, 20, 30],
+    }]
 
 
-def test_duplicate_checks_assignments_fail_instead_of_echoing_the_wrong_checks():
+def test_duplicate_inline_checks_assignments_fail_without_a_frozen_plan():
     source = (
         EXPECT_BOX
         + '# --- checks ---\nCHECKS = [{"kind": "bbox", "size_mm": [10, 20, 30]}]\n# --- end checks ---\n'
@@ -114,9 +136,13 @@ def test_duplicate_checks_assignments_fail_instead_of_echoing_the_wrong_checks()
         + BOX_BODY
     )
     result = run(source)
-    entry = check_by_name(result["gate"], "checks_block")
-    assert entry is not None and entry["passed"] is False
-    assert "exactly one" in entry["detail"]
+    assert result["gate"]["status"] == "failed"
+    check = check_by_name(result["gate"], "checks_block")
+    assert check is not None and check["passed"] is False
+    assert "exactly one" in check["detail"]
+    assert result["notices"] == [
+        "Graded CAD-code CHECKS declaration; no loop-owned frozen checks were supplied."
+    ]
     assert "checks" not in result["measurements"]
 
 
@@ -261,7 +287,7 @@ def test_clearance_max_mm_below_min_is_rejected():
         APART_PAIR_BODY, "[25, 10, 10]",
         '[{"kind": "clearance", "a": "a", "b": "b", "min_mm": 2, "max_mm": 1}]',
     )
-    entry = check_by_name(gate, "checks_block")
+    entry = check_by_name(gate, "frozen_checks")
     assert entry["passed"] is False
     assert "max_mm" in entry["detail"]
 

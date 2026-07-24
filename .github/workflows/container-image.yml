@@ -1,0 +1,28 @@
+# Builds the hosted agent container image and pushes it to the Cloudflare
+# registry under the exact name:tag pinned in packages/online/wrangler.jsonc
+# (npm run container:push). Manual trigger: run it on the branch that bumps the
+# pinned tag, before merging, so Workers Builds always deploys a reference that
+# exists. Runners build linux/amd64 natively and sit on a clean network, which
+# local pushes cannot guarantee.
+#
+# Requires the CLOUDFLARE_API_TOKEN repository secret: an account-scoped API
+# token with the Containers (Cloudchamber) Edit permission.
+name: container-image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run container:push --workspace @chamfer/online
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 36e31b2d786d99d79f89dc9151b64ea2

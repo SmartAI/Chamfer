@@ -1,18 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
-import { AttachmentStore } from "./attachmentStore";
+import type { ImageBlobStore } from "./imageBlobStore";
 import { conversationExists } from "./conversationStore";
 import { releaseFusionRecoveriesOwnedByConversation } from "./fusion/recoveryStore";
+import { invalidateConversationProjection } from "./conversationEventStore";
+import { invalidateEvidenceProjection } from "./evidenceStore";
 
 interface BlobCandidate {
   contentHash: string | null;
   blobPath: string | null;
 }
 
-export function deleteConversationWithAttachments(
+export async function deleteConversationWithAttachments(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   conversationId: string,
-): boolean {
+): Promise<boolean> {
   if (!conversationExists(db, conversationId)) return false;
   const candidates = db.prepare(
     `SELECT DISTINCT content_hash AS contentHash, blob_path AS blobPath
@@ -26,17 +28,20 @@ export function deleteConversationWithAttachments(
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    db.prepare("INSERT INTO conversation_event_deletion_authorizations (conversation_id) VALUES (?)")
+      .run(conversationId);
+    db.prepare("INSERT INTO evidence_deletion_authorizations (conversation_id) VALUES (?)").run(conversationId);
+    db.prepare("DELETE FROM evidence_events WHERE conversation_id = ?").run(conversationId);
     releaseFusionRecoveriesOwnedByConversation(db, conversationId);
+    db.prepare("DELETE FROM cad_gate_evidence WHERE conversation_id = ?").run(conversationId);
+    db.prepare(`DELETE FROM headless_run_events WHERE run_id IN
+      (SELECT id FROM headless_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare(`DELETE FROM headless_run_latest WHERE run_id IN
+      (SELECT id FROM headless_runs WHERE conversation_id = ?)` ).run(conversationId);
+    db.prepare("DELETE FROM agent_run_leases WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM headless_runs WHERE conversation_id = ?").run(conversationId);
     db.prepare("DELETE FROM fusion_inspections WHERE conversation_id = ?").run(conversationId);
     db.prepare("DELETE FROM fusion_document_bindings WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM proof_report_requests WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM proof_reports WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM proof_contracts WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM design_escalations WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM source_specification_supersessions WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM reference_registrations WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM source_specifications WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM source_specification_mutations WHERE conversation_id = ?").run(conversationId);
     db.prepare(`DELETE FROM online_failure_signatures WHERE first_run_id IN
       (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
     db.prepare(`DELETE FROM online_review_queue_refs WHERE run_id IN
@@ -51,14 +56,6 @@ export function deleteConversationWithAttachments(
     db.prepare(`DELETE FROM agent_run_events WHERE run_id IN
       (SELECT id FROM agent_runs WHERE conversation_id = ?)` ).run(conversationId);
     db.prepare("DELETE FROM agent_runs WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM visual_verification_batches WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM visual_verifications WHERE conversation_id = ?").run(conversationId);
-    db.prepare(`DELETE FROM inspection_observations WHERE lease_id IN
-      (SELECT id FROM inspection_leases WHERE conversation_id = ?)` ).run(conversationId);
-    db.prepare(`DELETE FROM inspection_lease_evidence WHERE lease_id IN
-      (SELECT id FROM inspection_leases WHERE conversation_id = ?)` ).run(conversationId);
-    db.prepare("DELETE FROM inspection_leases WHERE conversation_id = ?").run(conversationId);
-    db.prepare("DELETE FROM reference_classifications WHERE conversation_id = ?").run(conversationId);
     const hasMigrationDiagnostics = db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'image_migration_diagnostics'",
     ).get() !== undefined;
@@ -71,8 +68,16 @@ export function deleteConversationWithAttachments(
     ).run(conversationId);
     db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(conversationId);
     db.prepare("DELETE FROM artifacts WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM conversation_ui_projection WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM conversation_evidence_links WHERE conversation_id = ?").run(conversationId);
     db.prepare("DELETE FROM conversations WHERE id = ?").run(conversationId);
+    db.prepare("DELETE FROM conversation_events WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM evidence_deletion_authorizations WHERE conversation_id = ?").run(conversationId);
+    db.prepare("DELETE FROM conversation_event_deletion_authorizations WHERE conversation_id = ?")
+      .run(conversationId);
     db.exec("COMMIT");
+    invalidateConversationProjection(db, conversationId);
+    invalidateEvidenceProjection(db, conversationId);
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -87,7 +92,7 @@ export function deleteConversationWithAttachments(
     const remaining = referenceCount.get(candidate.contentHash, blobPath) as { count: number };
     if (remaining.count !== 0) continue;
     try {
-      store.remove(blobPath);
+      await store.remove(blobPath);
     } catch {
       // Explicit or startup maintenance retries a failed post-commit removal.
     }

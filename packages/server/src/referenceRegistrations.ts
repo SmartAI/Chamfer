@@ -6,8 +6,7 @@ import type {
   ReferenceRegistrationDto,
   ReferenceSourceRegion,
 } from "@chamfer/shared";
-import { listReferenceRecords } from "./referenceClassification";
-import { listSourceSpecifications } from "./sourceSpecifications";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 interface RegistrationRow {
   event_id: string;
@@ -161,7 +160,8 @@ function validateAndNormalize(
       typeof input.uncertainty.notes !== "string" || typeof input.uncertainty.occluded !== "boolean") {
     throw new ReferenceRegistrationError("uncertainty is invalid");
   }
-  const reference = listReferenceRecords(db, conversationId).find((record) => record.referenceId === input.referenceId);
+  const projection = projectEvidence(db, conversationId);
+  const reference = projection.referenceRecords.find((record) => record.referenceId === input.referenceId);
   if (!reference) throw new ReferenceRegistrationError(`reference ${input.referenceId} does not belong to this conversation`);
   if (reference.status !== "active" && reference.status !== "complementary") {
     throw new ReferenceRegistrationError(`reference ${input.referenceId} must be active or complementary before registration`);
@@ -174,14 +174,10 @@ function validateAndNormalize(
         !pointInRegion(input.scaleAnchor.end, input.sourceRegion)) {
       throw new ReferenceRegistrationError("scale anchor must lie inside the registered source region");
     }
-    const specification = listSourceSpecifications(db, conversationId)
+    const specification = projection.sourceSpecifications
       .find((candidate) => candidate.id === input.scaleAnchor!.specificationId);
     if (!specification) {
-      const foreign = db.prepare("SELECT 1 FROM source_specifications WHERE id = ? LIMIT 1")
-        .get(input.scaleAnchor.specificationId);
-      throw new ReferenceRegistrationError(foreign
-        ? `scale specification ${input.scaleAnchor.specificationId} does not belong to this conversation`
-        : `scale specification ${input.scaleAnchor.specificationId} does not exist`);
+      throw new ReferenceRegistrationError(`scale specification ${input.scaleAnchor.specificationId} does not exist`);
     }
     if (specification.status !== "active") {
       throw new ReferenceRegistrationError(`scale specification ${specification.id} is superseded`);
@@ -240,8 +236,12 @@ function toDtos(records: RegistrationRow[]): ReferenceRegistrationDto[] {
   }));
 }
 
-export function listReferenceRegistrations(db: DatabaseSync, conversationId: string): ReferenceRegistrationDto[] {
+export function listLegacyReferenceRegistrations(db: DatabaseSync, conversationId: string): ReferenceRegistrationDto[] {
   return toDtos(rows(db, conversationId));
+}
+
+export function listReferenceRegistrations(db: DatabaseSync, conversationId: string): ReferenceRegistrationDto[] {
+  return projectEvidence(db, conversationId).referenceRegistrations;
 }
 
 export function registerReference(
@@ -253,42 +253,54 @@ export function registerReference(
   const input = validateAndNormalize(db, conversationId, submitted);
   const payloadJson = canonicalJson(input);
   const eventId = idempotencyKey?.trim() || crypto.randomUUID();
-  const existingEvent = db.prepare("SELECT * FROM reference_registrations WHERE conversation_id = ? AND event_id = ?")
-    .get(conversationId, eventId) as unknown as RegistrationRow | undefined;
+  const projection = projectEvidence(db, conversationId);
+  const existingEvent = projection.events.find((event) => event.type === "reference.registered" &&
+    event.data.commandIdempotencyKey === eventId);
   if (existingEvent) {
-    if (existingEvent.payload_json !== payloadJson) {
+    if (existingEvent.type !== "reference.registered" || canonicalJson({
+      ...existingEvent.data.registration,
+      registrationId: undefined,
+      conversationId: undefined,
+      revision: undefined,
+      status: undefined,
+      eligibility: undefined,
+      timestamp: undefined,
+    }) !== payloadJson) {
       throw new ReferenceRegistrationError("idempotency key conflicts with an existing registration", "conflict");
     }
-    return toDtos(rows(db, conversationId)).find((registration) =>
-      registration.registrationId === existingEvent.registration_id && registration.revision === existingEvent.revision,
-    )!;
+    return existingEvent.data.registration;
   }
-  const current = db.prepare(`SELECT * FROM reference_registrations
-    WHERE conversation_id = ? AND reference_id = ? ORDER BY revision DESC LIMIT 1`)
-    .get(conversationId, input.referenceId) as unknown as RegistrationRow | undefined;
-  if (current?.payload_json === payloadJson) {
-    return toDtos(rows(db, conversationId)).find((registration) =>
-      registration.registrationId === current.registration_id && registration.revision === current.revision,
-    )!;
+  const current = projection.referenceRegistrations
+    .filter((registration) => registration.referenceId === input.referenceId)
+    .sort((left, right) => right.revision - left.revision)[0];
+  if (current && canonicalJson({
+    ...current,
+    registrationId: undefined,
+    conversationId: undefined,
+    revision: undefined,
+    status: undefined,
+    eligibility: undefined,
+    timestamp: undefined,
+  }) === payloadJson) {
+    return current;
   }
-  const registrationId = current?.registration_id ?? crypto.randomUUID();
+  const registrationId = current?.registrationId ?? crypto.randomUUID();
   const revision = (current?.revision ?? 0) + 1;
   const eligibility = eligibilityFor(input);
   const timestamp = Date.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`INSERT INTO reference_registrations
-      (event_id, registration_id, conversation_id, reference_id, revision, payload_json,
-       eligibility_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(eventId, registrationId, conversationId, input.referenceId, revision, payloadJson, JSON.stringify(eligibility), timestamp);
-    db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(timestamp, conversationId);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return listReferenceRegistrations(db, conversationId).find((registration) =>
-    registration.registrationId === registrationId && registration.revision === revision,
-  )!;
+  const registration: ReferenceRegistrationDto = {
+    ...input,
+    registrationId,
+    conversationId,
+    revision,
+    status: "current",
+    eligibility,
+    timestamp,
+  };
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:reference-registration:${registration.registrationId}:${registration.revision}`,
+    type: "reference.registered",
+    data: { registration, commandIdempotencyKey: eventId },
+  });
+  return registration;
 }

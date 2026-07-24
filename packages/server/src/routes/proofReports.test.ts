@@ -75,6 +75,16 @@ async function postJson(app: ReturnType<typeof createApp>, path: string, body: u
   });
 }
 
+async function evidenceCommand<T>(
+  app: ReturnType<typeof createApp>,
+  conversationId: string,
+  command: unknown,
+): Promise<{ response: Response; result?: T }> {
+  const response = await postJson(app, `/api/conversations/${conversationId}/evidence`, command);
+  const body = await response.clone().json().catch(() => undefined) as { result?: T } | undefined;
+  return { response, result: body?.result };
+}
+
 async function seed(
   app: ReturnType<typeof createApp>,
   evidence: {
@@ -94,13 +104,15 @@ async function seed(
     role: "user",
     contentJson: JSON.stringify({ role: "user", content: sourceText, timestamp: 1 }),
   });
-  await postJson(app, `/api/conversations/${conversation.id}/source-specifications`, {
-    specifications: [{
+  await evidenceCommand(app, conversation.id, {
+    type: "record-source-specifications",
+    idempotencyKey: "source-specifications",
+    input: { specifications: [{
       id: "plate-size",
       requirement: "The plate must be 30 x 20 x 4 mm.",
       source: { messageId: "source-message", text: "30 x 20 x 4 mm plate", start: 8, end: 28 },
-    }],
-  }, { "Idempotency-Key": "source-specifications" });
+    }] },
+  });
   await postJson(app, `/api/conversations/${conversation.id}/messages`, {
     id: "plan-message",
     seq: 1,
@@ -115,10 +127,18 @@ async function seed(
       timestamp: 2,
     }),
   });
-  const contract = await (await postJson(app, `/api/conversations/${conversation.id}/proof-contracts`, CONTRACT)).json() as {
+  await evidenceCommand(app, conversation.id, {
+    type: "record-plan",
+    event: { id: "plan:plan-1:1", type: "plan.recorded", data: { operation: "created", plan: PLAN } },
+  });
+  const contract = (await evidenceCommand<{
     contractId: string;
     revision: number;
-  };
+  }>(app, conversation.id, {
+    type: "freeze-proof-contract",
+    input: CONTRACT,
+    idempotencyKey: "contract:plan-1:1",
+  })).result!;
   const artifact = await (await postJson(app, `/api/conversations/${conversation.id}/artifacts`, {
     pySource: "result = Box(30, 20, 4)",
     paramsJson: null,
@@ -185,7 +205,11 @@ async function seed(
 }
 
 function createReport(app: ReturnType<typeof createApp>, conversationId: string, input: CreateProofReportInput, key: string) {
-  return postJson(app, `/api/conversations/${conversationId}/proof-reports`, input, { "Idempotency-Key": key });
+  return postJson(app, `/api/conversations/${conversationId}/evidence`, {
+    type: "create-proof-report",
+    input,
+    idempotencyKey: key,
+  });
 }
 
 describe("proof report routes", () => {
@@ -196,7 +220,7 @@ describe("proof report routes", () => {
 
     const firstResponse = await createReport(app, conversation.id, input, "report-run-plate");
     expect(firstResponse.status).toBe(200);
-    const first = await firstResponse.json() as ProofReportDto;
+    const first = ((await firstResponse.json()) as { result: ProofReportDto }).result;
     expect(first).toMatchObject({
       conversationId: conversation.id,
       status: "proven",
@@ -218,8 +242,9 @@ describe("proof report routes", () => {
       source: { messageId: "source-message", text: "30 x 20 x 4 mm plate" },
     });
     expect(first.assumptions).toHaveLength(1);
-    expect(await (await createReport(app, conversation.id, input, "report-run-plate")).json()).toEqual(first);
-    expect(await (await createApp(db).request(`/api/conversations/${conversation.id}/proof-reports`)).json()).toEqual([first]);
+    expect(((await (await createReport(app, conversation.id, input, "report-run-plate")).json()) as { result: ProofReportDto }).result).toEqual(first);
+    const projection = await (await createApp(db).request(`/api/conversations/${conversation.id}/evidence`)).json() as { proofReports: ProofReportDto[] };
+    expect(projection.proofReports).toEqual([first]);
   });
 
   it("rejects conflicting reuse, cross-conversation identities, and stale artifact identities", async () => {
@@ -235,7 +260,7 @@ describe("proof report routes", () => {
       pySource: "result = Box(31, 20, 4)",
       paramsJson: null,
     });
-    const list = await (await app.request(`/api/conversations/${conversation.id}/proof-reports`)).json() as ProofReportDto[];
+    const list = (await (await app.request(`/api/conversations/${conversation.id}/evidence`)).json() as { proofReports: ProofReportDto[] }).proofReports;
     expect(list[0]?.status).toBe("stale");
     expect((await createReport(app, conversation.id, input, "stale-report")).status).toBe(409);
   });
@@ -246,7 +271,7 @@ describe("proof report routes", () => {
   ] as const)("preserves %s evidence without presenting it as proven", async (_label, evidence, expected) => {
     const app = createApp(openDb(":memory:"));
     const { conversation, input } = await seed(app, evidence);
-    const report = await (await createReport(app, conversation.id, input, `report-${expected}`)).json() as ProofReportDto;
+    const report = ((await (await createReport(app, conversation.id, input, `report-${expected}`)).json()) as { result: ProofReportDto }).result;
     expect(report.status).toBe(expected);
     expect(report.engineering.verificationGate.state).toBe(expected);
     expect(report.bodyIntegrity.state).toBe(expected);
@@ -257,9 +282,8 @@ describe("proof report routes", () => {
     const app = createApp(db);
     const { conversation, input } = await seed(app);
     expect((await createReport(app, conversation.id, input, "report-key")).status).toBe(200);
-    expect((db.prepare("SELECT COUNT(*) AS count FROM proof_reports").get() as { count: number }).count).toBe(1);
+    expect((db.prepare("SELECT COUNT(*) AS count FROM evidence_events WHERE type = 'proof-report.recorded'").get() as { count: number }).count).toBe(1);
     expect((await app.request(`/api/conversations/${conversation.id}`, { method: "DELETE" })).status).toBe(200);
-    expect((db.prepare("SELECT COUNT(*) AS count FROM proof_reports").get() as { count: number }).count).toBe(0);
-    expect((db.prepare("SELECT COUNT(*) AS count FROM proof_report_requests").get() as { count: number }).count).toBe(0);
+    expect((db.prepare("SELECT COUNT(*) AS count FROM evidence_events WHERE type = 'proof-report.recorded'").get() as { count: number }).count).toBe(0);
   });
 });

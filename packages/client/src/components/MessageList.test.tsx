@@ -37,13 +37,6 @@ describe("MessageList scroll anchoring", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders a visual recovery nudge as transcript metadata without exposing raw evidence IDs", () => {
-    render(<MessageList messages={[userMessage("[Chamfer visual check] uncovered references: private-ref-id")]} streaming={false} />);
-
-    expect(screen.getByTestId("visual-nudge-chip").textContent).toContain("Visual check");
-    expect(screen.queryByText(/private-ref-id/)).toBeNull();
-  });
-
   it("autoscrolls to the bottom while the user is pinned there", () => {
     const spy = vi.spyOn(Element.prototype, "scrollIntoView");
     const { rerender } = render(
@@ -176,8 +169,7 @@ describe("MessageList CAD code visibility", () => {
 
     expect(screen.queryByText(/result = Box\(2, 2, 2\)/)).toBeNull();
     expect(screen.getByText("CAD code")).toBeTruthy();
-    expect(screen.getByText("Copy")).toBeTruthy();
-    expect(screen.getByText("Render 3D")).toBeTruthy();
+    expect(screen.getByLabelText("Copy code")).toBeTruthy();
   });
 
   it("shows python fence bodies when showCadCode is set", () => {
@@ -187,19 +179,17 @@ describe("MessageList CAD code visibility", () => {
     expect(screen.getByText("CAD code")).toBeTruthy();
   });
 
-  it("threads visibility to tool-call cards", () => {
+  it("renders a generic tool-call card for tool calls", () => {
     const withTool = {
       role: "assistant",
       content: [
         { type: "text", text: "Building." },
-        { type: "toolCall", id: "tc-1", name: "run_build123d", arguments: { code: "result = Box(3, 3, 3)" } },
+        { type: "toolCall", id: "tc-1", name: "execute", arguments: { code: "result = Box(3, 3, 3)" } },
       ],
     };
-    const { rerender } = render(<MessageList messages={[withTool]} streaming={false} />);
-    expect(screen.queryByText(/result = Box\(3, 3, 3\)/)).toBeNull();
-
-    rerender(<MessageList messages={[withTool]} streaming={false} showCadCode />);
-    expect(screen.getByText(/result = Box\(3, 3, 3\)/)).toBeTruthy();
+    render(<MessageList messages={[withTool]} streaming={false} />);
+    expect(screen.getByTestId("tool-call-card")).toBeTruthy();
+    expect(screen.getByText("Execute")).toBeTruthy();
   });
 
   it("marks a result-less tool call failed when its assistant generation failed", () => {
@@ -221,9 +211,9 @@ describe("MessageList CAD code visibility", () => {
       />,
     );
 
-    expect(screen.getByText("Failed")).toBeTruthy();
-    expect(screen.queryByText("Running")).toBeNull();
-    expect(screen.queryByText("Done")).toBeNull();
+    expect(screen.getByText("interrupted")).toBeTruthy();
+    expect(screen.queryByText("running")).toBeNull();
+    expect(screen.queryByText("done")).toBeNull();
   });
 
   it("leaves non-python fences untouched when hidden", () => {
@@ -349,5 +339,95 @@ describe("MessageList checklist rendering", () => {
     expect(screen.queryByTestId("checklist-pass")).toBeNull();
     expect(screen.queryByTestId("checklist-fail")).toBeNull();
     expect(screen.getByText(/All of the requirements are satisfied\./)).toBeTruthy();
+  });
+});
+
+// Issue #53 defect 1: a turn-level failure is stored on the assistant row
+// (stopReason "error" + errorMessage, usually with empty content). It must
+// render as a visible error in the transcript - never an empty bubble plus a
+// green "Done".
+describe("MessageList math rendering", () => {
+  it("renders single-dollar inline LaTeX as KaTeX instead of raw source", () => {
+    const { container } = render(
+      <MessageList
+        messages={[assistantMessage("Volume: $3897.67 \\text{ mm}^3$ measured.")]}
+        streaming={false}
+      />,
+    );
+
+    // The KaTeX markup keeps the raw TeX inside a hidden MathML annotation, so
+    // assert on the delimiters: parsed math leaves no literal "$" behind.
+    expect(container.querySelector(".katex")).not.toBeNull();
+    expect(container.textContent).not.toContain("$");
+  });
+
+  it("renders double-dollar display math blocks", () => {
+    const { container } = render(
+      <MessageList
+        messages={[assistantMessage("$$\n\\pi \\cdot (10^2 - 4^2) \\cdot 15\n$$")]}
+        streaming={false}
+      />,
+    );
+
+    expect(container.querySelector(".katex-display")).not.toBeNull();
+  });
+});
+
+describe("MessageList turn error rendering", () => {
+  const erroredRow = {
+    role: "assistant",
+    content: [],
+    stopReason: "error",
+    errorMessage: 'HTTP 403: "This deployment has no shared demo key. Add your own API key in Settings."',
+  };
+
+  it("renders the stored error visibly instead of an empty bubble", () => {
+    render(<MessageList messages={[userMessage("make a box"), erroredRow]} streaming={false} />);
+
+    const note = screen.getByTestId("assistant-error");
+    expect(note.textContent).toContain("no shared demo key");
+    expect(note.textContent).toContain("Add your own API key in Settings");
+  });
+
+  it("does not report Done when the turn ended in an error", () => {
+    render(<MessageList messages={[userMessage("make a box"), erroredRow]} streaming={false} />);
+
+    expect(screen.queryByTestId("generation-status")).toBeNull();
+  });
+
+  it("falls back to a generic message when the row carries no errorMessage", () => {
+    render(
+      <MessageList
+        messages={[{ role: "assistant", content: [], stopReason: "error" }]}
+        streaming={false}
+      />,
+    );
+
+    expect(screen.getByTestId("assistant-error").textContent).toContain("The model request failed");
+  });
+
+  it("keeps partial output visible alongside the error", () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Starting the build" }],
+            stopReason: "error",
+            errorMessage: "connection reset",
+          },
+        ]}
+        streaming={false}
+      />,
+    );
+
+    expect(screen.getByText(/Starting the build/)).toBeTruthy();
+    expect(screen.getByTestId("assistant-error").textContent).toContain("connection reset");
+  });
+
+  it("leaves ordinary assistant rows untouched", () => {
+    render(<MessageList messages={[assistantMessage("all good")]} streaming={false} />);
+    expect(screen.queryByTestId("assistant-error")).toBeNull();
+    expect(screen.getByTestId("generation-status").textContent).toContain("Done");
   });
 });

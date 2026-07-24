@@ -1,0 +1,15 @@
+{
+  "name": "chamfer-agent-container",
+  "private": true,
+  "type": "module",
+  "description": "Runtime dependency manifest for the hosted agent container image. These stay external to the esbuild bundle (build.mjs reads this list) and are installed inside the image; everything else - the server source and @chamfer/shared - is bundled. Versions are pinned exactly so the image runs the same bytes the benchmarks ran.",
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.81.1",
+    "@earendil-works/pi-ai": "0.81.1",
+    "@earendil-works/pi-coding-agent": "0.81.1",
+    "@hono/node-server": "1.19.14",
+    "hono": "4.12.28",
+    "patch-package": "8.0.1",
+    "pi-mcp-adapter": "2.11.0"
+  }
+}

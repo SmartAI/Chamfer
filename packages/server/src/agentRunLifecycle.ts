@@ -9,6 +9,8 @@ import {
   type AgentRunLifecycleEvent,
   type AgentRunOutcome,
 } from "@chamfer/shared";
+import { ConversationEventStore } from "./conversationEventStore";
+import { withImmediateTransaction } from "./dbTransaction";
 
 const MAX_EVENTS_PER_RUN = 512;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
@@ -82,10 +84,10 @@ function normalizeConfiguration(value: unknown): AgentConfigurationTraceIdentity
     throw new AgentRunLifecycleError("agent configuration identityHash must be a lowercase SHA-256", "invalid");
   }
   return {
+    name: safeId(value.name, "agent configuration name"),
     identityHash: value.identityHash,
     provider: safeId(value.provider, "provider"),
     model: safeId(value.model, "model"),
-    skillMode: safeId(value.skillMode, "skillMode"),
   };
 }
 
@@ -247,9 +249,8 @@ function applyEvent(
     if (event.type === "compaction.started") counters.compactions += 1;
     if (event.type === "tool.started") {
       counters.toolCalls += 1;
-      if (event.name === "run_build123d") counters.cadRuns += 1;
-      if (event.name === "search_docs" || event.name === "lookup_docs") counters.searches += 1;
-      if (event.name === "load_skill") counters.skillLoads += 1;
+      if (event.name === "execute_cad_change") counters.cadRuns += 1;
+      if (event.name === "lookup_docs") counters.searches += 1;
     }
     return;
   }
@@ -262,7 +263,7 @@ function applyEvent(
     if (event.type === "compaction.completed") durations.compactionMs += event.durationMs;
     if (event.type === "tool.completed") {
       durations.toolMs += event.durationMs;
-      if (start.type === "tool.started" && start.name === "run_build123d") durations.cadMs += event.durationMs;
+      if (start.type === "tool.started" && start.name === "execute_cad_change") durations.cadMs += event.durationMs;
     }
     return;
   }
@@ -303,6 +304,7 @@ export function ingestAgentRunEvents(
   rawEvents: unknown[],
   release: string,
   onEvent?: (run: AgentRunLifecycleDto, event: AgentRunLifecycleEvent) => void,
+  recordConversationEvents = true,
 ): AgentRunLifecycleDto {
   if (rawEvents.length === 0 || rawEvents.length > 32) {
     throw new AgentRunLifecycleError("event batch must contain 1 to 32 events", "invalid");
@@ -317,8 +319,7 @@ export function ingestAgentRunEvents(
   }
 
   const newEvents: AgentRunLifecycleEvent[] = [];
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  withImmediateTransaction(db, () => {
     if (!row) {
       const started = events[0] as Extract<AgentRunLifecycleEvent, { type: "run.started" }>;
       const counters = emptyCounters();
@@ -368,6 +369,13 @@ export function ingestAgentRunEvents(
         completedAt = event.timestamp;
         totalDurationMs = event.durationMs;
       }
+      if (recordConversationEvents) {
+        new ConversationEventStore(db).append(conversationId, {
+          recordedAt: event.timestamp,
+          type: "agent-run.lifecycle-recorded",
+          data: { event, release },
+        });
+      }
       db.prepare("INSERT INTO agent_run_events (run_id, seq, event_json) VALUES (?, ?, ?)").run(runId, event.seq, canonical);
       lastSeq = event.seq;
       lastTimestamp = event.timestamp;
@@ -376,11 +384,7 @@ export function ingestAgentRunEvents(
     db.prepare(`UPDATE agent_runs SET status = ?, outcome = ?, completed_at = ?, total_duration_ms = ?,
       last_seq = ?, counters_json = ?, durations_json = ? WHERE id = ?`)
       .run(status, outcome, completedAt, totalDurationMs, lastSeq, JSON.stringify(counters), JSON.stringify(durations), runId);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
   const run = getAgentRun(db, conversationId, runId)!;
   if (onEvent) {
     for (const event of newEvents) {

@@ -1,0 +1,100 @@
+// Cloudflare deployment for chamferonline.com.
+// Local dev: `npm run build:client && npx wrangler dev` (see README.md).
+// Secrets (wrangler secret put): BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET,
+// GITHUB_CLIENT_SECRET, SENTRY_DSN (optional; unset disables error reporting),
+// CHAMFER_LLM_TOKEN_SECRET (optional; unset keeps the container-facing LLM
+// proxy off - see src/llmProxy.ts).
+// This deployment is bring-your-own-key: it ships no
+// shared demo key, so users configure their own API key in Settings. Setting
+// CHAMFER_DEMO_ANTHROPIC_KEY (+ CHAMFER_DEMO_ANTHROPIC_BASE_URL) would re-enable
+// a free quota, funded either by a metered Anthropic key or a self-hosted
+// gateway behind a cloudflared tunnel. When that tunnel is guarded by
+// Cloudflare Access, also set CHAMFER_DEMO_ACCESS_CLIENT_ID /
+// CHAMFER_DEMO_ACCESS_CLIENT_SECRET (see README "Self-hosted demo gateway").
+{
+  "name": "chamfer-online",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Workers Logs: capture console output and one invocation log per request,
+  // viewable in the dashboard (Worker -> Observability) and `wrangler tail`.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
+  // One worker serves both hosts (host-based routing in worker.ts +
+  // OnlineGate.tsx): the apex renders the landing, the app subdomain runs the
+  // application. Attaching the apex requires its GitHub Pages A records to be
+  // removed first - see README "Apex cutover".
+  "routes": [
+    { "pattern": "chamferonline.com", "custom_domain": true },
+    { "pattern": "app.chamferonline.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./client-dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "USER_DO", "class_name": "ChamferUserDurableObject" },
+      { "name": "AGENT_CONTAINER", "class_name": "ChamferAgentContainer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ChamferUserDurableObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["ChamferAgentContainer"] }
+  ],
+  // Per-user agent container (ADR 0003 increment 3a, issue #50). The image
+  // builds with the Dockerfile's directory as context, so `node
+  // container/build.mjs` must stage dist/ first - the predev/predeploy
+  // scripts in package.json do; `npx wrangler dev|deploy` run bare does not.
+  // The image is a pre-built reference, never a Dockerfile: Workers Builds has
+  // no Docker, so deploys must not build. Container changes ship by bumping
+  // this tag and running `npm run container:push` (needs local Docker) before
+  // merging. Local dev still builds from container/Dockerfile via the
+  // generated .wrangler.dev.jsonc (scripts/dev-config.mjs). instance_type
+  // standard-1 (1/2 vCPU, 4 GiB, 8 GB disk) per ADR 0003.
+  "containers": [
+    {
+      "class_name": "ChamferAgentContainer",
+      "image": "registry.cloudflare.com/36e31b2d786d99d79f89dc9151b64ea2/chamfer-agent:7ee292c",
+      "instance_type": "standard-1",
+      "max_instances": 10
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "chamfer-online-attachments"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "chamfer-online-auth",
+      "database_id": "e8c30fcf-cfa5-40e5-a55d-6500f50d3dfc",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // CHAMFER_DEV_LOGIN deliberately does not appear here: it belongs only in
+  // the gitignored .dev.vars (see .dev.vars.example), so a production deploy
+  // can never ship with authentication bypassed.
+  "vars": {
+    "CHAMFER_APP_ORIGIN": "https://app.chamferonline.com",
+    "CHAMFER_LANDING_ORIGIN": "https://chamferonline.com",
+    "CHAMFER_COOKIE_DOMAIN": ".chamferonline.com",
+    "CHAMFER_TRUSTED_ORIGINS": "https://chamferonline.com,https://app.chamferonline.com",
+    // Free-demo dollar caps. Raised from the $2/$50 defaults now that the demo is
+    // funded through the self-hosted gateway, where real cost sits below the
+    // Sonnet-5 list price the metering charges (demoPricing.ts). Per-account is a
+    // one-time lifetime taste; monthly is the shared hard ceiling, resets UTC.
+    "CHAMFER_DEMO_LIFETIME_USD": "10",
+    "CHAMFER_DEMO_MONTHLY_USD": "1000",
+    // Sentry environment tag for the Worker (the SENTRY_DSN itself is a secret).
+    "SENTRY_ENVIRONMENT": "production"
+  }
+}

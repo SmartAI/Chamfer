@@ -142,64 +142,73 @@ def run(_context: str):
 `;
 }
 
-export function fingerprintEngineeringScript(marker: string): string {
-  return `import adsk.core
-import adsk.fusion
-import json
-
-def run(_context: str):
-    # Chamfer integrity probe ${marker}: token-free engineering fingerprint.
-    # This script must never read entityToken (or any other lazily persisted
-    # identity): those reads push a new entry onto the native Undo stack, so a
-    # verified-rollback loop that used them could never reach the action.
-    app = adsk.core.Application.get()
-    design = adsk.fusion.Design.cast(app.activeProduct)
-    if not design:
-        raise RuntimeError("No active Fusion design")
+/** Python helper computing the token-free engineering fingerprint payload.
+ * Shared verbatim by the standalone fingerprint script below (certified by the
+ * integrity probe, used inside the verified-rollback loop) and the trusted
+ * inspection snapshot script, so both hash to the same value for the same
+ * design state. It must never read entityToken (or any other lazily persisted
+ * identity): those reads push a new entry onto the native Undo stack, so a
+ * verified-rollback loop that used them could never reach the action. */
+export const engineeringFingerprintCollector = `
+def _chamfer_engineering_fingerprint(design):
     root = design.rootComponent
-    parameters = []
+    fingerprint_parameters = []
     for index in range(design.userParameters.count):
         parameter = design.userParameters.item(index)
-        parameters.append({
+        fingerprint_parameters.append({
             "name": parameter.name,
             "expression": parameter.expression,
             "unit": parameter.unit,
             "value": parameter.value,
         })
-    sketches = []
+    fingerprint_sketches = []
     for index in range(root.sketches.count):
         sketch = root.sketches.item(index)
-        sketches.append({
+        fingerprint_sketches.append({
             "name": sketch.name,
             "curveCount": sketch.sketchCurves.count,
             "dimensionCount": sketch.sketchDimensions.count,
             "constraintCount": sketch.geometricConstraints.count,
         })
-    extrudes = []
+    fingerprint_extrudes = []
     for index in range(root.features.extrudeFeatures.count):
         feature = root.features.extrudeFeatures.item(index)
-        extrudes.append({
+        fingerprint_extrudes.append({
             "name": feature.name,
             "isSuppressed": feature.isSuppressed,
         })
-    bodies = []
+    fingerprint_bodies = []
     for index in range(root.bRepBodies.count):
         body = root.bRepBodies.item(index)
-        bodies.append({
+        fingerprint_bodies.append({
             "name": body.name,
             "volume": body.volume,
             "area": body.area,
             "faceCount": body.faces.count,
             "edgeCount": body.edges.count,
         })
-    print(json.dumps({"fingerprint": {
+    return {
         "designType": int(design.designType),
         "defaultLengthUnits": design.unitsManager.defaultLengthUnits,
-        "parameters": sorted(parameters, key=lambda item: item["name"]),
-        "sketches": sorted(sketches, key=lambda item: item["name"]),
-        "extrudes": sorted(extrudes, key=lambda item: item["name"]),
-        "bodies": sorted(bodies, key=lambda item: item["name"]),
-    }}, sort_keys=True))
+        "parameters": sorted(fingerprint_parameters, key=lambda item: item["name"]),
+        "sketches": sorted(fingerprint_sketches, key=lambda item: item["name"]),
+        "extrudes": sorted(fingerprint_extrudes, key=lambda item: item["name"]),
+        "bodies": sorted(fingerprint_bodies, key=lambda item: item["name"]),
+    }
+`;
+
+export function fingerprintEngineeringScript(marker: string): string {
+  return `import adsk.core
+import adsk.fusion
+import json
+${engineeringFingerprintCollector}
+def run(_context: str):
+    # Chamfer integrity probe ${marker}: token-free engineering fingerprint.
+    app = adsk.core.Application.get()
+    design = adsk.fusion.Design.cast(app.activeProduct)
+    if not design:
+        raise RuntimeError("No active Fusion design")
+    print(json.dumps({"fingerprint": _chamfer_engineering_fingerprint(design)}, sort_keys=True))
 `;
 }
 

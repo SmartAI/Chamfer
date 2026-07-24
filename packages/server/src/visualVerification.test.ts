@@ -3,7 +3,40 @@ import type { RecordVisualVerificationBatchInput } from "@chamfer/shared";
 import { openDb } from "./db";
 import { createAttachment, createConversation, createMessage } from "./conversationStore";
 import { classifyReference } from "./referenceClassification";
-import { listVisualVerificationBatches, recordVisualVerification, recordVisualVerificationBatch, VisualVerificationError } from "./visualVerification";
+import { appendEvidenceEvent } from "./evidenceStore";
+import {
+  listVisualVerificationBatches,
+  listVisualVerifications,
+  recordVisualVerification,
+  recordVisualVerificationBatch,
+  VisualVerificationError,
+} from "./visualVerification";
+
+const BUILD_COMPARISON_ID = "visual-comparison:artifact-2:2";
+const FUSION_COMPARISON_ID = "visual-comparison:fusion-inspection:1";
+
+function recordComparison(
+  db: ReturnType<typeof openDb>,
+  conversationId: string,
+  evidenceId: string,
+  candidate: { artifactId: string; artifactVersion: number; inspectionSheetId: string },
+): void {
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:visual-comparison:${evidenceId}`,
+    type: "visual-comparison.recorded",
+    data: {
+      comparison: {
+        evidenceId,
+        status: "match",
+        policy: { id: "test-policy", version: 1 },
+        algorithm: { id: "test-algorithm", version: 1 },
+        thresholds: { silhouetteOverlapMin: 0.9, edgeAlignmentMin: 0.9, edgeTolerancePx: 1 },
+        candidate,
+        comparisons: [],
+      },
+    },
+  });
+}
 
 function fixture() {
   const db = openDb(":memory:");
@@ -24,6 +57,9 @@ function fixture() {
       noSpecificationReason: "Qualitative test reference without an extractable dimension.",
     });
   }
+  createAttachment(db, "user-message", "user-image", {
+    mime: "image/png", contentHash: "retirement".padEnd(64, "a"), byteSize: 1, blobPath: "blobs/retirement.png",
+  }, "retirement-ref");
   db.prepare("INSERT INTO artifacts (id, conversation_id, version, py_source, created_at) VALUES (?, ?, ?, ?, ?)")
     .run("artifact-2", conversation.id, 2, "box", 2);
   const result = {
@@ -37,16 +73,24 @@ function fixture() {
         measurements: { bboxMm: [1, 1, 1], volumeMm3: 1, areaMm2: 6, children: [] },
         gate: { status: "passed", checks: [] },
       },
+      visualComparison: {
+        evidenceId: BUILD_COMPARISON_ID,
+        candidate: { artifactId: "artifact-2", artifactVersion: 2, inspectionSheetId: "sheet-2" },
+      },
     },
   };
   createMessage(db, conversation.id, { id: "result-message", seq: 1, role: "toolResult", contentJson: JSON.stringify(result) });
   createAttachment(db, "result-message", "view-sheet", {
     mime: "image/png", contentHash: "s".repeat(64), byteSize: 1, blobPath: "blobs/sheet.png",
   }, "sheet-2");
+  recordComparison(db, conversation.id, BUILD_COMPARISON_ID, {
+    artifactId: "artifact-2", artifactVersion: 2, inspectionSheetId: "sheet-2",
+  });
   const input = {
     artifactId: "artifact-2",
     artifactVersion: 2,
     inspectionSheetId: "sheet-2",
+    visualComparisonEvidenceId: BUILD_COMPARISON_ID,
     coveredReferenceIds: ["ref-a", "ref-b"],
     verdict: "match" as const,
     observations: [
@@ -67,6 +111,7 @@ describe("visual verification store", () => {
     ["cross-conversation", (f: ReturnType<typeof fixture>) => [f.other.id, f.input], /does not belong/],
     ["stale artifact", (f: ReturnType<typeof fixture>) => [f.conversation.id, { ...f.input, artifactVersion: 1 }], /latest artifact/],
     ["mismatched sheet", (f: ReturnType<typeof fixture>) => [f.conversation.id, { ...f.input, inspectionSheetId: "ref-a" }], /current inspection sheet/],
+    ["stale comparison", (f: ReturnType<typeof fixture>) => [f.conversation.id, { ...f.input, visualComparisonEvidenceId: "stale-evidence" }], /current measured comparison/],
   ] as const)("rejects %s", (_label, make, pattern) => {
     const f = fixture();
     const [conversationId, input] = make(f);
@@ -76,12 +121,25 @@ describe("visual verification store", () => {
 });
 
 describe("batched visual verification store", () => {
+  function retireReference(db: ReturnType<typeof openDb>, conversationId: string, referenceId: string) {
+    classifyReference(db, conversationId, {
+      referenceId,
+      status: "superseded",
+      purpose: "Design evidence",
+      relationships: [{ type: "superseded-by", referenceId: "retirement-ref" }],
+      rationale: "This reference is not part of this verification target.",
+      specificationIds: [],
+      noSpecificationReason: "Qualitative test reference without an extractable dimension.",
+    });
+  }
+
   function batchInput(index: number) {
     const ids = index === 0 ? ["ref-a"] : ["ref-b"];
     return {
       artifactId: "artifact-2",
       artifactVersion: 2,
       inspectionSheetId: "sheet-2",
+      visualComparisonEvidenceId: BUILD_COMPARISON_ID,
       imageLimit: 2,
       activeReferenceIds: ["ref-a", "ref-b"],
       batchIndex: index,
@@ -112,11 +170,12 @@ describe("batched visual verification store", () => {
 
   it("creates the canonical final verdict atomically from a single exposed batch", () => {
     const { db, conversation } = fixture();
-    db.prepare("DELETE FROM reference_classifications WHERE reference_id = ?").run("ref-b");
+    retireReference(db, conversation.id, "ref-b");
     const final = recordVisualVerificationBatch(db, conversation.id, {
       artifactId: "artifact-2",
       artifactVersion: 2,
       inspectionSheetId: "sheet-2",
+      visualComparisonEvidenceId: BUILD_COMPARISON_ID,
       imageLimit: 3,
       activeReferenceIds: ["ref-a"],
       batchIndex: 0,
@@ -154,19 +213,30 @@ describe("batched visual verification store", () => {
       .run("fusion-inspection", conversation.id, 1, "fusion-revision:fusion-revision", 1);
     createMessage(db, conversation.id, {
       id: "fusion-result", seq: 1, role: "toolResult", contentJson: JSON.stringify({
-        role: "toolResult", toolName: "run_fusion_action", isError: false,
-        details: { status: "completed", visualArtifact: {
-          artifactId: "fusion-inspection", artifactVersion: 1, revision: "fusion-revision",
-          inspectionSheet: { attachmentId: "fusion-sheet" },
-        } },
+        role: "toolResult", toolName: "execute_cad_change", isError: false,
+        details: {
+          status: "completed",
+          visualArtifact: {
+            artifactId: "fusion-inspection", artifactVersion: 1, revision: "fusion-revision",
+            inspectionSheet: { attachmentId: "fusion-sheet" },
+          },
+          visualComparison: {
+            evidenceId: FUSION_COMPARISON_ID,
+            candidate: { artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet" },
+          },
+        },
       }),
     });
     createAttachment(db, "fusion-result", "view-sheet", {
       mime: "image/png", contentHash: "v".repeat(64), byteSize: 1, blobPath: "blobs/fusion-sheet.png",
     }, "fusion-sheet");
+    recordComparison(db, conversation.id, FUSION_COMPARISON_ID, {
+      artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet",
+    });
 
     const input = {
       artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet",
+      visualComparisonEvidenceId: FUSION_COMPARISON_ID,
       imageLimit: 3, activeReferenceIds: ["fusion-ref"], batchIndex: 0, batchCount: 1,
       coveredReferenceIds: ["fusion-ref"],
       observations: [{ referenceId: "fusion-ref", relevantViews: ["front", "top", "right"], findings: ["Matches."], affectedComponents: [] }],
@@ -177,7 +247,7 @@ describe("batched visual verification store", () => {
     } });
     createMessage(db, conversation.id, {
       id: "fusion-nonconforming", seq: 2, role: "toolResult", contentJson: JSON.stringify({
-        role: "toolResult", toolName: "run_fusion_action", isError: false,
+        role: "toolResult", toolName: "execute_cad_change", isError: false,
         details: { status: "nonconforming", finalRevision: "fusion-revision-2" },
       }),
     });
@@ -205,7 +275,7 @@ describe("batched visual verification store", () => {
     // The finished design's last mutation carried no sheet - previously a dead end.
     createMessage(db, conversation.id, {
       id: "fusion-action", seq: 1, role: "toolResult", contentJson: JSON.stringify({
-        role: "toolResult", toolName: "run_fusion_action", isError: false,
+        role: "toolResult", toolName: "execute_cad_change", isError: false,
         details: { status: "completed" },
       }),
     });
@@ -214,15 +284,23 @@ describe("batched visual verification store", () => {
         role: "toolResult", toolName: "inspect_fusion", isError: false,
         details: { mutated: false, revision: "fusion-revision", inspectionId: "fusion-inspection", viewSheet: true,
           visualArtifact: { artifactId: "fusion-inspection", artifactVersion: 1, revision: "fusion-revision",
-            inspectionSheet: { attachmentId: "fusion-sheet" } } },
+            inspectionSheet: { attachmentId: "fusion-sheet" } },
+          visualComparison: {
+            evidenceId: FUSION_COMPARISON_ID,
+            candidate: { artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet" },
+          } },
       }),
     });
     createAttachment(db, "fusion-visual-read", "view-sheet", {
       mime: "image/png", contentHash: "v".repeat(64), byteSize: 1, blobPath: "blobs/fusion-sheet.png",
     }, "fusion-sheet");
+    recordComparison(db, conversation.id, FUSION_COMPARISON_ID, {
+      artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet",
+    });
 
     expect(recordVisualVerificationBatch(db, conversation.id, {
       artifactId: "fusion-inspection", artifactVersion: 1, inspectionSheetId: "fusion-sheet",
+      visualComparisonEvidenceId: FUSION_COMPARISON_ID,
       imageLimit: 3, activeReferenceIds: ["fusion-ref"], batchIndex: 0, batchCount: 1,
       coveredReferenceIds: ["fusion-ref"],
       observations: [{ referenceId: "fusion-ref", relevantViews: ["front", "top", "right"], findings: ["Matches."], affectedComponents: [] }],
@@ -234,9 +312,10 @@ describe("batched visual verification store", () => {
 
   it("replays a keyed final batch with the same final verdict and rejects changed reuse", () => {
     const { db, conversation } = fixture();
-    db.prepare("DELETE FROM reference_classifications WHERE reference_id = ?").run("ref-b");
+    retireReference(db, conversation.id, "ref-b");
     const input = {
       artifactId: "artifact-2", artifactVersion: 2, inspectionSheetId: "sheet-2", imageLimit: 3,
+      visualComparisonEvidenceId: BUILD_COMPARISON_ID,
       activeReferenceIds: ["ref-a"], batchIndex: 0, batchCount: 1, coveredReferenceIds: ["ref-a"],
       observations: [{ referenceId: "ref-a", relevantViews: ["front"], findings: ["Matches."], affectedComponents: [] }],
       finalVerdict: "match" as const, synthesis: "The active reference matches.",
@@ -244,14 +323,15 @@ describe("batched visual verification store", () => {
     const first = recordVisualVerificationBatch(db, conversation.id, input, "batch-call-1");
     expect(recordVisualVerificationBatch(db, conversation.id, input, "batch-call-1")).toEqual(first);
     expect(listVisualVerificationBatches(db, conversation.id)).toHaveLength(1);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM visual_verifications").get()).toEqual({ count: 1 });
+    expect(listVisualVerifications(db, conversation.id)).toHaveLength(1);
     expect(() => recordVisualVerificationBatch(db, conversation.id, { ...input, synthesis: "Changed." }, "batch-call-1"))
       .toThrow(/idempotency key conflicts/);
   });
 
   it("replays a keyed direct visual verdict and rejects changed reuse", () => {
     const { db, conversation, input } = fixture();
-    db.prepare("DELETE FROM reference_classifications").run();
+    retireReference(db, conversation.id, "ref-a");
+    retireReference(db, conversation.id, "ref-b");
     const direct = { ...input, coveredReferenceIds: [], observations: [] };
     const first = recordVisualVerification(db, conversation.id, direct, "visual-call-1");
     expect(recordVisualVerification(db, conversation.id, direct, "visual-call-1")).toEqual(first);

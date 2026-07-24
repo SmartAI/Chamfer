@@ -8,6 +8,7 @@ import type {
   SourceSpecificationInput,
   SourceSpecificationProvenance,
 } from "@chamfer/shared";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 interface SourceSpecificationRow {
   conversation_id: string;
@@ -269,7 +270,7 @@ function rowsForMutation(db: DatabaseSync, conversationId: string, mutationId: s
   return rows.map(toDto);
 }
 
-export function listSourceSpecifications(db: DatabaseSync, conversationId: string): SourceSpecificationDto[] {
+export function listLegacySourceSpecifications(db: DatabaseSync, conversationId: string): SourceSpecificationDto[] {
   const rows = db.prepare(`${SELECT_SPECIFICATIONS}
     JOIN messages m ON m.id = s.source_message_id
     WHERE s.conversation_id = ?
@@ -279,6 +280,10 @@ export function listSourceSpecifications(db: DatabaseSync, conversationId: strin
       s.mutation_order ASC, s.rowid ASC
   `).all(conversationId) as unknown as SourceSpecificationRow[];
   return rows.map(toDto);
+}
+
+export function listSourceSpecifications(db: DatabaseSync, conversationId: string): SourceSpecificationDto[] {
+  return projectEvidence(db, conversationId).sourceSpecifications;
 }
 
 function validateTextSource(
@@ -341,13 +346,20 @@ export function recordSourceSpecifications(
 ): SourceSpecificationDto[] {
   if (!nonEmpty(idempotencyKey)) throw new SourceSpecificationError("Idempotency-Key is required");
   const normalized = normalizedInput(input);
-  const payloadJson = JSON.stringify(normalized);
-  const existingMutation = db.prepare(
-    "SELECT id, conversation_id, payload_json FROM source_specification_mutations WHERE conversation_id = ? AND id = ?",
-  ).get(conversationId, idempotencyKey) as MutationRow | undefined;
-  if (existingMutation) {
-    if (existingMutation.conversation_id === conversationId && existingMutation.payload_json === payloadJson) {
-      return rowsForMutation(db, conversationId, idempotencyKey);
+  const projection = projectEvidence(db, conversationId);
+  const existingMutation = projection.events.find((event) => event.type === "source-specifications.recorded" &&
+    event.data.commandIdempotencyKey === idempotencyKey);
+  if (existingMutation?.type === "source-specifications.recorded") {
+    const existingInput = existingMutation.data.specifications.map((specification) => ({
+      id: specification.id,
+      requirement: specification.requirement,
+      source: specification.source,
+      supersedesSpecificationId: specification.supersedesSpecificationId,
+      supersedesSpecificationIds: specification.supersedesSpecificationIds,
+      conflictsWithSpecificationIds: specification.conflictsWithSpecificationIds,
+    }));
+    if (JSON.stringify(existingInput) === JSON.stringify(normalized.specifications)) {
+      return existingMutation.data.specifications;
     }
     throw new SourceSpecificationError("idempotency key conflicts with an existing source-specification mutation", "conflict");
   }
@@ -362,7 +374,7 @@ export function recordSourceSpecifications(
     }
   }
 
-  const allExisting = listSourceSpecifications(db, conversationId);
+  const allExisting = projection.sourceSpecifications;
   const existing = new Map(allExisting.map((specification) => [specification.id, specification]));
   const submittedIds = new Set(normalized.specifications.map((specification) => specification.id));
   const reused = normalized.specifications.filter((specification) => existing.has(specification.id));
@@ -377,10 +389,7 @@ export function recordSourceSpecifications(
     for (const supersedesId of specification.supersedesSpecificationIds ?? []) {
       const superseded = existing.get(supersedesId);
       if (!superseded) {
-        const foreign = db.prepare("SELECT 1 FROM source_specifications WHERE id = ? LIMIT 1").get(supersedesId);
-        throw new SourceSpecificationError(foreign
-          ? `superseded specification ${supersedesId} does not belong to this conversation`
-          : `superseded specification ${supersedesId} does not exist`);
+        throw new SourceSpecificationError(`superseded specification ${supersedesId} does not exist`);
       }
       if (superseded.status !== "active") {
         throw new SourceSpecificationError(`superseded specification ${supersedesId} is already superseded`);
@@ -395,15 +404,11 @@ export function recordSourceSpecifications(
 
   let resolvingEscalationId: string | undefined;
   if (normalized.resolvesEscalationId) {
-    const row = db.prepare(`SELECT escalation_id, kind, affected_specification_ids_json, opened_after_message_seq
-      FROM design_escalations WHERE conversation_id = ? AND escalation_id = ? AND status = 'pending'`)
-      .get(conversationId, normalized.resolvesEscalationId) as {
-        escalation_id: string;
-        kind: string;
-        affected_specification_ids_json: string;
-        opened_after_message_seq: number;
-      } | undefined;
-    if (!row) throw new SourceSpecificationError(`pending design escalation ${normalized.resolvesEscalationId} does not exist`);
+    const escalationEvent = projection.events.find((event) => event.type === "design-escalation.opened" &&
+      event.data.escalation.escalationId === normalized.resolvesEscalationId);
+    const escalation = projection.designEscalations.find((candidate) =>
+      candidate.escalationId === normalized.resolvesEscalationId && candidate.status === "pending");
+    if (!escalation) throw new SourceSpecificationError(`pending design escalation ${normalized.resolvesEscalationId} does not exist`);
     const textSpecifications = normalized.specifications.filter((specification) => isTextSource(specification.source));
     if (textSpecifications.length !== normalized.specifications.length) {
       throw new SourceSpecificationError("a design clarification must be resolved by new user text evidence");
@@ -413,74 +418,56 @@ export function recordSourceSpecifications(
         .get((specification.source as SourceSpecificationProvenance).messageId, conversationId) as { seq: number } | undefined;
       return message?.seq ?? -1;
     });
-    if (sourceSeqs.some((seq) => seq <= row.opened_after_message_seq)) {
+    if (escalationEvent?.type === "design-escalation.opened" &&
+        escalationEvent.data.openedAfterMessageSeq !== undefined &&
+        sourceSeqs.some((seq) => seq <= escalationEvent.data.openedAfterMessageSeq!)) {
       throw new SourceSpecificationError("a design clarification answer must come from a later user message");
     }
-    const affectedSpecificationIds = parseStrings(row.affected_specification_ids_json);
-    if (row.kind === "conflicting-specifications" || row.kind === "explicit-requirement-change") {
+    const affectedSpecificationIds = escalation.affectedSpecificationIds;
+    if (escalation.kind === "conflicting-specifications" || escalation.kind === "explicit-requirement-change") {
       const superseded = new Set(normalized.specifications.flatMap((specification) => specification.supersedesSpecificationIds ?? []));
       if (affectedSpecificationIds.some((id) => !superseded.has(id))) {
         throw new SourceSpecificationError("resolving conflicting evidence or an explicit requirement change must supersede every affected active specification");
       }
     }
-    resolvingEscalationId = row.escalation_id;
+    resolvingEscalationId = escalation.escalationId;
   }
 
   const now = Date.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`
-      INSERT INTO source_specification_mutations (id, conversation_id, payload_json, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(idempotencyKey, conversationId, payloadJson, now);
-    const insert = db.prepare(`
-      INSERT INTO source_specifications
-        (conversation_id, id, requirement, source_message_id, source_text, source_start,
-         source_end, source_attachment_id, source_region_json, source_observation,
-         supersedes_specification_id, conflicts_with_specification_ids_json,
-         actor, status, created_at, mutation_id, mutation_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent', 'active', ?, ?, ?)
-    `);
-    normalized.specifications.forEach((specification, order) => {
-      const referenceSource = referenceSources.get(specification.id);
-      const textSource = isTextSource(specification.source) ? specification.source : undefined;
-      const sourceText = textSource?.text ?? referenceSource!.observation;
-      insert.run(
-        conversationId,
-        specification.id,
-        specification.requirement,
-        textSource?.messageId ?? referenceSource!.messageId,
-        sourceText,
-        textSource?.start ?? 0,
-        textSource?.end ?? sourceText.length,
-        referenceSource?.attachmentId ?? null,
-        referenceSource?.region ? JSON.stringify(referenceSource.region) : null,
-        referenceSource?.observation ?? null,
-        specification.supersedesSpecificationId ?? null,
-        JSON.stringify(specification.conflictsWithSpecificationIds ?? []),
-        now,
-        idempotencyKey,
-        order,
-      );
-    });
-    const insertSupersession = db.prepare(`INSERT INTO source_specification_supersessions
-      (conversation_id, replacement_specification_id, superseded_specification_id)
-      VALUES (?, ?, ?)`);
-    for (const specification of normalized.specifications) {
-      for (const supersededId of specification.supersedesSpecificationIds ?? []) {
-        insertSupersession.run(conversationId, specification.id, supersededId);
-      }
+  const specifications: SourceSpecificationDto[] = normalized.specifications.map((specification) => ({
+    ...specification,
+    conversationId,
+    actor: "agent" as const,
+    status: "active" as const,
+    timestamp: now,
+  }));
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:source-specifications:${idempotencyKey}`,
+    type: "source-specifications.recorded",
+    data: { specifications, commandIdempotencyKey: idempotencyKey },
+  });
+  if (resolvingEscalationId) {
+    const escalation = projection.designEscalations.find((candidate) =>
+      candidate.escalationId === resolvingEscalationId && candidate.status === "pending");
+    const opened = projection.events.find((event) => event.type === "design-escalation.opened" &&
+      event.data.escalation.escalationId === resolvingEscalationId);
+    if (escalation) {
+      appendEvidenceEvent(db, conversationId, {
+        id: `${conversationId}:design-escalation-resolution:${idempotencyKey}`,
+        type: "design-escalation.resolved",
+        data: {
+          escalation: {
+            ...escalation,
+            status: "resolved",
+            resolvedAt: now,
+            resolutionSpecificationIds: specifications.map((specification) => specification.id),
+          },
+          ...(opened?.type === "design-escalation.opened" && opened.data.openedAfterMessageSeq !== undefined
+            ? { openedAfterMessageSeq: opened.data.openedAfterMessageSeq }
+            : {}),
+        },
+      });
     }
-    if (resolvingEscalationId) {
-      db.prepare(`UPDATE design_escalations
-        SET status = 'resolved', resolved_at = ?, resolution_specification_ids_json = ?
-        WHERE conversation_id = ? AND escalation_id = ? AND status = 'pending'`)
-        .run(now, JSON.stringify(normalized.specifications.map((specification) => specification.id)), conversationId, resolvingEscalationId);
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
   }
-  return rowsForMutation(db, conversationId, idempotencyKey);
+  return specifications;
 }

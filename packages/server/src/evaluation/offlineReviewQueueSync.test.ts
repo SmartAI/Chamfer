@@ -22,7 +22,7 @@ it("queues synchronized offline trace identities with canonical score provenance
     gating: "release",
     identities: {
       corpus: "corpus",
-      agentConfiguration: "agent",
+      agentConfiguration: { name: "current", identityHash: "a".repeat(64) },
       commit: "commit",
       model: "model",
       evaluator: "evaluator-v1",

@@ -9,7 +9,14 @@ function mask(value: string | undefined): string {
   return value ? "***" + value.slice(-4) : "";
 }
 
-export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_FAKE_LLM === "1"): Hono {
+export function settingsRoutes(
+  db: DatabaseSync,
+  fakeMode = process.env.CHAMFER_FAKE_LLM === "1",
+  /** Model reported when the user has not chosen one. The online deployment
+   * passes its demo-quota model here so a fresh account can chat immediately;
+   * locally there is no key to fall back on, so it stays unset. */
+  defaultModelJson?: string,
+): Hono {
   const app = new Hono();
 
   app.get("/api/settings", (c) => {
@@ -22,7 +29,7 @@ export function settingsRoutes(db: DatabaseSync, fakeMode = process.env.CHAMFER_
       openaiBaseUrl: settings.openaiBaseUrl,
       googleApiKey: mask(settings.googleApiKey),
       googleBaseUrl: settings.googleBaseUrl,
-      modelJson: settings.modelJson ?? (fakeMode ? JSON.stringify(FAKE_MODEL) : undefined),
+      modelJson: settings.modelJson ?? (fakeMode ? JSON.stringify(FAKE_MODEL) : defaultModelJson),
       maxCadRuns: settings.maxCadRuns,
       showCadCode: settings.showCadCode,
       fusionMcpEndpoint: settings.fusionMcpEndpoint,

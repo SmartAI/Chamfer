@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentRunTraceManager,
+  agentRunTraceAttributes,
   langfuseConfig,
   langfuseSessionId,
   maskLangfuseData,
@@ -154,13 +155,20 @@ describe("complete agent-run trace hierarchy", () => {
       status: "running",
       startedAt: 1_000,
       release: "v0.2.2",
-      agentConfiguration: { identityHash: "a".repeat(64), provider: "openai", model: "gpt-5", skillMode: "catalog" },
+      agentConfiguration: { name: "current", identityHash: "a".repeat(64), provider: "openai", model: "gpt-5" },
       lastSeq: 0,
       counters: { modelCalls: 0, toolCalls: 0, cadRuns: 0, retries: 0, compactions: 0, persistenceFailures: 0, searches: 0, skillLoads: 0 },
       durations: { modelMs: 0, toolMs: 0, cadMs: 0, compactionMs: 0, persistenceMs: 0, retryDelayMs: 0 },
     };
     const event = (value: Record<string, unknown>, seq: number, timestamp: number) =>
       ({ version: 1, runId: run.id, seq, timestamp, ...value }) as AgentRunLifecycleEvent;
+    expect(agentRunTraceAttributes(run)).toMatchObject({
+      version: "a".repeat(64),
+      metadata: {
+        agentConfigurationName: "current",
+        agentConfigurationIdentityHash: "a".repeat(64),
+      },
+    });
     manager.record(run, event({ type: "run.started", agentConfiguration: run.agentConfiguration }, 0, 1_000));
     manager.record(run, event({ type: "turn.started", operationId: "turn-1" }, 1, 1_010));
     const generation = manager.startGeneration(run.conversationId, "chat-response", {});
@@ -203,7 +211,7 @@ describe("complete agent-run trace hierarchy", () => {
       status: "running",
       startedAt: 1_000,
       release: "test",
-      agentConfiguration: { identityHash: "a".repeat(64), provider: "openai", model: "gpt-5", skillMode: "catalog" },
+      agentConfiguration: { name: "current", identityHash: "a".repeat(64), provider: "openai", model: "gpt-5" },
       lastSeq: 0,
       counters: { modelCalls: 0, toolCalls: 0, cadRuns: 0, retries: 0, compactions: 0, persistenceFailures: 0, searches: 0, skillLoads: 0 },
       durations: { modelMs: 0, toolMs: 0, cadMs: 0, compactionMs: 0, persistenceMs: 0, retryDelayMs: 0 },

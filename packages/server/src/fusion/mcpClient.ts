@@ -1,3 +1,5 @@
+import { validateFusionMcpEndpoint } from "./mcpEndpoint";
+export { validateFusionMcpEndpoint };
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -34,29 +36,6 @@ function parseTextPayload(text: string): unknown {
   } catch {
     return text;
   }
-}
-
-export function validateFusionMcpEndpoint(endpoint: string): URL {
-  let url: URL;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    throw new Error("Fusion MCP endpoint must be a valid URL");
-  }
-  if (
-    endpoint !== url.href ||
-    url.protocol !== "http:" ||
-    url.hostname !== "127.0.0.1" ||
-    !url.port ||
-    url.pathname !== "/mcp" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error("Fusion MCP endpoint must be exactly http://127.0.0.1:<port>/mcp");
-  }
-  return url;
 }
 
 type FetchLike = (url: string | URL, init?: RequestInit) => Promise<Response>;

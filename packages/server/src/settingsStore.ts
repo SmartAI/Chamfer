@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SettingsDto, SettingsPatchDto, SettingsSources } from "@chamfer/shared";
 import { envSettings } from "./envConfig";
-import { validateFusionMcpEndpoint } from "./fusion/mcpClient";
+import { validateFusionMcpEndpoint } from "./fusion/mcpEndpoint";
 
 const SETTINGS_KEYS = [
   "anthropicApiKey",

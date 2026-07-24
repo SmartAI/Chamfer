@@ -10,10 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { Streamdown, type Components, type CustomRendererProps } from "streamdown";
-import { ArrowDown, Check, CheckCircle2, FoldVertical, ListChecks, LoaderCircle, X } from "lucide-react";
+import { createMathPlugin } from "@streamdown/math";
+import "katex/dist/katex.min.css";
+import { ArrowDown, Check, CheckCircle2, CircleAlert, FoldVertical, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ToolCallCard, type ToolCallCardResult } from "./ToolCallCard";
-import { FUSION_RECONCILIATION_MARKER, getMessagePersistenceId, PLAN_NUDGE_MARKER, SELF_CHECK_MARKER, VISUAL_NUDGE_MARKER } from "@/agent/session";
+import type { ActiveTool } from "@/state/agentEventFold";
+import { ToolCallCard, toolDisplayName, type ToolCallCardResult } from "./ToolCallCard";
 import { CadCodeBlock } from "./CadCodeBlock";
 import { AttachmentImage } from "./AttachmentImage";
 import type { AttachmentReferenceBlock } from "@chamfer/shared";
@@ -29,6 +31,11 @@ function CadCodeFence({ code, isIncomplete }: CustomRendererProps) {
 }
 
 const CAD_CODE_RENDERERS = [{ language: ["python", "py"], component: CadCodeFence }];
+
+// Models write verification math as single-dollar inline LaTeX ("$3897.67
+// \text{ mm}^3$"), which the plugin's default (double-dollar only) would leave
+// as raw source.
+const MATH_PLUGIN = createMathPlugin({ singleDollarTextMath: true });
 
 // The self-check nudge asks the model to "mark each one satisfied or missing",
 // which it phrases either as a prefix ("Satisfied: four holes are present") or
@@ -147,6 +154,20 @@ interface TextBlock {
 interface RoledMessage {
   role?: string;
   content?: unknown;
+  stopReason?: unknown;
+  errorMessage?: unknown;
+}
+
+/** The stored turn-level failure of an assistant row (pi stamps stopReason
+ * "error" plus errorMessage on the run's final message). Rendered in the
+ * transcript so the user learns what went wrong even from persisted history -
+ * an errored row often carries no content at all, which used to leave an
+ * empty bubble (issue #53 defect 1). */
+function assistantError(message: RoledMessage): string | undefined {
+  if (message.role !== "assistant" || message.stopReason !== "error") return undefined;
+  return typeof message.errorMessage === "string" && message.errorMessage
+    ? message.errorMessage
+    : "The model request failed.";
 }
 
 interface ToolCallBlock {
@@ -250,6 +271,17 @@ function extractText(content: unknown): string {
 export interface MessageListProps {
   messages: unknown[];
   streaming: boolean;
+  /** The tool currently executing server-side; long CAD tool calls (minutes of
+   * stream silence) render as "Running <tool> - <elapsed>" instead of the
+   * generic working indicator. */
+  activeTool?: ActiveTool;
+  /** A prompt was just sent but no live event has returned yet (a cold hosted
+   * container can take tens of seconds). Renders a "Starting the agent" hint so
+   * the wait never reads as a freeze; supplanted by streaming on the first event. */
+  submitting?: boolean;
+  /** The just-sent prompt, shown as an optimistic user bubble while submitting;
+   * pi's echoed copy replaces it on the first live event. */
+  pendingPrompt?: string;
   generationFailed?: boolean;
   /** Extra content (e.g. preset prompt cards) rendered inside the "Start the conversation"
    * empty state; hidden as soon as any user/assistant message exists. */
@@ -262,9 +294,53 @@ export interface MessageListProps {
 /** How close to the bottom (px) still counts as "pinned" for autoscroll purposes. */
 const PIN_THRESHOLD_PX = 40;
 
+function formatElapsed(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds.toString().padStart(2, "0")}s` : `${seconds}s`;
+}
+
+/** A turn-level failure rendered inside the transcript (issue #53 defect 1):
+ * unmistakably an error, never an empty bubble plus "Done". */
+function AssistantErrorNote({ message, className }: { message: string; className?: string }) {
+  return (
+    <div
+      data-testid="assistant-error"
+      role="alert"
+      className={cn(
+        "flex max-w-[80%] items-start gap-1.5 break-words [overflow-wrap:anywhere] rounded-lg border",
+        "border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700",
+        "dark:border-red-900 dark:bg-red-950 dark:text-red-300",
+        className,
+      )}
+    >
+      <CircleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+      <span className="min-w-0">{message}</span>
+    </div>
+  );
+}
+
+/** Live elapsed-time readout for the running tool; re-renders once a second. */
+function RunningToolStatus({ tool }: { tool: ActiveTool }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <span data-testid="running-tool">
+      Running {toolDisplayName(tool.name)} · {formatElapsed(now - tool.startedAt)}
+    </span>
+  );
+}
+
 export function MessageList({
   messages,
   streaming,
+  activeTool,
+  submitting = false,
+  pendingPrompt,
   generationFailed = false,
   emptyState,
   showCadCode = false,
@@ -284,7 +360,7 @@ export function MessageList({
     } else {
       setShowJump(true);
     }
-  }, [messages, streaming]);
+  }, [messages, streaming, submitting]);
 
   // Content can grow without a `messages` identity change (view-sheet images
   // decoding, tool cards expanding, streaming markdown reflow). Watching the
@@ -333,10 +409,13 @@ export function MessageList({
       if (typeof toolCallId === "string") toolResults.set(toolCallId, message);
     }
   }
+  const lastRenderable = renderable.at(-1);
   const generationDone =
     !streaming &&
     !generationFailed &&
-    renderable.at(-1)?.role === "assistant";
+    lastRenderable?.role === "assistant" &&
+    // An errored turn is not "Done": the error block below tells the story.
+    assistantError(lastRenderable) === undefined;
 
   return (
     <CadCodeVisibilityContext.Provider value={showCadCode}>
@@ -358,7 +437,7 @@ export function MessageList({
         className="min-h-0 flex-1 overflow-y-auto p-4"
       >
       <div ref={contentRef} className="flex min-h-full flex-col gap-4">
-      {renderable.length === 0 && (
+      {renderable.length === 0 && !submitting && (
         <div className="flex flex-1 flex-col items-center justify-center gap-6 text-sm text-muted-foreground">
           <span>Start the conversation</span>
           {emptyState}
@@ -384,56 +463,17 @@ export function MessageList({
             </div>
           );
         }
-        if (isUser && text.startsWith(SELF_CHECK_MARKER)) {
-          return (
-            <div key={index} className="flex justify-center">
-              <span
-                data-testid="self-check-chip"
-                className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground"
-              >
-                <ListChecks className="h-3 w-3" aria-hidden="true" />
-                Self-check: confirming every part of the request is built
-              </span>
-            </div>
-          );
-        }
-        if (isUser && text.startsWith(PLAN_NUDGE_MARKER)) {
-          return (
-            <div key={index} className="flex justify-center">
-              <span
-                data-testid="plan-nudge-chip"
-                className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground"
-              >
-                <ListChecks className="h-3 w-3" aria-hidden="true" />
-                Plan check: unfinished components remain — continuing the build
-              </span>
-            </div>
-          );
-        }
-        if (isUser && text.startsWith(FUSION_RECONCILIATION_MARKER)) {
-          return (
-            <div key={index} className="flex justify-center">
-              <span data-testid="fusion-reconciliation-chip" className="flex items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground">
-                <ListChecks className="h-3 w-3" aria-hidden="true" />
-                Fusion changed: stale work cancelled and refreshed evidence loaded
-              </span>
-            </div>
-          );
-        }
-        if (isUser && text.startsWith(VISUAL_NUDGE_MARKER)) {
-          return (
-            <div key={index} className="flex justify-center">
-              <span
-                data-testid="visual-nudge-chip"
-                className="flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-[11px] text-amber-800"
-              >
-                <ListChecks className="h-3 w-3" aria-hidden="true" />
-                Visual check: current reference evidence is incomplete or needs revision
-              </span>
-            </div>
-          );
-        }
         const toolCalls = Array.isArray(message.content) ? message.content.filter(isToolCallBlock) : [];
+        const errorText = assistantError(message);
+        // An errored assistant row with nothing else to show renders as the
+        // error alone - never as an empty bubble.
+        if (errorText !== undefined && text === "" && toolCalls.length === 0) {
+          return (
+            <div key={index} className="flex min-w-0 justify-start">
+              <AssistantErrorNote message={errorText} />
+            </div>
+          );
+        }
         return (
           <div key={index} className={cn("flex min-w-0", isUser ? "justify-end" : "justify-start")}>
             {isUser ? (
@@ -444,7 +484,7 @@ export function MessageList({
               <div className="max-w-[80%] min-w-0 break-words [overflow-wrap:anywhere] rounded-lg bg-muted px-3 py-2 text-sm">
                 <Streamdown
                   controls={{ code: { copy: true, download: false } }}
-                  plugins={{ renderers: CAD_CODE_RENDERERS }}
+                  plugins={{ renderers: CAD_CODE_RENDERERS, math: MATH_PLUGIN }}
                   components={CHECKLIST_COMPONENTS}
                 >
                   {text}
@@ -457,11 +497,11 @@ export function MessageList({
                       call={call}
                       result={result as ToolCallCardResult | undefined}
                       interrupted={generationFailed && isLast && !result}
-                      resultMessageId={getMessagePersistenceId(result)}
                       showCadCode={showCadCode}
                     />
                   );
                 })}
+                {errorText !== undefined && <AssistantErrorNote message={errorText} className="mt-2" />}
                 {streaming && isLast && (
                   <span
                     data-testid="streaming-cursor"
@@ -473,7 +513,14 @@ export function MessageList({
           </div>
         );
       })}
-      {(streaming || generationDone) && (
+      {submitting && pendingPrompt && (
+        <div className="flex min-w-0 justify-end" data-testid="pending-user-message">
+          <div className="max-w-[80%] whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
+            {pendingPrompt}
+          </div>
+        </div>
+      )}
+      {(streaming || submitting || generationDone) && (
         <div
           data-testid="generation-status"
           role="status"
@@ -481,15 +528,21 @@ export function MessageList({
           aria-atomic="true"
           className={cn(
             "flex h-5 shrink-0 items-center gap-1.5 text-xs",
-            streaming ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400",
+            streaming || submitting ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400",
           )}
         >
-          {streaming ? (
+          {streaming || submitting ? (
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : (
             <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
           )}
-          <span>{streaming ? "Agent is working" : "Done"}</span>
+          {streaming && activeTool ? (
+            <RunningToolStatus tool={activeTool} />
+          ) : (
+            <span>
+              {streaming ? "Agent is working" : submitting ? "Starting the agent…" : "Done"}
+            </span>
+          )}
         </div>
       )}
         <div ref={bottomRef} />

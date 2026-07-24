@@ -7,6 +7,7 @@ import { openDb } from "../db";
 import { createConversation, createMessage } from "../conversationStore";
 import { insertFusionBinding } from "./ownershipStore";
 import { FusionActionError, FusionActions, type FusionActionRuntime } from "./action";
+import { evaluateFusionChecks } from "./inspection";
 import {
   appendFusionActionLedger, latestCompletedFusionOperationalContext, recordFusionActionOperationalContext,
 } from "./actionLedger";
@@ -50,7 +51,7 @@ function request(overrides: Partial<FusionActionRequestDto> = {}): FusionActionR
   };
 }
 
-function setup(captures: Array<{ snapshot: FusionEngineeringSnapshotDto; revision: string; cameraRestored?: boolean }>) {
+function setup(captures: Array<{ snapshot: FusionEngineeringSnapshotDto; revision: string; cameraRestored?: boolean; fingerprint?: string }>) {
   const db = openDb(":memory:");
   const conversation = createConversation(db, "Fusion", "fusion") as ConversationDto;
   insertFusionBinding(db, conversation.id, endpoint, document, "owner", 1);
@@ -68,6 +69,7 @@ function setup(captures: Array<{ snapshot: FusionEngineeringSnapshotDto; revisio
     diagnose: vi.fn().mockRejectedValue(new Error("read-only diagnosis unavailable")),
     execute: vi.fn().mockResolvedValue({ commandId: "Chamfer_action_1", undoEntries: 1 }),
     undo: vi.fn().mockResolvedValue(undefined),
+    verifiedUndo: vi.fn().mockResolvedValue(true),
     markRecoveryFailure: vi.fn(),
   };
   const runtime: FusionActionRuntime = { runExclusive: (operation) => operation(context) };
@@ -85,9 +87,60 @@ describe("Fusion atomic actions", () => {
 
     expect(result).toMatchObject({ status: "completed", precedingRevision: "rev-before", finalRevision: "rev-after", undoEntries: 1 });
     expect(context.execute).toHaveBeenCalledOnce();
+    // The rollback baseline rides on the before-inspection; a completed action
+    // pays exactly two trusted inspections and no separate fingerprint capture.
+    expect(context.captureInspection).toHaveBeenCalledTimes(2);
     expect(context.undo).not.toHaveBeenCalled();
     expect(actions.history(conversation.id).map((record) => record.event)).toEqual(["attempt", "completed"]);
     expect(actions.history(conversation.id)[0]?.result.strategy).toBe("targeted");
+  });
+
+  it("keeps a native chamfer measurement in the action snapshot for frozen completion verification", async () => {
+    const expectedChamfer = {
+      kind: "chamfer" as const,
+      name: "Outer Perimeter Chamfers",
+      distanceMm: 1.5,
+      faceCount: 16,
+      placement: "top-bottom-outer-perimeter" as const,
+      toleranceMm: 0.05,
+    };
+    const chamfered = snapshot(1);
+    chamfered.features = [{
+      id: "feature-chamfer",
+      name: expectedChamfer.name,
+      type: "ChamferFeature",
+      timelineIndex: 0,
+      suppressed: false,
+    }];
+    chamfered.featureMeasurements = [{
+      featureId: "feature-chamfer",
+      kind: "chamfer",
+      distanceMm: 1.5,
+      faceCount: 16,
+      faceBoundsMm: Array.from({ length: 16 }, (_, index) => ({
+        min: [0, 0, index < 8 ? 0 : 18.5] as [number, number, number],
+        max: [20, 20, index < 8 ? 1.5 : 20] as [number, number, number],
+      })),
+    }];
+    const { actions, conversation } = setup([
+      { snapshot: snapshot(0), revision: "rev-before" },
+      { snapshot: chamfered, revision: "rev-after" },
+    ]);
+
+    const result = await actions.execute(conversation.id, request({ expectedEffects: [expectedChamfer] }));
+    const completionChecks = evaluateFusionChecks(result.inspection.current.snapshot, [expectedChamfer]);
+
+    expect(result.inspection.current.snapshot.featureMeasurements).toContainEqual(expect.objectContaining({
+      featureId: "feature-chamfer",
+      kind: "chamfer",
+      distanceMm: 1.5,
+      faceCount: 16,
+    }));
+    expect(completionChecks).toEqual([expect.objectContaining({
+      input: expectedChamfer,
+      status: "passed",
+      detail: expect.stringContaining("size 1.5 mm produced 16 feature faces; placement matches top-bottom-outer-perimeter"),
+    })]);
   });
 
   it("keeps a verified native mutation completed when auxiliary artifact persistence fails", async () => {
@@ -105,6 +158,20 @@ describe("Fusion atomic actions", () => {
     expect(result.visualArtifact).toBeUndefined();
     expect(context.undo).not.toHaveBeenCalled();
     expect(actions.history(conversation.id).map((record) => record.event)).toEqual(["attempt", "completed"]);
+  });
+
+  it("rolls back through verifiedUndo using the fingerprint the before-inspection captured", async () => {
+    const { actions, context, conversation } = setup([
+      { snapshot: snapshot(0), revision: "rev-before", fingerprint: "fp-before" },
+      { snapshot: snapshot(0), revision: "rev-bad" },
+      { snapshot: snapshot(0), revision: "rev-restored" },
+    ]);
+
+    const result = await actions.execute(conversation.id, request());
+
+    expect(result).toMatchObject({ status: "rolled-back", finalRevision: "rev-restored", undoEntries: 0 });
+    expect(context.verifiedUndo).toHaveBeenCalledExactlyOnceWith(document, "fp-before", 8);
+    expect(context.undo).not.toHaveBeenCalled();
   });
 
   it("undoes exactly once when the result is structurally broken and restores the preceding revision", async () => {
@@ -518,4 +585,3 @@ describe("Fusion atomic actions", () => {
     expect(() => db.prepare("DELETE FROM fusion_action_ledger").run()).toThrow(/immutable/);
   });
 });
-

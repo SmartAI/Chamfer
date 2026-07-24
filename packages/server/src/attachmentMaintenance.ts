@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  AttachmentStore,
+  type ImageBlobStore,
   type AttachmentFileMaintenanceReport,
   type AttachmentMaintenanceOptions,
-} from "./attachmentStore";
+} from "./imageBlobStore";
 
 export interface AttachmentMetadataReference {
   attachmentId: string;
@@ -33,11 +33,11 @@ function metadataInventory(db: DatabaseSync): AttachmentMetadataReference[] {
   return references;
 }
 
-export function runAttachmentMaintenance(
+export async function runAttachmentMaintenance(
   db: DatabaseSync,
-  store: AttachmentStore,
+  store: ImageBlobStore,
   options: AttachmentMaintenanceOptions = {},
-): AttachmentMaintenanceReport {
+): Promise<AttachmentMaintenanceReport> {
   const metadataBefore = metadataInventory(db);
   const referencedPaths = new Set<string>();
   for (const reference of metadataBefore) {
@@ -46,6 +46,6 @@ export function runAttachmentMaintenance(
       referencedPaths.add(`images/${reference.contentHash.slice(0, 2)}/${reference.contentHash}`);
     }
   }
-  const fileReport = store.maintain(referencedPaths, options);
+  const fileReport = await store.maintain(referencedPaths, options);
   return { metadataBefore, metadataAfter: metadataInventory(db), ...fileReport };
 }

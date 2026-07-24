@@ -4,7 +4,7 @@ import type {
   OpenDesignEscalationInput,
   SourceSpecificationDto,
 } from "@chamfer/shared";
-import { listSourceSpecifications } from "./sourceSpecifications";
+import { appendEvidenceEvent, projectEvidence } from "./evidenceStore";
 
 interface DesignEscalationRow {
   conversation_id: string;
@@ -33,6 +33,7 @@ const KINDS = new Set<DesignEscalationDto["kind"]>([
   "missing-physical-scale",
   "materially-different-interpretations",
   "explicit-requirement-change",
+  "verification-check-relaxation",
 ]);
 
 function strings(json: string | null): string[] {
@@ -46,7 +47,7 @@ function strings(json: string | null): string[] {
 }
 
 function dto(row: DesignEscalationRow): DesignEscalationDto {
-  return {
+  const escalation: DesignEscalationDto = {
     escalationId: row.escalation_id,
     conversationId: row.conversation_id,
     kind: row.kind,
@@ -58,6 +59,7 @@ function dto(row: DesignEscalationRow): DesignEscalationDto {
     ...(row.resolved_at === null ? {} : { resolvedAt: row.resolved_at }),
     resolutionSpecificationIds: strings(row.resolution_specification_ids_json),
   };
+  return escalation;
 }
 
 function normalize(input: OpenDesignEscalationInput): OpenDesignEscalationInput {
@@ -79,14 +81,34 @@ function normalize(input: OpenDesignEscalationInput): OpenDesignEscalationInput 
   if (affectedSpecificationIds.some((id) => !id) || new Set(affectedSpecificationIds).size !== affectedSpecificationIds.length) {
     throw new DesignEscalationError("affectedSpecificationIds must contain unique non-empty identities");
   }
-  return { escalationId, kind: input.kind, question, affectedSpecificationIds, basis };
+  const verificationCheckAttemptId = typeof input.verificationCheckAttemptId === "string"
+    ? input.verificationCheckAttemptId.trim()
+    : "";
+  if (input.kind === "verification-check-relaxation" && !verificationCheckAttemptId) {
+    throw new DesignEscalationError("verification-check-relaxation requires a held verification check attempt identity");
+  }
+  if (input.kind !== "verification-check-relaxation" && verificationCheckAttemptId) {
+    throw new DesignEscalationError("only verification-check-relaxation may reference a verification check attempt");
+  }
+  return {
+    escalationId,
+    kind: input.kind,
+    question,
+    affectedSpecificationIds,
+    basis,
+    ...(verificationCheckAttemptId ? { verificationCheckAttemptId } : {}),
+  };
 }
 
-export function listDesignEscalations(db: DatabaseSync, conversationId: string): DesignEscalationDto[] {
+export function listLegacyDesignEscalations(db: DatabaseSync, conversationId: string): DesignEscalationDto[] {
   const rows = db.prepare(
     "SELECT * FROM design_escalations WHERE conversation_id = ? ORDER BY opened_at ASC, rowid ASC",
   ).all(conversationId) as unknown as DesignEscalationRow[];
   return rows.map(dto);
+}
+
+export function listDesignEscalations(db: DatabaseSync, conversationId: string): DesignEscalationDto[] {
+  return projectEvidence(db, conversationId).designEscalations;
 }
 
 function hasDeclaredConflict(left: SourceSpecificationDto, rightId: string): boolean {
@@ -101,25 +123,24 @@ export function openDesignEscalation(
 ): DesignEscalationDto {
   if (!idempotencyKey.trim()) throw new DesignEscalationError("Idempotency-Key is required");
   const input = normalize(rawInput);
-  const payloadJson = JSON.stringify(input);
-  const existing = db.prepare(
-    "SELECT * FROM design_escalations WHERE conversation_id = ? AND mutation_id = ?",
-  ).get(conversationId, idempotencyKey) as unknown as DesignEscalationRow | undefined;
-  if (existing) {
-    if (existing.payload_json === payloadJson) return dto(existing);
+  const projection = projectEvidence(db, conversationId);
+  const existing = projection.events.find((event) => event.type === "design-escalation.opened" &&
+    event.data.commandIdempotencyKey === idempotencyKey);
+  if (existing?.type === "design-escalation.opened") {
+    const prior = existing.data.escalation;
+    if (prior.escalationId === input.escalationId && prior.kind === input.kind &&
+        prior.question === input.question && prior.basis === input.basis &&
+        prior.verificationCheckAttemptId === input.verificationCheckAttemptId &&
+        JSON.stringify(prior.affectedSpecificationIds) === JSON.stringify(input.affectedSpecificationIds)) return prior;
     throw new DesignEscalationError("idempotency key conflicts with an existing design escalation", "conflict");
   }
-  if (db.prepare(
-    "SELECT 1 FROM design_escalations WHERE conversation_id = ? AND escalation_id = ? LIMIT 1",
-  ).get(conversationId, input.escalationId)) {
+  if (projection.designEscalations.some((candidate) => candidate.escalationId === input.escalationId)) {
     throw new DesignEscalationError(`design escalation identity ${input.escalationId} already exists`, "conflict");
   }
-  if (db.prepare(
-    "SELECT 1 FROM design_escalations WHERE conversation_id = ? AND status = 'pending' LIMIT 1",
-  ).get(conversationId)) {
+  if (projection.designEscalations.some((candidate) => candidate.status === "pending")) {
     throw new DesignEscalationError("one focused design clarification is already pending", "conflict");
   }
-  const specifications = listSourceSpecifications(db, conversationId);
+  const specifications = projection.sourceSpecifications;
   const active = new Map(specifications.filter((item) => item.status === "active").map((item) => [item.id, item]));
   for (const id of input.affectedSpecificationIds) {
     if (!active.has(id)) throw new DesignEscalationError(`affected specification ${id} is not active in this conversation`);
@@ -134,28 +155,27 @@ export function openDesignEscalation(
       throw new DesignEscalationError("conflicting-specifications requires a declared conflict between active source requirements");
     }
   }
+  if (input.verificationCheckAttemptId && !projection.verificationCheckRevisionAttempts.some((attempt) =>
+    attempt.attemptId === input.verificationCheckAttemptId && attempt.status === "held")) {
+    throw new DesignEscalationError(
+      `verification check attempt ${input.verificationCheckAttemptId} is not a held proposal in this conversation`,
+    );
+  }
   const openedAt = Date.now();
+  const escalation: DesignEscalationDto = {
+    ...input,
+    conversationId,
+    status: "pending",
+    openedAt,
+    resolutionSpecificationIds: [],
+  };
   const latest = db.prepare(
     "SELECT COALESCE(MAX(seq), -1) AS seq FROM messages WHERE conversation_id = ?",
   ).get(conversationId) as { seq: number };
-  db.prepare(`INSERT INTO design_escalations
-    (conversation_id, escalation_id, mutation_id, payload_json, kind, question,
-     affected_specification_ids_json, basis, status, opened_after_message_seq, opened_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
-    .run(
-      conversationId,
-      input.escalationId,
-      idempotencyKey,
-      payloadJson,
-      input.kind,
-      input.question,
-      JSON.stringify(input.affectedSpecificationIds),
-      input.basis,
-      latest.seq,
-      openedAt,
-    );
-  const created = db.prepare(
-    "SELECT * FROM design_escalations WHERE conversation_id = ? AND escalation_id = ?",
-  ).get(conversationId, input.escalationId) as unknown as DesignEscalationRow;
-  return dto(created);
+  appendEvidenceEvent(db, conversationId, {
+    id: `${conversationId}:design-escalation:${escalation.escalationId}`,
+    type: "design-escalation.opened",
+    data: { escalation, openedAfterMessageSeq: latest.seq, commandIdempotencyKey: idempotencyKey },
+  });
+  return escalation;
 }

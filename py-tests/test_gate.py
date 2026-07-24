@@ -147,7 +147,7 @@ def test_missing_block_is_gate_failure_with_alwayson_checks():
     assert {"valid", "nondegenerate"} <= check_names(gate, True)
 
 def test_gate_evaluator_crash_fails_open(monkeypatch):
-    def boom(source, shape):
+    def boom(source, shape, frozen_check_set=None):
         raise RuntimeError("synthetic gate bug")
     monkeypatch.setattr(harness, "_run_gate_checks", boom)
     out = harness.run_script(with_expect(FULL_EXPECT))
@@ -162,4 +162,4 @@ def test_run_output_is_json_serializable_with_gate():
 
 def test_existing_output_keys_unchanged_without_block():
     out = harness.run_script(BOX_BODY)
-    assert {"stdout", "measurements", "positions", "indices", "gate"} == set(out)
+    assert {"stdout", "measurements", "positions", "indices", "gate", "notices"} == set(out)

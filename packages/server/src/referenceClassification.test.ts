@@ -89,7 +89,7 @@ describe("reference classification", () => {
     }
   });
 
-  it("creates its attachment FK after migrating a legacy NOT NULL blob table", () => {
+  it("removes the legacy classification table after migrating a legacy NOT NULL blob table", () => {
     const directory = mkdtempSync(join(tmpdir(), "chamfer-reference-migration-"));
     const path = join(directory, "legacy.db");
     try {
@@ -111,12 +111,12 @@ describe("reference classification", () => {
       legacy.close();
 
       const migrated = openDb(path);
-      const foreignKeys = migrated.prepare("PRAGMA foreign_key_list(reference_classifications)").all() as Array<{
-        from: string;
-        table: string;
-      }>;
-      expect(foreignKeys).toContainEqual(expect.objectContaining({ from: "reference_id", table: "attachments" }));
-      expect(foreignKeys).not.toContainEqual(expect.objectContaining({ table: "attachments_legacy" }));
+      expect(migrated.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'reference_classifications'",
+      ).get()).toBeUndefined();
+      expect(migrated.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'evidence_events'",
+      ).get()).toEqual({ 1: 1 });
       migrated.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -274,7 +274,7 @@ describe("reference classification", () => {
       referenceId: "ref-a",
       status: "active",
       specificationIds: ["foreign-size"],
-    })).toThrow(/does not belong to this conversation/);
+    })).toThrow(/does not exist/);
 
     recordSourceSpecifications(db, conversation.id, {
       specifications: [{
@@ -297,31 +297,50 @@ describe("reference classification", () => {
     const directory = mkdtempSync(join(tmpdir(), "chamfer-reference-link-migration-"));
     const path = join(directory, "legacy-links.db");
     try {
-      const db = openDb(path);
-      const conversation = createConversation(db, "Legacy links");
-      createMessage(db, conversation.id, { id: "legacy-message", seq: 0, role: "user", contentJson: "{}" });
-      createAttachment(db, "legacy-message", "user-image", {
-        mime: "image/png",
-        contentHash: "d".repeat(64),
-        byteSize: 1,
-        blobPath: "images/dd/legacy.png",
-      }, "legacy-ref");
+      const db = new DatabaseSync(path);
+      db.exec(`
+        CREATE TABLE conversations (
+          id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id), seq INTEGER NOT NULL,
+          role TEXT NOT NULL, content_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+          UNIQUE(conversation_id, seq)
+        );
+        CREATE TABLE attachments (
+          id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id), kind TEXT NOT NULL,
+          mime TEXT NOT NULL, data BLOB NOT NULL
+        );
+        CREATE TABLE reference_classifications (
+          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
+          reference_id TEXT NOT NULL REFERENCES attachments(id), status TEXT NOT NULL, purpose TEXT NOT NULL,
+          relationships_json TEXT NOT NULL, rationale TEXT NOT NULL, specification_links_json TEXT NOT NULL,
+          no_specification_reason TEXT, actor TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+      `);
+      const conversationId = "legacy-conversation";
+      db.prepare("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, 1, 1)")
+        .run(conversationId, "Legacy links");
+      db.prepare("INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at) VALUES (?, ?, 0, 'user', '{}', 1)")
+        .run("legacy-message", conversationId);
+      db.prepare("INSERT INTO attachments (id, message_id, kind, mime, data) VALUES (?, ?, 'user-image', 'image/png', ?)")
+        .run("legacy-ref", "legacy-message", Buffer.from([0]));
       db.prepare(`
         INSERT INTO reference_classifications
           (id, conversation_id, reference_id, status, purpose, relationships_json,
            rationale, specification_links_json, no_specification_reason, actor, created_at)
         VALUES (?, ?, ?, 'active', 'Legacy drawing', '[]', 'Legacy rationale', ?, NULL, 'agent', 10)
-      `).run("legacy-classification", conversation.id, "legacy-ref", JSON.stringify(["plan.spec_sheet.width"]));
+      `).run("legacy-classification", conversationId, "legacy-ref", JSON.stringify(["plan.spec_sheet.width"]));
       db.close();
 
       const migrated = openDb(path);
-      const records = listReferenceRecords(migrated, conversation.id);
+      const records = listReferenceRecords(migrated, conversationId);
       expect(records[0]).toMatchObject({
         specificationIds: ["plan.spec_sheet.width"],
         legacySpecificationLinks: ["plan.spec_sheet.width"],
         history: [{ id: "legacy-classification", legacySpecificationLinks: ["plan.spec_sheet.width"] }],
       });
-      expect(listSourceSpecifications(migrated, conversation.id)).toMatchObject([{
+      expect(listSourceSpecifications(migrated, conversationId)).toMatchObject([{
         id: "plan.spec_sheet.width",
         actor: "migration",
         status: "active",
@@ -330,9 +349,9 @@ describe("reference classification", () => {
       migrated.close();
 
       const reopened = openDb(path);
-      expect(listReferenceRecords(reopened, conversation.id)[0]?.specificationIds)
+      expect(listReferenceRecords(reopened, conversationId)[0]?.specificationIds)
         .toEqual(["plan.spec_sheet.width"]);
-      expect(listSourceSpecifications(reopened, conversation.id)).toHaveLength(1);
+      expect(listSourceSpecifications(reopened, conversationId)).toHaveLength(1);
       reopened.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });

@@ -1,6 +1,12 @@
 import { X } from "lucide-react";
-import type { SessionError } from "@/agent/session";
 import { Button } from "@/components/ui/button";
+
+export type SessionErrorKind = "invalid-key" | "rate-limited" | "generic";
+
+export interface SessionError {
+  kind: SessionErrorKind;
+  message: string;
+}
 
 export interface ErrorBannerProps {
   error: SessionError;

@@ -1,26 +1,49 @@
 {
   "name": "chamfer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "AI CAD designer that turns text and reference images into verified, parametric 3D models.",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "chamfer": "bin/chamfer.js" },
-  "files": ["bin", "dist", "NOTICE"],
-  "engines": { "node": ">=22.19.0" },
-  "repository": { "type": "git", "url": "git+https://github.com/SmartAI/Chamfer.git" },
+  "bin": {
+    "chamfer": "bin/chamfer.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SmartAI/Chamfer.git"
+  },
   "homepage": "https://smartai.github.io/Chamfer/",
-  "keywords": ["cad", "ai", "text-to-cad", "image-to-3d", "build123d", "3d-printing", "step", "stl", "3mf"],
+  "keywords": [
+    "cad",
+    "ai",
+    "text-to-cad",
+    "image-to-3d",
+    "build123d",
+    "3d-printing",
+    "step",
+    "stl",
+    "3mf"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.80.3",
-    "@earendil-works/pi-ai": "^0.80.3",
+    "@earendil-works/pi-agent-core": "^0.81.1",
+    "@earendil-works/pi-ai": "^0.81.1",
+    "@earendil-works/pi-coding-agent": "^0.81.1",
     "@hono/node-server": "^1.13.0",
     "@langfuse/otel": "^5.9.1",
     "@langfuse/tracing": "^5.9.1",
     "@opentelemetry/sdk-trace-node": "^2.9.0",
     "hono": "^4.6.0",
+    "pi-mcp-adapter": "2.11.0",
     "sharp": "^0.35.3"
   },
   "devDependencies": {
