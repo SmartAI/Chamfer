@@ -1,0 +1,420 @@
+{
+  "arm": "codex",
+  "model": "gpt-5.6-luna",
+  "modelFamily": "openai-responses",
+  "modelFamilyNote": "codex speaks the OpenAI Responses wire API only; it cannot run Anthropic/Claude models",
+  "reasoning": "high",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "benchmarks/private/testset-v1/cases.json",
+  "cases": [
+    "TEST-T0-STEPSPACER",
+    "TEST-T1-SLOTPLATE",
+    "TEST-T2-PULLEY",
+    "TEST-T3-PILLOWBLOCK",
+    "TEST-T4-VALVEBLOCK"
+  ],
+  "reps": 3,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T22:11:37.809Z",
+  "finishedAt": "2026-07-23T22:41:38.420Z",
+  "warmup": null,
+  "runs": [
+    {
+      "case": "TEST-T0-STEPSPACER",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T0-STEPSPACER-r1-1784844697809",
+      "passed": 6,
+      "total": 6,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 622402,
+        "out": 3300,
+        "cacheRead": 517376,
+        "cacheWrite": 0
+      },
+      "toolCalls": 16,
+      "executes": 4,
+      "latencySec": 99.8,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T0-STEPSPACER",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T0-STEPSPACER-r2-1784844800779",
+      "passed": 6,
+      "total": 6,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 473712,
+        "out": 2313,
+        "cacheRead": 385024,
+        "cacheWrite": 0
+      },
+      "toolCalls": 12,
+      "executes": 2,
+      "latencySec": 73.6,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T0-STEPSPACER",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T0-STEPSPACER-r3-1784844877523",
+      "passed": 6,
+      "total": 6,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 461648,
+        "out": 2395,
+        "cacheRead": 388096,
+        "cacheWrite": 0
+      },
+      "toolCalls": 12,
+      "executes": 1,
+      "latencySec": 71.3,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T1-SLOTPLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T1-SLOTPLATE-r1-1784844951966",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 289879,
+        "out": 3111,
+        "cacheRead": 226048,
+        "cacheWrite": 0
+      },
+      "toolCalls": 10,
+      "executes": 2,
+      "latencySec": 74.8,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T1-SLOTPLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T1-SLOTPLATE-r2-1784845029826",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 367041,
+        "out": 2785,
+        "cacheRead": 311552,
+        "cacheWrite": 0
+      },
+      "toolCalls": 11,
+      "executes": 3,
+      "latencySec": 80.1,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T1-SLOTPLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T1-SLOTPLATE-r3-1784845113096",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 436378,
+        "out": 2992,
+        "cacheRead": 382464,
+        "cacheWrite": 0
+      },
+      "toolCalls": 13,
+      "executes": 1,
+      "latencySec": 85,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T2-PULLEY",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T2-PULLEY-r1-1784845201293",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 613283,
+        "out": 3924,
+        "cacheRead": 508160,
+        "cacheWrite": 0
+      },
+      "toolCalls": 14,
+      "executes": 3,
+      "latencySec": 114.3,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T2-PULLEY",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T2-PULLEY-r2-1784845318632",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 692023,
+        "out": 3916,
+        "cacheRead": 573696,
+        "cacheWrite": 0
+      },
+      "toolCalls": 15,
+      "executes": 5,
+      "latencySec": 107.4,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T2-PULLEY",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T2-PULLEY-r3-1784845429269",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 709575,
+        "out": 3722,
+        "cacheRead": 590080,
+        "cacheWrite": 0
+      },
+      "toolCalls": 18,
+      "executes": 4,
+      "latencySec": 101,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T3-PILLOWBLOCK",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T3-PILLOWBLOCK-r1-1784845533393",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 727746,
+        "out": 6409,
+        "cacheRead": 631808,
+        "cacheWrite": 0
+      },
+      "toolCalls": 17,
+      "executes": 6,
+      "latencySec": 148,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T3-PILLOWBLOCK",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T3-PILLOWBLOCK-r2-1784845684541",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 1015642,
+        "out": 6716,
+        "cacheRead": 876800,
+        "cacheWrite": 0
+      },
+      "toolCalls": 23,
+      "executes": 6,
+      "latencySec": 152.8,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T3-PILLOWBLOCK",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T3-PILLOWBLOCK-r3-1784845840417",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 777717,
+        "out": 6095,
+        "cacheRead": 634880,
+        "cacheWrite": 0
+      },
+      "toolCalls": 17,
+      "executes": 7,
+      "latencySec": 153.2,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T4-VALVEBLOCK",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T4-VALVEBLOCK-r1-1784845996572",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 751174,
+        "out": 6945,
+        "cacheRead": 655104,
+        "cacheWrite": 0
+      },
+      "toolCalls": 18,
+      "executes": 8,
+      "latencySec": 162.2,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T4-VALVEBLOCK",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T4-VALVEBLOCK-r2-1784846161821",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 760443,
+        "out": 8750,
+        "cacheRead": 665344,
+        "cacheWrite": 0
+      },
+      "toolCalls": 17,
+      "executes": 7,
+      "latencySec": 189.6,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    },
+    {
+      "case": "TEST-T4-VALVEBLOCK",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/codex-TEST-T4-VALVEBLOCK-r3-1784846354518",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 791092,
+        "out": 5878,
+        "cacheRead": 697856,
+        "cacheWrite": 0
+      },
+      "toolCalls": 20,
+      "executes": 10,
+      "latencySec": 140.6,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    }
+  ],
+  "perCase": {
+    "TEST-T0-STEPSPACER": {
+      "reps": 3,
+      "means": {
+        "passed": 6,
+        "total": 6,
+        "costUsd": null,
+        "tokensIn": 519254,
+        "tokensOut": 2669.333,
+        "tokensCacheRead": 430165.333,
+        "tokensCacheWrite": 0,
+        "toolCalls": 13.333,
+        "executes": 2.333,
+        "latencySec": 81.567
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T1-SLOTPLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 7,
+        "total": 7,
+        "costUsd": null,
+        "tokensIn": 364432.667,
+        "tokensOut": 2962.667,
+        "tokensCacheRead": 306688,
+        "tokensCacheWrite": 0,
+        "toolCalls": 11.333,
+        "executes": 2,
+        "latencySec": 79.967
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T2-PULLEY": {
+      "reps": 3,
+      "means": {
+        "passed": 7,
+        "total": 7,
+        "costUsd": null,
+        "tokensIn": 671627,
+        "tokensOut": 3854,
+        "tokensCacheRead": 557312,
+        "tokensCacheWrite": 0,
+        "toolCalls": 15.667,
+        "executes": 4,
+        "latencySec": 107.567
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T3-PILLOWBLOCK": {
+      "reps": 3,
+      "means": {
+        "passed": 11,
+        "total": 11,
+        "costUsd": null,
+        "tokensIn": 840368.333,
+        "tokensOut": 6406.667,
+        "tokensCacheRead": 714496,
+        "tokensCacheWrite": 0,
+        "toolCalls": 19,
+        "executes": 6.333,
+        "latencySec": 151.333
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T4-VALVEBLOCK": {
+      "reps": 3,
+      "means": {
+        "passed": 12,
+        "total": 12,
+        "costUsd": null,
+        "tokensIn": 767569.667,
+        "tokensOut": 7191,
+        "tokensCacheRead": 672768,
+        "tokensCacheWrite": 0,
+        "toolCalls": 18.333,
+        "executes": 8.333,
+        "latencySec": 164.133
+      },
+      "overClaimRate": 0
+    }
+  }
+}

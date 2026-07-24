@@ -1,0 +1,694 @@
+{
+  "arm": "pi",
+  "provider": "anthropic",
+  "model": "claude-opus-4-8",
+  "armDir": "benchmarks/arms/v1",
+  "casesFile": "benchmarks/golden/v1/cases.json",
+  "cases": [
+    "GOLD-T0-BOX",
+    "GOLD-T1-PLATE",
+    "GOLD-T2-POCKET-PLATE",
+    "GOLD-T3-BEARING-HOUSING",
+    "GOLD-T1B-LBRACKET",
+    "GOLD-T2B-FLANGE",
+    "GOLD-T3B-DRILLBLOCK",
+    "GOLD-T4-GEARPLATE",
+    "GOLD-T4-ANGLEFLANGE"
+  ],
+  "reps": 3,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T20:40:45.837Z",
+  "finishedAt": "2026-07-23T21:04:02.221Z",
+  "warmup": {
+    "ok": true,
+    "attempts": [
+      {
+        "attempt": 1,
+        "missing": [],
+        "ok": true
+      }
+    ],
+    "scratch": "benchmarks/results/tmp-runs/warmup-pi-1784839245838"
+  },
+  "runs": [
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r1-1784839248443",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0332755,
+      "tokens": {
+        "in": 6,
+        "out": 332,
+        "cacheRead": 17516,
+        "cacheWrite": 2590
+      },
+      "toolCalls": 2,
+      "executes": 1,
+      "latencySec": 12.8
+    },
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r2-1784839264296",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0328785,
+      "tokens": {
+        "in": 6,
+        "out": 323,
+        "cacheRead": 17497,
+        "cacheWrite": 2564
+      },
+      "toolCalls": 2,
+      "executes": 1,
+      "latencySec": 13.3
+    },
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r3-1784839280965",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.033741,
+      "tokens": {
+        "in": 6,
+        "out": 349,
+        "cacheRead": 17497,
+        "cacheWrite": 2598
+      },
+      "toolCalls": 2,
+      "executes": 1,
+      "latencySec": 15
+    },
+    {
+      "case": "GOLD-T1-PLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1-PLATE-r1-1784839298456",
+      "passed": 5,
+      "total": 5,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.052143249999999995,
+      "tokens": {
+        "in": 8,
+        "out": 685,
+        "cacheRead": 25294,
+        "cacheWrite": 3573
+      },
+      "toolCalls": 3,
+      "executes": 1,
+      "latencySec": 18.1
+    },
+    {
+      "case": "GOLD-T1-PLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1-PLATE-r2-1784839318839",
+      "passed": 5,
+      "total": 5,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.058145249999999996,
+      "tokens": {
+        "in": 8,
+        "out": 868,
+        "cacheRead": 25548,
+        "cacheWrite": 3781
+      },
+      "toolCalls": 4,
+      "executes": 2,
+      "latencySec": 20.4
+    },
+    {
+      "case": "GOLD-T1-PLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1-PLATE-r3-1784839341889",
+      "passed": 5,
+      "total": 5,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0525445,
+      "tokens": {
+        "in": 8,
+        "out": 698,
+        "cacheRead": 25309,
+        "cacheWrite": 3584
+      },
+      "toolCalls": 3,
+      "executes": 1,
+      "latencySec": 19.9
+    },
+    {
+      "case": "GOLD-T2-POCKET-PLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2-POCKET-PLATE-r1-1784839364731",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.09372375,
+      "tokens": {
+        "in": 12,
+        "out": 1452,
+        "cacheRead": 43165,
+        "cacheWrite": 5725
+      },
+      "toolCalls": 7,
+      "executes": 2,
+      "latencySec": 31.2
+    },
+    {
+      "case": "GOLD-T2-POCKET-PLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2-POCKET-PLATE-r2-1784839398895",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.08426750000000001,
+      "tokens": {
+        "in": 8,
+        "out": 1415,
+        "cacheRead": 27530,
+        "cacheWrite": 5614
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 27.9
+    },
+    {
+      "case": "GOLD-T2-POCKET-PLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2-POCKET-PLATE-r3-1784839429707",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.09694725,
+      "tokens": {
+        "in": 12,
+        "out": 1549,
+        "cacheRead": 43512,
+        "cacheWrite": 5825
+      },
+      "toolCalls": 7,
+      "executes": 2,
+      "latencySec": 31.9
+    },
+    {
+      "case": "GOLD-T3-BEARING-HOUSING",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3-BEARING-HOUSING-r1-1784839464655",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.21695499999999998,
+      "tokens": {
+        "in": 10,
+        "out": 5140,
+        "cacheRead": 45985,
+        "cacheWrite": 10466
+      },
+      "toolCalls": 6,
+      "executes": 2,
+      "latencySec": 86.1
+    },
+    {
+      "case": "GOLD-T3-BEARING-HOUSING",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3-BEARING-HOUSING-r2-1784839553944",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.252262,
+      "tokens": {
+        "in": 12,
+        "out": 6239,
+        "cacheRead": 62954,
+        "cacheWrite": 10360
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 99.9
+    },
+    {
+      "case": "GOLD-T3-BEARING-HOUSING",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3-BEARING-HOUSING-r3-1784839657001",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.2835365,
+      "tokens": {
+        "in": 12,
+        "out": 7170,
+        "cacheRead": 65653,
+        "cacheWrite": 11424
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 118.5
+    },
+    {
+      "case": "GOLD-T1B-LBRACKET",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1B-LBRACKET-r1-1784839778566",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.10013124999999999,
+      "tokens": {
+        "in": 12,
+        "out": 1817,
+        "cacheRead": 44955,
+        "cacheWrite": 5147
+      },
+      "toolCalls": 5,
+      "executes": 3,
+      "latencySec": 38.7
+    },
+    {
+      "case": "GOLD-T1B-LBRACKET",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1B-LBRACKET-r2-1784839820168",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0764955,
+      "tokens": {
+        "in": 8,
+        "out": 1407,
+        "cacheRead": 26886,
+        "cacheWrite": 4454
+      },
+      "toolCalls": 3,
+      "executes": 1,
+      "latencySec": 29.4
+    },
+    {
+      "case": "GOLD-T1B-LBRACKET",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1B-LBRACKET-r3-1784839852705",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0753915,
+      "tokens": {
+        "in": 8,
+        "out": 1376,
+        "cacheRead": 26878,
+        "cacheWrite": 4402
+      },
+      "toolCalls": 3,
+      "executes": 1,
+      "latencySec": 30.2
+    },
+    {
+      "case": "GOLD-T2B-FLANGE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2B-FLANGE-r1-1784839886051",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.13426825,
+      "tokens": {
+        "in": 10,
+        "out": 3072,
+        "cacheRead": 34599,
+        "cacheWrite": 6419
+      },
+      "toolCalls": 4,
+      "executes": 2,
+      "latencySec": 56
+    },
+    {
+      "case": "GOLD-T2B-FLANGE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2B-FLANGE-r2-1784839945004",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.1026745,
+      "tokens": {
+        "in": 8,
+        "out": 2198,
+        "cacheRead": 27094,
+        "cacheWrite": 5462
+      },
+      "toolCalls": 3,
+      "executes": 1,
+      "latencySec": 41.1
+    },
+    {
+      "case": "GOLD-T2B-FLANGE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2B-FLANGE-r3-1784839989035",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.071738,
+      "tokens": {
+        "in": 8,
+        "out": 1192,
+        "cacheRead": 26796,
+        "cacheWrite": 4560
+      },
+      "toolCalls": 3,
+      "executes": 1,
+      "latencySec": 26.3
+    },
+    {
+      "case": "GOLD-T3B-DRILLBLOCK",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3B-DRILLBLOCK-r1-1784840019115",
+      "passed": 10,
+      "total": 10,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.10235849999999999,
+      "tokens": {
+        "in": 10,
+        "out": 2054,
+        "cacheRead": 36192,
+        "cacheWrite": 5258
+      },
+      "toolCalls": 4,
+      "executes": 2,
+      "latencySec": 37.2
+    },
+    {
+      "case": "GOLD-T3B-DRILLBLOCK",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3B-DRILLBLOCK-r2-1784840059287",
+      "passed": 10,
+      "total": 10,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.12421750000000001,
+      "tokens": {
+        "in": 12,
+        "out": 2582,
+        "cacheRead": 45640,
+        "cacheWrite": 5886
+      },
+      "toolCalls": 5,
+      "executes": 3,
+      "latencySec": 41.1
+    },
+    {
+      "case": "GOLD-T3B-DRILLBLOCK",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3B-DRILLBLOCK-r3-1784840103386",
+      "passed": 10,
+      "total": 10,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.13063725,
+      "tokens": {
+        "in": 14,
+        "out": 2277,
+        "cacheRead": 56397,
+        "cacheWrite": 7271
+      },
+      "toolCalls": 7,
+      "executes": 3,
+      "latencySec": 45.8
+    },
+    {
+      "case": "GOLD-T4-GEARPLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-GEARPLATE-r1-1784840152248",
+      "passed": 15,
+      "total": 15,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.25808075,
+      "tokens": {
+        "in": 16,
+        "out": 5803,
+        "cacheRead": 79164,
+        "cacheWrite": 11735
+      },
+      "toolCalls": 8,
+      "executes": 3,
+      "latencySec": 92.9
+    },
+    {
+      "case": "GOLD-T4-GEARPLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-GEARPLATE-r2-1784840248212",
+      "passed": 15,
+      "total": 15,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.17814200000000002,
+      "tokens": {
+        "in": 12,
+        "out": 3652,
+        "cacheRead": 55239,
+        "cacheWrite": 9466
+      },
+      "toolCalls": 6,
+      "executes": 2,
+      "latencySec": 62.3
+    },
+    {
+      "case": "GOLD-T4-GEARPLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-GEARPLATE-r3-1784840313601",
+      "passed": 15,
+      "total": 15,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.14815125,
+      "tokens": {
+        "in": 10,
+        "out": 2931,
+        "cacheRead": 40290,
+        "cacheWrite": 8749
+      },
+      "toolCalls": 6,
+      "executes": 2,
+      "latencySec": 52.2
+    },
+    {
+      "case": "GOLD-T4-ANGLEFLANGE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-ANGLEFLANGE-r1-1784840368837",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.209226,
+      "tokens": {
+        "in": 8,
+        "out": 5278,
+        "cacheRead": 34397,
+        "cacheWrite": 9606
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 82.9
+    },
+    {
+      "case": "GOLD-T4-ANGLEFLANGE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-ANGLEFLANGE-r2-1784840454737",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.25107425,
+      "tokens": {
+        "in": 10,
+        "out": 6325,
+        "cacheRead": 50761,
+        "cacheWrite": 10803
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 97.6
+    },
+    {
+      "case": "GOLD-T4-ANGLEFLANGE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-ANGLEFLANGE-r3-1784840555319",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.21958224999999998,
+      "tokens": {
+        "in": 12,
+        "out": 5130,
+        "cacheRead": 58682,
+        "cacheWrite": 9909
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 83.9
+    }
+  ],
+  "perCase": {
+    "GOLD-T0-BOX": {
+      "reps": 3,
+      "means": {
+        "passed": 3,
+        "total": 3,
+        "costUsd": 0.033,
+        "tokensIn": 6,
+        "tokensOut": 334.667,
+        "tokensCacheRead": 17503.333,
+        "tokensCacheWrite": 2584,
+        "toolCalls": 2,
+        "executes": 1,
+        "latencySec": 13.7
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T1-PLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 5,
+        "total": 5,
+        "costUsd": 0.054,
+        "tokensIn": 8,
+        "tokensOut": 750.333,
+        "tokensCacheRead": 25383.667,
+        "tokensCacheWrite": 3646,
+        "toolCalls": 3.333,
+        "executes": 1.333,
+        "latencySec": 19.467
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T2-POCKET-PLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 9,
+        "total": 9,
+        "costUsd": 0.092,
+        "tokensIn": 10.667,
+        "tokensOut": 1472,
+        "tokensCacheRead": 38069,
+        "tokensCacheWrite": 5721.333,
+        "toolCalls": 6,
+        "executes": 1.667,
+        "latencySec": 30.333
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T3-BEARING-HOUSING": {
+      "reps": 3,
+      "means": {
+        "passed": 11,
+        "total": 11,
+        "costUsd": 0.251,
+        "tokensIn": 11.333,
+        "tokensOut": 6183,
+        "tokensCacheRead": 58197.333,
+        "tokensCacheWrite": 10750,
+        "toolCalls": 5.333,
+        "executes": 2,
+        "latencySec": 101.5
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T1B-LBRACKET": {
+      "reps": 3,
+      "means": {
+        "passed": 7,
+        "total": 7,
+        "costUsd": 0.084,
+        "tokensIn": 9.333,
+        "tokensOut": 1533.333,
+        "tokensCacheRead": 32906.333,
+        "tokensCacheWrite": 4667.667,
+        "toolCalls": 3.667,
+        "executes": 1.667,
+        "latencySec": 32.767
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T2B-FLANGE": {
+      "reps": 3,
+      "means": {
+        "passed": 9,
+        "total": 9,
+        "costUsd": 0.103,
+        "tokensIn": 8.667,
+        "tokensOut": 2154,
+        "tokensCacheRead": 29496.333,
+        "tokensCacheWrite": 5480.333,
+        "toolCalls": 3.333,
+        "executes": 1.333,
+        "latencySec": 41.133
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T3B-DRILLBLOCK": {
+      "reps": 3,
+      "means": {
+        "passed": 10,
+        "total": 10,
+        "costUsd": 0.119,
+        "tokensIn": 12,
+        "tokensOut": 2304.333,
+        "tokensCacheRead": 46076.333,
+        "tokensCacheWrite": 6138.333,
+        "toolCalls": 5.333,
+        "executes": 2.667,
+        "latencySec": 41.367
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T4-GEARPLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 15,
+        "total": 15,
+        "costUsd": 0.195,
+        "tokensIn": 12.667,
+        "tokensOut": 4128.667,
+        "tokensCacheRead": 58231,
+        "tokensCacheWrite": 9983.333,
+        "toolCalls": 6.667,
+        "executes": 2.333,
+        "latencySec": 69.133
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T4-ANGLEFLANGE": {
+      "reps": 3,
+      "means": {
+        "passed": 12,
+        "total": 12,
+        "costUsd": 0.227,
+        "tokensIn": 10,
+        "tokensOut": 5577.667,
+        "tokensCacheRead": 47946.667,
+        "tokensCacheWrite": 10106,
+        "toolCalls": 4.333,
+        "executes": 1.333,
+        "latencySec": 88.133
+      },
+      "overClaimRate": 0
+    }
+  }
+}

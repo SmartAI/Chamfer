@@ -36,6 +36,12 @@ CAD execution, native geometry and Fusion files, unrelated documents and project
 - Browser-local build123d execution with kernel-enforced checks
 - Live parametric sliders and STEP, STL, 3MF, or Python export
 
+## Benchmarks
+
+Chamfer's agent is measured, not asserted.
+On a held-out set of mechanical CAD tasks, it produced the same correct parts as Claude Code and Codex driving the same CAD server, at roughly 1/6 of Claude Code's cost and 1/3 of its wall-clock time, with zero over-claims.
+The full methodology, the four-agent head-to-head, and the reproducible run summaries live in [`benchmarks/`](benchmarks/) - start with the [benchmark report](benchmarks/REPORT.md) if you want to see the evidence.
+
 ## How to use it
 
 The fastest way is the hosted app at **[chamferonline.com](https://chamferonline.com)** - sign in with Google and start designing in your browser, no install. build123d runs client-side; the Autodesk Fusion connector is local-only, so use the CLI below for that.

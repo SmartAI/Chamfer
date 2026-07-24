@@ -1,0 +1,178 @@
+{
+  "arm": "pi",
+  "provider": "anthropic",
+  "model": "claude-opus-4-8",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "benchmarks/golden/v1/cases.json",
+  "cases": [
+    "GOLD-T4-GEARPLATE",
+    "GOLD-T4-ANGLEFLANGE"
+  ],
+  "reps": 3,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T19:43:55.499Z",
+  "finishedAt": "2026-07-23T19:51:26.877Z",
+  "warmup": {
+    "ok": true,
+    "attempts": [
+      {
+        "attempt": 1,
+        "missing": [],
+        "ok": true
+      }
+    ],
+    "scratch": "benchmarks/results/tmp-runs/warmup-pi-1784835835499"
+  },
+  "runs": [
+    {
+      "case": "GOLD-T4-GEARPLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-GEARPLATE-r1-1784835837964",
+      "passed": 15,
+      "total": 15,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.15378699999999998,
+      "tokens": {
+        "in": 18,
+        "out": 2783,
+        "cacheRead": 76894,
+        "cacheWrite": 7308
+      },
+      "toolCalls": 8,
+      "executes": 5,
+      "latencySec": 60.2
+    },
+    {
+      "case": "GOLD-T4-GEARPLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-GEARPLATE-r2-1784835901844",
+      "passed": 15,
+      "total": 15,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.11372525,
+      "tokens": {
+        "in": 10,
+        "out": 2197,
+        "cacheRead": 37388,
+        "cacheWrite": 6409
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 44
+    },
+    {
+      "case": "GOLD-T4-GEARPLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-GEARPLATE-r3-1784835949227",
+      "passed": 15,
+      "total": 15,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.12963075,
+      "tokens": {
+        "in": 12,
+        "out": 2537,
+        "cacheRead": 47079,
+        "cacheWrite": 6817
+      },
+      "toolCalls": 6,
+      "executes": 3,
+      "latencySec": 51.6
+    },
+    {
+      "case": "GOLD-T4-ANGLEFLANGE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-ANGLEFLANGE-r1-1784836004297",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.23189300000000002,
+      "tokens": {
+        "in": 10,
+        "out": 5673,
+        "cacheRead": 49036,
+        "cacheWrite": 10480
+      },
+      "toolCalls": 5,
+      "executes": 1,
+      "latencySec": 96.4
+    },
+    {
+      "case": "GOLD-T4-ANGLEFLANGE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-ANGLEFLANGE-r2-1784836103994",
+      "passed": 11,
+      "total": 12,
+      "checksFailed": [
+        "volume-band"
+      ],
+      "overClaim": true,
+      "costUsd": 0.20516300000000004,
+      "tokens": {
+        "in": 14,
+        "out": 4658,
+        "cacheRead": 68186,
+        "cacheWrite": 8728
+      },
+      "toolCalls": 6,
+      "executes": 4,
+      "latencySec": 85.9
+    },
+    {
+      "case": "GOLD-T4-ANGLEFLANGE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T4-ANGLEFLANGE-r3-1784836193142",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.2223015,
+      "tokens": {
+        "in": 10,
+        "out": 5332,
+        "cacheRead": 49178,
+        "cacheWrite": 10298
+      },
+      "toolCalls": 5,
+      "executes": 1,
+      "latencySec": 90.3
+    }
+  ],
+  "perCase": {
+    "GOLD-T4-GEARPLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 15,
+        "total": 15,
+        "costUsd": 0.132,
+        "tokensIn": 13.333,
+        "tokensOut": 2505.667,
+        "tokensCacheRead": 53787,
+        "tokensCacheWrite": 6844.667,
+        "toolCalls": 6.333,
+        "executes": 3.333,
+        "latencySec": 51.933
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T4-ANGLEFLANGE": {
+      "reps": 3,
+      "means": {
+        "passed": 11.667,
+        "total": 12,
+        "costUsd": 0.22,
+        "tokensIn": 11.333,
+        "tokensOut": 5221,
+        "tokensCacheRead": 55466.667,
+        "tokensCacheWrite": 9835.333,
+        "toolCalls": 5.333,
+        "executes": 2,
+        "latencySec": 90.867
+      },
+      "overClaimRate": 0.333
+    }
+  }
+}

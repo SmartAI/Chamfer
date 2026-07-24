@@ -1,0 +1,250 @@
+{
+  "arm": "pi",
+  "provider": "anthropic",
+  "model": "claude-opus-4-8",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "benchmarks/golden/v1/cases.json",
+  "cases": [
+    "GOLD-T1B-LBRACKET",
+    "GOLD-T2B-FLANGE",
+    "GOLD-T3B-DRILLBLOCK"
+  ],
+  "reps": 3,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T19:16:42.062Z",
+  "finishedAt": "2026-07-23T19:22:41.959Z",
+  "warmup": {
+    "ok": true,
+    "attempts": [
+      {
+        "attempt": 1,
+        "missing": [],
+        "ok": true
+      }
+    ],
+    "scratch": "benchmarks/results/tmp-runs/warmup-pi-1784834202064"
+  },
+  "runs": [
+    {
+      "case": "GOLD-T1B-LBRACKET",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1B-LBRACKET-r1-1784834205278",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.08067250000000001,
+      "tokens": {
+        "in": 10,
+        "out": 1364,
+        "cacheRead": 34520,
+        "cacheWrite": 4682
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 39.9
+    },
+    {
+      "case": "GOLD-T1B-LBRACKET",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1B-LBRACKET-r2-1784834248541",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.07691600000000001,
+      "tokens": {
+        "in": 10,
+        "out": 1240,
+        "cacheRead": 34307,
+        "cacheWrite": 4594
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 35.6
+    },
+    {
+      "case": "GOLD-T1B-LBRACKET",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1B-LBRACKET-r3-1784834287491",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.089833,
+      "tokens": {
+        "in": 8,
+        "out": 1793,
+        "cacheRead": 26136,
+        "cacheWrite": 5104
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 43.9
+    },
+    {
+      "case": "GOLD-T2B-FLANGE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2B-FLANGE-r1-1784834334733",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.08506074999999999,
+      "tokens": {
+        "in": 10,
+        "out": 1466,
+        "cacheRead": 34884,
+        "cacheWrite": 4947
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 38.2
+    },
+    {
+      "case": "GOLD-T2B-FLANGE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2B-FLANGE-r2-1784834376381",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0685165,
+      "tokens": {
+        "in": 8,
+        "out": 1057,
+        "cacheRead": 25503,
+        "cacheWrite": 4688
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 27.5
+    },
+    {
+      "case": "GOLD-T2B-FLANGE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2B-FLANGE-r3-1784834407236",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.07119375,
+      "tokens": {
+        "in": 10,
+        "out": 996,
+        "cacheRead": 34275,
+        "cacheWrite": 4657
+      },
+      "toolCalls": 4,
+      "executes": 1,
+      "latencySec": 30.2
+    },
+    {
+      "case": "GOLD-T3B-DRILLBLOCK",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3B-DRILLBLOCK-r1-1784834442857",
+      "passed": 10,
+      "total": 10,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.0820515,
+      "tokens": {
+        "in": 10,
+        "out": 1314,
+        "cacheRead": 34528,
+        "cacheWrite": 5102
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 35.2
+    },
+    {
+      "case": "GOLD-T3B-DRILLBLOCK",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3B-DRILLBLOCK-r2-1784834481253",
+      "passed": 10,
+      "total": 10,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.09078599999999999,
+      "tokens": {
+        "in": 12,
+        "out": 1499,
+        "cacheRead": 41977,
+        "cacheWrite": 5162
+      },
+      "toolCalls": 6,
+      "executes": 3,
+      "latencySec": 34.6
+    },
+    {
+      "case": "GOLD-T3B-DRILLBLOCK",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3B-DRILLBLOCK-r3-1784834519394",
+      "passed": 10,
+      "total": 10,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.10285674999999998,
+      "tokens": {
+        "in": 16,
+        "out": 1570,
+        "cacheRead": 58741,
+        "cacheWrite": 5465
+      },
+      "toolCalls": 7,
+      "executes": 4,
+      "latencySec": 40
+    }
+  ],
+  "perCase": {
+    "GOLD-T1B-LBRACKET": {
+      "reps": 3,
+      "means": {
+        "passed": 7,
+        "total": 7,
+        "costUsd": 0.082,
+        "tokensIn": 9.333,
+        "tokensOut": 1465.667,
+        "tokensCacheRead": 31654.333,
+        "tokensCacheWrite": 4793.333,
+        "toolCalls": 4,
+        "executes": 1,
+        "latencySec": 39.8
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T2B-FLANGE": {
+      "reps": 3,
+      "means": {
+        "passed": 9,
+        "total": 9,
+        "costUsd": 0.075,
+        "tokensIn": 9.333,
+        "tokensOut": 1173,
+        "tokensCacheRead": 31554,
+        "tokensCacheWrite": 4764,
+        "toolCalls": 4.333,
+        "executes": 1.333,
+        "latencySec": 31.967
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T3B-DRILLBLOCK": {
+      "reps": 3,
+      "means": {
+        "passed": 10,
+        "total": 10,
+        "costUsd": 0.092,
+        "tokensIn": 12.667,
+        "tokensOut": 1461,
+        "tokensCacheRead": 45082,
+        "tokensCacheWrite": 5243,
+        "toolCalls": 6,
+        "executes": 3,
+        "latencySec": 36.6
+      },
+      "overClaimRate": 0
+    }
+  }
+}

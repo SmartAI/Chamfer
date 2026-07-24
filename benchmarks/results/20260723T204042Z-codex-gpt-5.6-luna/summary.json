@@ -1,0 +1,58 @@
+{
+  "arm": "codex",
+  "model": "gpt-5.6-luna",
+  "modelFamily": "openai-responses",
+  "modelFamilyNote": "codex speaks the OpenAI Responses wire API only; it cannot run Anthropic/Claude models",
+  "reasoning": "high",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "benchmarks/golden/v1/cases.json",
+  "cases": [
+    "GOLD-T0-BOX"
+  ],
+  "reps": 1,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T20:40:42.277Z",
+  "finishedAt": "2026-07-23T20:41:41.142Z",
+  "warmup": null,
+  "runs": [
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/codex-GOLD-T0-BOX-r1-1784839242277",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": null,
+      "tokens": {
+        "in": 335177,
+        "out": 1823,
+        "cacheRead": 298496,
+        "cacheWrite": 0
+      },
+      "toolCalls": 9,
+      "executes": 1,
+      "latencySec": 56.5,
+      "costNote": "n/a (gateway has no pricing)",
+      "tokensNote": "tokens.in is cache-inclusive; cacheRead is the cached subset of it; cacheWrite not reported"
+    }
+  ],
+  "perCase": {
+    "GOLD-T0-BOX": {
+      "reps": 1,
+      "means": {
+        "passed": 3,
+        "total": 3,
+        "costUsd": null,
+        "tokensIn": 335177,
+        "tokensOut": 1823,
+        "tokensCacheRead": 298496,
+        "tokensCacheWrite": 0,
+        "toolCalls": 9,
+        "executes": 1,
+        "latencySec": 56.5
+      },
+      "overClaimRate": 0
+    }
+  }
+}

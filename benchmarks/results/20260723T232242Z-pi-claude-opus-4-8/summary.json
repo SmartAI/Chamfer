@@ -1,0 +1,65 @@
+{
+  "arm": "pi",
+  "provider": "anthropic",
+  "model": "claude-opus-4-8",
+  "thinking": "low",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "benchmarks/golden/v1/cases.json",
+  "cases": [
+    "GOLD-T0-BOX"
+  ],
+  "reps": 1,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T23:22:42.449Z",
+  "finishedAt": "2026-07-23T23:23:05.040Z",
+  "warmup": {
+    "ok": true,
+    "attempts": [
+      {
+        "attempt": 1,
+        "missing": [],
+        "ok": true
+      }
+    ],
+    "scratch": "benchmarks/results/tmp-runs/warmup-pi-1784848962449"
+  },
+  "runs": [
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r1-1784848966140",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.061781749999999996,
+      "tokens": {
+        "in": 8,
+        "out": 405,
+        "cacheRead": 18696,
+        "cacheWrite": 6763
+      },
+      "toolCalls": 3,
+      "executes": 2,
+      "latencySec": 15.7
+    }
+  ],
+  "perCase": {
+    "GOLD-T0-BOX": {
+      "reps": 1,
+      "means": {
+        "passed": 3,
+        "total": 3,
+        "costUsd": 0.062,
+        "tokensIn": 8,
+        "tokensOut": 405,
+        "tokensCacheRead": 18696,
+        "tokensCacheWrite": 6763,
+        "toolCalls": 3,
+        "executes": 2,
+        "latencySec": 15.7
+      },
+      "overClaimRate": 0
+    }
+  }
+}

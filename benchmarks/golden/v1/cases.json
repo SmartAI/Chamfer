@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "notes": "Golden agent-evaluation cases. Tiered difficulty. Every expected value is validated against at least one real reference build; do not add cases with unvalidated expectations. T2's pocket is deliberately disambiguated ('circular') - the ambiguous wording caused a unanimous square-pocket misread across agents in the 2026-07 benches, and a golden set should measure capability, not coin flips. Reference builds for every case added after the initial four (the B-series and tier 4) live in references/ (plus -defective discrimination fixtures); re-run them through the oracle to re-validate expectations after any oracle change. Volume bands for those cases are reference volume +/-2.5%. Tier 4 difficulty comes from interacting features, derived dimensions, and multi-axis geometry - never from vague wording.",
+  "cases": [
+    {
+      "id": "GOLD-T0-BOX",
+      "tier": 0,
+      "title": "Precise box (smoke)",
+      "prompt": "Create a single solid box 10 mm wide, 20 mm deep, and 30 mm tall. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [10, 20, 30], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 5990, "maxMm3": 6010 }
+      ]
+    },
+    {
+      "id": "GOLD-T1-PLATE",
+      "tier": 1,
+      "title": "Four-hole mounting plate (easy)",
+      "prompt": "Create a single-solid 60 by 40 by 6 mm mounting plate with four 6 mm through holes, each hole center 8 mm from its two nearest edges. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [60, 40, 6], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 13500, "maxMm3": 13950 },
+        { "kind": "cyl-group", "id": "holes", "radiusMm": 3, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 4 },
+        { "kind": "cyl-group", "id": "hole-offsets", "radiusMm": 3, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 4, "edgeOffsetMm": { "value": 8, "tolMm": 0.2 } }
+      ]
+    },
+    {
+      "id": "GOLD-T2-POCKET-PLATE",
+      "tier": 2,
+      "title": "CNC plate with pocket, fillets, chamfers (medium)",
+      "prompt": "Create a single-solid 120 by 80 by 12 mm CNC mounting plate with four 8.5 mm through holes 12 mm from adjacent edges, a centered circular 40 mm diameter pocket 4 mm deep, 4 mm vertical-corner fillets, and 1.5 mm outer-perimeter chamfers on the top and bottom faces. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [120, 80, 12], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 103700, "maxMm3": 109100 },
+        { "kind": "cyl-group", "id": "holes", "radiusMm": 4.25, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 2, "count": 4 },
+        { "kind": "cyl-group", "id": "hole-offsets", "radiusMm": 4.25, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 2, "count": 4, "edgeOffsetMm": { "value": 12, "tolMm": 0.2 } },
+        { "kind": "cyl-group", "id": "pocket-wall", "radiusMm": 20, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [3.5, 4.5] },
+        { "kind": "cyl-group", "id": "pocket-depth", "radiusMm": 20, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [3.8, 4.2] },
+        { "kind": "cyl-group", "id": "corner-fillets", "radiusMm": 4, "rtolMm": 0.05, "axis": "z", "minFaces": 4, "spanMm": [8, 12.1] },
+        { "kind": "inclined-planes", "id": "perimeter-chamfer", "minCount": 4, "nzRange": [0.6, 0.8], "allowCones": true }
+      ]
+    },
+    {
+      "id": "GOLD-T3-BEARING-HOUSING",
+      "tier": 3,
+      "title": "Conveyor bearing support housing (hard)",
+      "prompt": "Create the single-solid parametric industrial conveyor bearing support housing exactly as specified: a centered 180 x 110 x 16 mm base; a 24 mm thick, 110 mm wide upright with a semicircular R55 crown and bearing axis at X0/Z76; a 52 mm nominal through bearing seat; a one-sided 62 mm diameter, 5 mm deep retaining recess cut into the front face of the upright around the seat; four 11 mm through holes with 18 mm diameter, 8 mm deep top counterbores at X +/-70 and Y +/-35; four 12 mm thick triangular gussets rising 45 mm; and a vertical 5 mm diameter grease passage from the crown top down into the seat. Keep it one connected body, modeled as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [180, 110, 131], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 550000, "maxMm3": 615000 },
+        { "kind": "cyl-group", "id": "bore", "radiusMm": 26, "rtolMm": 0.1, "axis": "horizontal", "minFaces": 1 },
+        { "kind": "cyl-group", "id": "bore-height", "radiusMm": 26, "rtolMm": 0.1, "axis": "horizontal", "minFaces": 1, "centerZFromBaseMm": { "value": 76, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "recess", "radiusMm": 31, "rtolMm": 0.1, "axis": "horizontal", "minFaces": 1 },
+        { "kind": "cyl-group", "id": "mount-holes", "radiusMm": 5.5, "rtolMm": 0.1, "axis": "z", "spanMm": [7, 17], "count": 4 },
+        { "kind": "cyl-group", "id": "mount-hole-positions", "radiusMm": 5.5, "rtolMm": 0.1, "axis": "z", "spanMm": [7, 17], "count": 4, "positionFromCenterMm": { "x": 70, "y": 35, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "counterbores", "radiusMm": 9, "rtolMm": 0.1, "axis": "z", "spanMm": [6, 9.5], "count": 4 },
+        { "kind": "cyl-group", "id": "grease-passage", "radiusMm": 2.5, "rtolMm": 0.7, "axis": "z", "minFaces": 1, "nearCenterXMm": 5, "topEntryWithinMm": 15 },
+        { "kind": "inclined-planes", "id": "gussets", "minCount": 4, "nzRange": [0.2, 0.95], "minAreaMm2": 200 }
+      ]
+    },
+    {
+      "id": "GOLD-T1B-LBRACKET",
+      "tier": 1,
+      "title": "L-bracket with two holes per leg (easy)",
+      "prompt": "Create a single-solid L-bracket with two orthogonal legs: a horizontal base leg 60 mm long (X), 40 mm wide (Y), and 8 mm thick, and a vertical leg 8 mm thick (X) and 40 mm wide rising flush from the X=0 end of the base to an overall height of 50 mm, the two legs merged into one connected L-shaped solid. Drill two 6 mm diameter circular through holes vertically (along Z) through the base leg, centered 15 mm from the base's free end edge and 8 mm from each side edge; and drill two 6 mm diameter circular through holes horizontally (along X) through the vertical leg, centered 12 mm below its top edge and 8 mm from each side edge. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [60, 40, 50], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 30950, "maxMm3": 32520 },
+        { "kind": "cyl-group", "id": "base-holes", "radiusMm": 3, "rtolMm": 0.05, "axis": "z", "spanMm": [7, 9], "count": 2 },
+        { "kind": "cyl-group", "id": "base-hole-positions", "radiusMm": 3, "rtolMm": 0.05, "axis": "z", "spanMm": [7, 9], "count": 2, "positionFromCenterMm": { "x": 15, "y": 12, "tolMm": 0.2 } },
+        { "kind": "cyl-group", "id": "upright-holes", "radiusMm": 3, "rtolMm": 0.05, "axis": "x", "count": 2 },
+        { "kind": "cyl-group", "id": "upright-hole-height", "radiusMm": 3, "rtolMm": 0.05, "axis": "x", "count": 2, "centerZFromBaseMm": { "value": 38, "tolMm": 0.3 } }
+      ]
+    },
+    {
+      "id": "GOLD-T2B-FLANGE",
+      "tier": 2,
+      "title": "Circular pipe flange with boss and bolt circle (medium)",
+      "prompt": "Create a single-solid circular pipe flange, rotationally symmetric about the vertical Z axis: a 100 mm outer diameter, 10 mm thick circular disc; a concentric raised circular boss 50 mm in outer diameter extending 15 mm above the disc's top face (total part height 25 mm); a 25 mm diameter circular center bore drilled through the full 25 mm height; and four 8 mm diameter circular bolt holes drilled vertically through the 10 mm disc thickness, equally spaced at 90 degrees on a 75 mm diameter bolt circle with one bolt hole centered on the +X axis (so the holes sit on +X, +Y, -X, -Y). Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [100, 100, 25], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 91370, "maxMm3": 96050 },
+        { "kind": "cyl-group", "id": "disc-od", "radiusMm": 50, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [9.5, 10.5] },
+        { "kind": "cyl-group", "id": "boss-od", "radiusMm": 25, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [14.5, 15.5] },
+        { "kind": "cyl-group", "id": "center-bore", "radiusMm": 12.5, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 1 },
+        { "kind": "cyl-group", "id": "bolt-holes", "radiusMm": 4, "rtolMm": 0.05, "axis": "z", "spanMm": [9, 11], "count": 4 },
+        { "kind": "cyl-group", "id": "bolt-holes-x", "radiusMm": 4, "rtolMm": 0.05, "axis": "z", "spanMm": [9, 11], "count": 2, "positionFromCenterMm": { "x": 37.5, "y": 0, "tolMm": 0.2 } },
+        { "kind": "cyl-group", "id": "bolt-holes-y", "radiusMm": 4, "rtolMm": 0.05, "axis": "z", "spanMm": [9, 11], "count": 2, "positionFromCenterMm": { "x": 0, "y": 37.5, "tolMm": 0.2 } }
+      ]
+    },
+    {
+      "id": "GOLD-T3B-DRILLBLOCK",
+      "tier": 3,
+      "title": "Manifold block with cross-drilled passages, counterbores, chamfers (hard)",
+      "prompt": "Create a single-solid rectangular manifold block, 80 mm long (X) by 50 mm wide (Y) by 40 mm tall (Z), with two cross-drilled intersecting circular passages: a 12 mm diameter main passage drilled along the X axis straight through the full 80 mm length, centered at mid-width (Y = 0) and 20 mm above the bottom face; and a 10 mm diameter blind passage drilled vertically down from the center of the top face to a depth of 30 mm, so it crosses and intersects the main passage. Add four 7 mm diameter circular mounting holes drilled vertically through the full 40 mm height at X = +/-30 mm and Y = +/-17 mm from the block center, each with an 11 mm diameter, 6 mm deep flat-bottomed counterbore cut into the top face; and 2 mm chamfers on the four straight outer perimeter edges of the top face. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [80, 50, 40], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 137890, "maxMm3": 144955 },
+        { "kind": "cyl-group", "id": "main-passage", "radiusMm": 6, "rtolMm": 0.05, "axis": "x", "minFaces": 1 },
+        { "kind": "cyl-group", "id": "main-passage-height", "radiusMm": 6, "rtolMm": 0.05, "axis": "x", "minFaces": 1, "centerZFromBaseMm": { "value": 20, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "vertical-passage", "radiusMm": 5, "rtolMm": 0.05, "axis": "z", "topEntryWithinMm": 1, "count": 1, "positionFromCenterMm": { "x": 0, "y": 0, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "mount-holes", "radiusMm": 3.5, "rtolMm": 0.05, "axis": "z", "spanMm": [30, 41], "count": 4 },
+        { "kind": "cyl-group", "id": "mount-hole-positions", "radiusMm": 3.5, "rtolMm": 0.05, "axis": "z", "spanMm": [30, 41], "count": 4, "positionFromCenterMm": { "x": 30, "y": 17, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "counterbores", "radiusMm": 5.5, "rtolMm": 0.05, "axis": "z", "spanMm": [5, 7], "count": 4 },
+        { "kind": "inclined-planes", "id": "top-chamfers", "minCount": 4, "nzRange": [0.6, 0.8], "minAreaMm2": 100 }
+      ]
+    },
+    {
+      "id": "GOLD-T4-GEARPLATE",
+      "tier": 4,
+      "title": "Gearbox end plate: stepped bore, bolt+dowel circles, o-ring groove, filleted side cutout (expert)",
+      "prompt": "Create a single-solid circular gearbox end plate, 140 mm outer diameter and 15 mm thick, centered on the origin with its bottom face on Z = 0. Features: (1) a central stepped bearing bore: a 47 mm diameter circular seat bored 9 mm deep from the top face, and below it a concentric circular through bore to the bottom face whose diameter is sized to leave a flat annular shoulder exactly 5 mm wide all around at the bottom of the seat; (2) six 9 mm diameter circular bolt through holes equally spaced on a 120 mm diameter bolt circle, with one hole centered on the +Y axis; (3) two 5 mm diameter circular dowel through holes on a 100 mm diameter pitch circle, one at 30 degrees and one at 135 degrees counterclockwise from the +X axis; (4) an annular o-ring groove cut 2.5 mm deep into the bottom face, with 60 mm inner diameter and 4 mm radial width; (5) a rectangular side cutout through the full thickness, open to the outer rim on the -Y side, bounded by side walls at X = +10 mm and X = +40 mm and an inner wall at Y = -45 mm, with its two inner vertical corners filleted at 6 mm radius. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [140, 140, 15], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 187080, "maxMm3": 196670 },
+        { "kind": "cyl-group", "id": "plate-od", "radiusMm": 70, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [14.5, 15.5] },
+        { "kind": "cyl-group", "id": "seat-bore", "radiusMm": 23.5, "rtolMm": 0.05, "axis": "z", "spanMm": [8.5, 9.5], "count": 1, "positionFromCenterMm": { "x": 0, "y": 0, "tolMm": 0.2 } },
+        { "kind": "cyl-group", "id": "through-bore", "radiusMm": 18.5, "rtolMm": 0.05, "axis": "z", "spanMm": [5.5, 6.5], "count": 1, "positionFromCenterMm": { "x": 0, "y": 0, "tolMm": 0.2 } },
+        { "kind": "cyl-group", "id": "bolt-holes", "radiusMm": 4.5, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 6 },
+        { "kind": "cyl-group", "id": "bolt-circle", "radiusMm": 4.5, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 2, "positionFromCenterMm": { "x": 0, "y": 60, "tolMm": 0.25 } },
+        { "kind": "cyl-group", "id": "dowels", "radiusMm": 2.5, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 2 },
+        { "kind": "cyl-group", "id": "dowel-30deg", "radiusMm": 2.5, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 1, "positionFromCenterMm": { "x": 43.3, "y": 25, "tolMm": 0.25 } },
+        { "kind": "cyl-group", "id": "dowel-135deg", "radiusMm": 2.5, "rtolMm": 0.05, "axis": "z", "throughZ": true, "throughAllowMm": 1.5, "count": 1, "positionFromCenterMm": { "x": 35.36, "y": 35.36, "tolMm": 0.25 } },
+        { "kind": "cyl-group", "id": "groove-inner", "radiusMm": 30, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [2, 3] },
+        { "kind": "cyl-group", "id": "groove-outer", "radiusMm": 34, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [2, 3] },
+        { "kind": "cyl-group", "id": "cutout-fillet-a", "radiusMm": 6, "rtolMm": 0.05, "axis": "z", "spanMm": [14.5, 15.5], "count": 1, "positionFromCenterMm": { "x": 16, "y": 51, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "cutout-fillet-b", "radiusMm": 6, "rtolMm": 0.05, "axis": "z", "spanMm": [14.5, 15.5], "count": 1, "positionFromCenterMm": { "x": 34, "y": 51, "tolMm": 0.3 } }
+      ]
+    },
+    {
+      "id": "GOLD-T4-ANGLEFLANGE",
+      "tier": 4,
+      "title": "45-degree flanged adapter, two bolt patterns on non-parallel planes (expert)",
+      "prompt": "Create a single-solid 45-degree flanged adapter, built around a barrel axis that starts at the origin and runs at exactly 45 degrees in the XZ plane (unit direction (+0.7071, 0, +0.7071)). Flange A: a 90 mm outer diameter, 12 mm thick circular flange centered at the origin with its flat bottom face on the Z = 0 plane and its normal along Z. Barrel: a straight 40 mm outer diameter circular barrel running along the barrel axis from flange A out to flange B; trim any barrel material below Z = 0 so the adapter's bottom remains a single flat face. Flange B: a 70 mm outer diameter circular flange normal to the barrel axis, its back face 60 mm and its front face 70 mm from the origin measured along the barrel axis. Bore: a 28 mm diameter circular bore along the barrel axis straight through the entire assembly, entering at flange B's front face and exiting through flange A's bottom face. Flange A carries four 9 mm diameter circular bolt holes drilled along Z through its 12 mm thickness, on a 74 mm diameter bolt circle at 45, 135, 225 and 315 degrees from +X (this keeps them clear of the barrel). Flange B carries four 7 mm diameter circular bolt holes drilled along the barrel axis through its 10 mm thickness, on a 54 mm diameter bolt circle, two holes centered on the +Y and -Y directions and two in the XZ plane. Model it as clean parametric build123d Python with named dimension variables. When the part is complete and verified, export it as STEP to exactly this path: {EXPORT_PATH}",
+      "checks": [
+        { "kind": "body-count", "expected": 1 },
+        { "kind": "dimensions", "expectedMm": [119.246, 90, 74.246], "tolMm": 0.05 },
+        { "kind": "volume-band", "minMm3": 118125, "maxMm3": 124175 },
+        { "kind": "cyl-group", "id": "flange-a-od", "radiusMm": 45, "rtolMm": 0.05, "axis": "z", "minFaces": 1, "spanMm": [11, 13] },
+        { "kind": "cyl-group", "id": "flange-a-holes", "radiusMm": 4.5, "rtolMm": 0.05, "axis": "z", "spanMm": [11, 13], "count": 4 },
+        { "kind": "cyl-group", "id": "flange-a-holes-near", "radiusMm": 4.5, "rtolMm": 0.05, "axis": "z", "spanMm": [11, 13], "count": 2, "positionFromCenterMm": { "x": 11.54, "y": 26.16, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "flange-a-holes-far", "radiusMm": 4.5, "rtolMm": 0.05, "axis": "z", "spanMm": [11, 13], "count": 2, "positionFromCenterMm": { "x": 40.79, "y": 26.16, "tolMm": 0.3 } },
+        { "kind": "cyl-group", "id": "barrel-od", "radiusMm": 20, "rtolMm": 0.1, "axis": "any", "minFaces": 1 },
+        { "kind": "cyl-group", "id": "flange-b-od", "radiusMm": 35, "rtolMm": 0.1, "axis": "any", "minFaces": 1 },
+        { "kind": "cyl-group", "id": "bore", "radiusMm": 14, "rtolMm": 0.1, "axis": "any", "minFaces": 1 },
+        { "kind": "cyl-group", "id": "flange-b-holes", "radiusMm": 3.5, "rtolMm": 0.1, "axis": "any", "minFaces": 4 },
+        { "kind": "inclined-planes", "id": "flange-b-faces", "minCount": 2, "nzRange": [0.65, 0.76], "minAreaMm2": 500 }
+      ]
+    }
+  ]
+}

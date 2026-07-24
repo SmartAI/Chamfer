@@ -1,0 +1,324 @@
+{
+  "arm": "pi",
+  "provider": "anthropic",
+  "model": "claude-opus-4-8",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "../../../../private/tmp/claude-501/-Users-min-Workspace-Chamfer--claude-worktrees-compassionate-lamport-caf9ed/cb31bc19-3e73-47e4-9597-73843f410fe7/scratchpad/dev-cases-frozen-4.json",
+  "cases": [
+    "GOLD-T0-BOX",
+    "GOLD-T1-PLATE",
+    "GOLD-T2-POCKET-PLATE",
+    "GOLD-T3-BEARING-HOUSING"
+  ],
+  "reps": 3,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T19:04:54.583Z",
+  "finishedAt": "2026-07-23T19:15:38.547Z",
+  "warmup": {
+    "ok": true,
+    "attempts": [
+      {
+        "attempt": 1,
+        "missing": [],
+        "ok": true
+      }
+    ],
+    "scratch": "benchmarks/results/tmp-runs/warmup-pi-1784833494584"
+  },
+  "runs": [
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r1-1784833497174",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.036367,
+      "tokens": {
+        "in": 8,
+        "out": 400,
+        "cacheRead": 23104,
+        "cacheWrite": 2364
+      },
+      "toolCalls": 3,
+      "executes": 2,
+      "latencySec": 15.3
+    },
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r2-1784833515725",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.03691075,
+      "tokens": {
+        "in": 8,
+        "out": 417,
+        "cacheRead": 23104,
+        "cacheWrite": 2383
+      },
+      "toolCalls": 3,
+      "executes": 2,
+      "latencySec": 15
+    },
+    {
+      "case": "GOLD-T0-BOX",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T0-BOX-r3-1784833533711",
+      "passed": 3,
+      "total": 3,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.03657775,
+      "tokens": {
+        "in": 8,
+        "out": 407,
+        "cacheRead": 23088,
+        "cacheWrite": 2371
+      },
+      "toolCalls": 3,
+      "executes": 2,
+      "latencySec": 14
+    },
+    {
+      "case": "GOLD-T1-PLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1-PLATE-r1-1784833550772",
+      "passed": 5,
+      "total": 5,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.061063000000000006,
+      "tokens": {
+        "in": 10,
+        "out": 774,
+        "cacheRead": 31801,
+        "cacheWrite": 4122
+      },
+      "toolCalls": 5,
+      "executes": 2,
+      "latencySec": 29.4
+    },
+    {
+      "case": "GOLD-T1-PLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1-PLATE-r2-1784833584225",
+      "passed": 5,
+      "total": 5,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.064343,
+      "tokens": {
+        "in": 12,
+        "out": 865,
+        "cacheRead": 38166,
+        "cacheWrite": 3772
+      },
+      "toolCalls": 6,
+      "executes": 3,
+      "latencySec": 31.1
+    },
+    {
+      "case": "GOLD-T1-PLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T1-PLATE-r3-1784833619552",
+      "passed": 5,
+      "total": 5,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.059473250000000005,
+      "tokens": {
+        "in": 10,
+        "out": 729,
+        "cacheRead": 31034,
+        "cacheWrite": 4109
+      },
+      "toolCalls": 5,
+      "executes": 1,
+      "latencySec": 33.7
+    },
+    {
+      "case": "GOLD-T2-POCKET-PLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2-POCKET-PLATE-r1-1784833657724",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.12343874999999999,
+      "tokens": {
+        "in": 12,
+        "out": 2472,
+        "cacheRead": 44520,
+        "cacheWrite": 6291
+      },
+      "toolCalls": 6,
+      "executes": 3,
+      "latencySec": 62.7
+    },
+    {
+      "case": "GOLD-T2-POCKET-PLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2-POCKET-PLATE-r2-1784833734101",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.11607575,
+      "tokens": {
+        "in": 12,
+        "out": 2234,
+        "cacheRead": 43694,
+        "cacheWrite": 6131
+      },
+      "toolCalls": 6,
+      "executes": 3,
+      "latencySec": 50.8
+    },
+    {
+      "case": "GOLD-T2-POCKET-PLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T2-POCKET-PLATE-r3-1784833790391",
+      "passed": 9,
+      "total": 9,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.13615075,
+      "tokens": {
+        "in": 18,
+        "out": 2385,
+        "cacheRead": 69534,
+        "cacheWrite": 6667
+      },
+      "toolCalls": 8,
+      "executes": 3,
+      "latencySec": 69.2
+    },
+    {
+      "case": "GOLD-T3-BEARING-HOUSING",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3-BEARING-HOUSING-r1-1784833864685",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.17530050000000003,
+      "tokens": {
+        "in": 14,
+        "out": 3805,
+        "cacheRead": 60236,
+        "cacheWrite": 7998
+      },
+      "toolCalls": 7,
+      "executes": 4,
+      "latencySec": 79.6
+    },
+    {
+      "case": "GOLD-T3-BEARING-HOUSING",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3-BEARING-HOUSING-r2-1784833946608",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.23044325,
+      "tokens": {
+        "in": 16,
+        "out": 5315,
+        "cacheRead": 79039,
+        "cacheWrite": 9275
+      },
+      "toolCalls": 7,
+      "executes": 4,
+      "latencySec": 94.5
+    },
+    {
+      "case": "GOLD-T3-BEARING-HOUSING",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/pi-GOLD-T3-BEARING-HOUSING-r3-1784834044648",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.21620300000000003,
+      "tokens": {
+        "in": 14,
+        "out": 5083,
+        "cacheRead": 65966,
+        "cacheWrite": 8972
+      },
+      "toolCalls": 6,
+      "executes": 3,
+      "latencySec": 90.6
+    }
+  ],
+  "perCase": {
+    "GOLD-T0-BOX": {
+      "reps": 3,
+      "means": {
+        "passed": 3,
+        "total": 3,
+        "costUsd": 0.037,
+        "tokensIn": 8,
+        "tokensOut": 408,
+        "tokensCacheRead": 23098.667,
+        "tokensCacheWrite": 2372.667,
+        "toolCalls": 3,
+        "executes": 2,
+        "latencySec": 14.767
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T1-PLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 5,
+        "total": 5,
+        "costUsd": 0.062,
+        "tokensIn": 10.667,
+        "tokensOut": 789.333,
+        "tokensCacheRead": 33667,
+        "tokensCacheWrite": 4001,
+        "toolCalls": 5.333,
+        "executes": 2,
+        "latencySec": 31.4
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T2-POCKET-PLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 9,
+        "total": 9,
+        "costUsd": 0.125,
+        "tokensIn": 14,
+        "tokensOut": 2363.667,
+        "tokensCacheRead": 52582.667,
+        "tokensCacheWrite": 6363,
+        "toolCalls": 6.667,
+        "executes": 3,
+        "latencySec": 60.9
+      },
+      "overClaimRate": 0
+    },
+    "GOLD-T3-BEARING-HOUSING": {
+      "reps": 3,
+      "means": {
+        "passed": 11,
+        "total": 11,
+        "costUsd": 0.207,
+        "tokensIn": 14.667,
+        "tokensOut": 4734.333,
+        "tokensCacheRead": 68413.667,
+        "tokensCacheWrite": 8748.333,
+        "toolCalls": 6.667,
+        "executes": 3.667,
+        "latencySec": 88.233
+      },
+      "overClaimRate": 0
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "settings": {
+    "toolPrefix": "none",
+    "disableProxyTool": true,
+    "requestTimeoutMs": 600000
+  },
+  "mcpServers": {
+    "b123": {
+      "command": "uv",
+      "args": ["tool", "run", "--python", "3.12", "build123d-mcp==0.3.79"],
+      "lifecycle": "keep-alive",
+      "directTools": ["execute", "last_error", "inspect_part", "measure", "render_view", "export"]
+    }
+  }
+}

@@ -1,0 +1,390 @@
+{
+  "arm": "claude",
+  "model": "claude-opus-4-8",
+  "armDir": "benchmarks/arms/v0",
+  "casesFile": "benchmarks/private/testset-v1/cases.json",
+  "cases": [
+    "TEST-T0-STEPSPACER",
+    "TEST-T1-SLOTPLATE",
+    "TEST-T2-PULLEY",
+    "TEST-T3-PILLOWBLOCK",
+    "TEST-T4-VALVEBLOCK"
+  ],
+  "reps": 3,
+  "timeoutMin": 22,
+  "startedAt": "2026-07-23T21:32:46.061Z",
+  "finishedAt": "2026-07-23T22:11:37.761Z",
+  "warmup": null,
+  "runs": [
+    {
+      "case": "TEST-T0-STEPSPACER",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T0-STEPSPACER-r1-1784842366061",
+      "passed": 6,
+      "total": 6,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.7015952499999999,
+      "tokens": {
+        "in": 2965,
+        "out": 5121,
+        "cacheRead": 255253,
+        "cacheWrite": 68979
+      },
+      "toolCalls": 6,
+      "executes": 2,
+      "latencySec": 88.2
+    },
+    {
+      "case": "TEST-T0-STEPSPACER",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T0-STEPSPACER-r2-1784842457517",
+      "passed": 6,
+      "total": 6,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.3054645,
+      "tokens": {
+        "in": 2834,
+        "out": 1697,
+        "cacheRead": 229064,
+        "cacheWrite": 21494
+      },
+      "toolCalls": 5,
+      "executes": 1,
+      "latencySec": 39.5
+    },
+    {
+      "case": "TEST-T0-STEPSPACER",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T0-STEPSPACER-r3-1784842500026",
+      "passed": 6,
+      "total": 6,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.31348425,
+      "tokens": {
+        "in": 2834,
+        "out": 1797,
+        "cacheRead": 229841,
+        "cacheWrite": 22315
+      },
+      "toolCalls": 5,
+      "executes": 1,
+      "latencySec": 37
+    },
+    {
+      "case": "TEST-T1-SLOTPLATE",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T1-SLOTPLATE-r1-1784842540136",
+      "passed": 5,
+      "total": 7,
+      "checksFailed": [
+        "side-holes",
+        "side-hole-positions"
+      ],
+      "overClaim": true,
+      "costUsd": 0.360384,
+      "tokens": {
+        "in": 2965,
+        "out": 2175,
+        "cacheRead": 295868,
+        "cacheWrite": 22920
+      },
+      "toolCalls": 6,
+      "executes": 1,
+      "latencySec": 46
+    },
+    {
+      "case": "TEST-T1-SLOTPLATE",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T1-SLOTPLATE-r2-1784842589472",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.32534650000000004,
+      "tokens": {
+        "in": 2834,
+        "out": 2171,
+        "cacheRead": 230753,
+        "cacheWrite": 22644
+      },
+      "toolCalls": 5,
+      "executes": 1,
+      "latencySec": 48.5
+    },
+    {
+      "case": "TEST-T1-SLOTPLATE",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T1-SLOTPLATE-r3-1784842641065",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.36502799999999996,
+      "tokens": {
+        "in": 2965,
+        "out": 2255,
+        "cacheRead": 295781,
+        "cacheWrite": 23350
+      },
+      "toolCalls": 6,
+      "executes": 1,
+      "latencySec": 54.8
+    },
+    {
+      "case": "TEST-T2-PULLEY",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T2-PULLEY-r1-1784842699192",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.6766197500000001,
+      "tokens": {
+        "in": 2967,
+        "out": 10613,
+        "cacheRead": 378282,
+        "cacheWrite": 33171
+      },
+      "toolCalls": 8,
+      "executes": 1,
+      "latencySec": 166.5
+    },
+    {
+      "case": "TEST-T2-PULLEY",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T2-PULLEY-r2-1784842868719",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.9997527499999999,
+      "tokens": {
+        "in": 4145,
+        "out": 15206,
+        "cacheRead": 691343,
+        "cacheWrite": 40513
+      },
+      "toolCalls": 14,
+      "executes": 3,
+      "latencySec": 237.4
+    },
+    {
+      "case": "TEST-T2-PULLEY",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T2-PULLEY-r3-1784843109196",
+      "passed": 7,
+      "total": 7,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.46471375,
+      "tokens": {
+        "in": 2965,
+        "out": 5559,
+        "cacheRead": 300290,
+        "cacheWrite": 25723
+      },
+      "toolCalls": 6,
+      "executes": 2,
+      "latencySec": 85.5
+    },
+    {
+      "case": "TEST-T3-PILLOWBLOCK",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T3-PILLOWBLOCK-r1-1784843197755",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.89739225,
+      "tokens": {
+        "in": 2969,
+        "out": 14233,
+        "cacheRead": 509682,
+        "cacheWrite": 43501
+      },
+      "toolCalls": 11,
+      "executes": 3,
+      "latencySec": 215.9
+    },
+    {
+      "case": "TEST-T3-PILLOWBLOCK",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T3-PILLOWBLOCK-r2-1784843416676",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.8840307499999998,
+      "tokens": {
+        "in": 3727,
+        "out": 16655,
+        "cacheRead": 415304,
+        "cacheWrite": 38619
+      },
+      "toolCalls": 7,
+      "executes": 2,
+      "latencySec": 251.7
+    },
+    {
+      "case": "TEST-T3-PILLOWBLOCK",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T3-PILLOWBLOCK-r3-1784843671727",
+      "passed": 11,
+      "total": 11,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 0.879594,
+      "tokens": {
+        "in": 3731,
+        "out": 14273,
+        "cacheRead": 544953,
+        "cacheWrite": 37062
+      },
+      "toolCalls": 10,
+      "executes": 4,
+      "latencySec": 209.6
+    },
+    {
+      "case": "TEST-T4-VALVEBLOCK",
+      "rep": 1,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T4-VALVEBLOCK-r1-1784843884677",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 1.18792975,
+      "tokens": {
+        "in": 3865,
+        "out": 17863,
+        "cacheRead": 842872,
+        "cacheWrite": 48095
+      },
+      "toolCalls": 13,
+      "executes": 5,
+      "latencySec": 259.9
+    },
+    {
+      "case": "TEST-T4-VALVEBLOCK",
+      "rep": 2,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T4-VALVEBLOCK-r2-1784844147964",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 1.044737,
+      "tokens": {
+        "in": 3730,
+        "out": 18875,
+        "cacheRead": 569974,
+        "cacheWrite": 43076
+      },
+      "toolCalls": 10,
+      "executes": 3,
+      "latencySec": 268
+    },
+    {
+      "case": "TEST-T4-VALVEBLOCK",
+      "rep": 3,
+      "runDir": "benchmarks/results/tmp-runs/claude-TEST-T4-VALVEBLOCK-r3-1784844419538",
+      "passed": 12,
+      "total": 12,
+      "checksFailed": [],
+      "overClaim": false,
+      "costUsd": 1.09508875,
+      "tokens": {
+        "in": 2973,
+        "out": 19246,
+        "cacheRead": 658185,
+        "cacheWrite": 43197
+      },
+      "toolCalls": 11,
+      "executes": 5,
+      "latencySec": 274.7
+    }
+  ],
+  "perCase": {
+    "TEST-T0-STEPSPACER": {
+      "reps": 3,
+      "means": {
+        "passed": 6,
+        "total": 6,
+        "costUsd": 0.44,
+        "tokensIn": 2877.667,
+        "tokensOut": 2871.667,
+        "tokensCacheRead": 238052.667,
+        "tokensCacheWrite": 37596,
+        "toolCalls": 5.333,
+        "executes": 1.333,
+        "latencySec": 54.9
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T1-SLOTPLATE": {
+      "reps": 3,
+      "means": {
+        "passed": 6.333,
+        "total": 7,
+        "costUsd": 0.35,
+        "tokensIn": 2921.333,
+        "tokensOut": 2200.333,
+        "tokensCacheRead": 274134,
+        "tokensCacheWrite": 22971.333,
+        "toolCalls": 5.667,
+        "executes": 1,
+        "latencySec": 49.767
+      },
+      "overClaimRate": 0.333
+    },
+    "TEST-T2-PULLEY": {
+      "reps": 3,
+      "means": {
+        "passed": 7,
+        "total": 7,
+        "costUsd": 0.714,
+        "tokensIn": 3359,
+        "tokensOut": 10459.333,
+        "tokensCacheRead": 456638.333,
+        "tokensCacheWrite": 33135.667,
+        "toolCalls": 9.333,
+        "executes": 2,
+        "latencySec": 163.133
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T3-PILLOWBLOCK": {
+      "reps": 3,
+      "means": {
+        "passed": 11,
+        "total": 11,
+        "costUsd": 0.887,
+        "tokensIn": 3475.667,
+        "tokensOut": 15053.667,
+        "tokensCacheRead": 489979.667,
+        "tokensCacheWrite": 39727.333,
+        "toolCalls": 9.333,
+        "executes": 3,
+        "latencySec": 225.733
+      },
+      "overClaimRate": 0
+    },
+    "TEST-T4-VALVEBLOCK": {
+      "reps": 3,
+      "means": {
+        "passed": 12,
+        "total": 12,
+        "costUsd": 1.109,
+        "tokensIn": 3522.667,
+        "tokensOut": 18661.333,
+        "tokensCacheRead": 690343.667,
+        "tokensCacheWrite": 44789.333,
+        "toolCalls": 11.333,
+        "executes": 4.333,
+        "latencySec": 267.533
+      },
+      "overClaimRate": 0
+    }
+  }
+}

@@ -1,0 +1,219 @@
+#!/usr/bin/env node
+// One pi-coding-agent attempt on a golden benchmark case (the "pi" arm).
+//
+// Isolation: PI_CODING_AGENT_DIR points at benchmarks/results/.pi-home (created
+// at runtime with pi-mcp-adapter; anthropic baseUrl override only when
+// ANTHROPIC_BASE_URL is set). cwd is a fresh per-run dir whose .mcp.json is a
+// copy of the arm's mcp.json - build123d-mcp sandboxes export paths to the
+// server cwd and the adapter spawns the server from pi's cwd, so pi must run
+// FROM the run dir. The agent must export STEP to <runDir>/design.step; the
+// oracle grades it.
+//
+// Usage:
+//   node benchmarks/runners/piRun.mjs --case=GOLD-T0-BOX [--model=...]
+//     [--provider=anthropic] [--arm-dir=benchmarks/arms/v0]
+//     [--cases-file=benchmarks/golden/v1/cases.json] [--timeout-min=22]
+//     [--run-dir=<dir>]
+// Credentials: ANTHROPIC_API_KEY (required), ANTHROPIC_BASE_URL (optional),
+// both strictly from the process environment.
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  arg,
+  buildMetrics,
+  DEFAULT_ARM_DIR,
+  DEFAULT_CASES_FILE,
+  detectOverClaim,
+  ensurePiHome,
+  finishRun,
+  loadCase,
+  makeRunDir,
+  requireCreds,
+  runOracle,
+} from "./lib.mjs";
+
+const caseId = arg("case", "GOLD-T0-BOX");
+const timeoutMin = Number(arg("timeout-min", process.env.CHAMFER_BENCH_TIMEOUT_MIN || "22"));
+const provider = arg("provider", process.env.CHAMFER_BENCH_PROVIDER || "anthropic");
+const model = arg("model", process.env.CHAMFER_BENCH_MODEL || "claude-opus-4-8");
+const armDir = path.resolve(arg("arm-dir", DEFAULT_ARM_DIR));
+const casesFile = path.resolve(arg("cases-file", DEFAULT_CASES_FILE));
+
+requireCreds();
+const kase = loadCase(casesFile, caseId);
+
+const runDirArg = arg("run-dir", "");
+const runDir = runDirArg ? path.resolve(runDirArg) : makeRunDir("pi", caseId);
+const thinking = arg("thinking", process.env.CHAMFER_BENCH_THINKING || "");
+fs.mkdirSync(runDir, { recursive: true });
+fs.copyFileSync(path.join(armDir, "mcp.json"), path.join(runDir, ".mcp.json"));
+const exportPath = path.join(runDir, "design.step");
+const prompt = kase.prompt.replaceAll("{EXPORT_PATH}", exportPath);
+const systemPromptPath = path.join(armDir, "system-prompt.txt");
+const piHome = ensurePiHome();
+
+function parsePiStream(stdout, proc) {
+  const lines = (stdout || "").split("\n").filter((l) => l.trim());
+  let turns = 0;
+  let agentEnded = false;
+  let retries = 0;
+  const errorMessages = [];
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const toolCalls = {};
+  let toolErrors = 0;
+  const finalTexts = [];
+  for (const line of lines) {
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    switch (o.type) {
+      case "turn_end":
+        turns++;
+        break;
+      case "agent_end":
+        agentEnded = true;
+        break;
+      case "auto_retry_start":
+        retries++;
+        break;
+      case "tool_execution_end": {
+        toolCalls[o.toolName] = (toolCalls[o.toolName] || 0) + 1;
+        if (o.isError) toolErrors++;
+        break;
+      }
+      case "message_end": {
+        const m = o.message || {};
+        if (m.role !== "assistant") break;
+        const u = m.usage || {};
+        usage.input += u.input || 0;
+        usage.output += u.output || 0;
+        usage.cacheRead += u.cacheRead || 0;
+        usage.cacheWrite += u.cacheWrite || 0;
+        usage.cost += u.cost?.total || 0;
+        if (m.stopReason === "error" && m.errorMessage) errorMessages.push(String(m.errorMessage).slice(0, 300));
+        for (const c of m.content || []) if (c.type === "text" && c.text) finalTexts.push(c.text);
+        break;
+      }
+    }
+  }
+  const capped = !!(proc.error && String(proc.error).includes("ETIMEDOUT"));
+  return {
+    completed: agentEnded && !capped,
+    cappedByTimeout: capped,
+    num_turns: turns,
+    cost_usd: usage.cost || null,
+    usage,
+    retries,
+    errorMessages,
+    result: finalTexts.slice(-1)[0] ?? null,
+    is_error: errorMessages.length > 0 ? true : null,
+    b123Calls: Object.entries(toolCalls)
+      .filter(([k]) => ["execute", "last_error", "inspect_part", "measure", "render_view", "export", "mcp"].includes(k))
+      .reduce((a, [, v]) => a + v, 0),
+    executeCalls: toolCalls["execute"] || 0,
+    toolCalls,
+    toolErrors,
+  };
+}
+
+const t0 = Date.now();
+const args = [
+  "-p",
+  "--mode",
+  "json",
+  "--provider",
+  provider,
+  "--model",
+  model,
+  "--no-builtin-tools",
+  "--no-skills",
+  "--no-context-files",
+  "--no-prompt-templates",
+  "--no-themes",
+  "--append-system-prompt",
+  systemPromptPath,
+  "--session-dir",
+  runDir,
+  ...(thinking ? ["--thinking", thinking] : []),
+  "-a",
+  prompt,
+];
+const proc = spawnSync("pi", args, {
+  cwd: runDir,
+  // Minimal child env: no ambient ANTHROPIC_BASE_URL leaks in - the pi-home
+  // models.json (generated by ensurePiHome) is the only base-URL channel.
+  env: {
+    HOME: process.env.HOME,
+    PATH: process.env.PATH,
+    TERM: "dumb",
+    PI_CODING_AGENT_DIR: piHome,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  },
+  encoding: "utf8",
+  maxBuffer: 256 * 1024 * 1024,
+  timeout: timeoutMin * 60 * 1000,
+});
+const agentOut = parsePiStream(proc.stdout, proc);
+const wallMs = Date.now() - t0;
+
+const grade = runOracle(exportPath, caseId, casesFile, kase.checks.length);
+const overClaim = detectOverClaim(agentOut.result, grade);
+const metrics = buildMetrics({
+  grade,
+  overClaim,
+  costUsd: agentOut.cost_usd,
+  tokens: {
+    in: agentOut.usage.input,
+    out: agentOut.usage.output,
+    cacheRead: agentOut.usage.cacheRead,
+    cacheWrite: agentOut.usage.cacheWrite,
+  },
+  toolCallsTotal: Object.values(agentOut.toolCalls).reduce((a, v) => a + v, 0),
+  executes: agentOut.executeCalls,
+  wallMs,
+});
+
+const record = {
+  case: caseId,
+  agent: "pi",
+  provider,
+  model,
+  wallMs,
+  exportPath,
+  exported: fs.existsSync(exportPath),
+  grade,
+  metrics,
+  agentOut,
+};
+finishRun({ runDir, proc, grade, record });
+
+console.log(
+  JSON.stringify(
+    {
+      runDir,
+      wallMs: Math.round(wallMs / 1000) + "s",
+      exported: record.exported,
+      grade: grade.checks ? `${grade.passed}/${grade.total}` : grade,
+      failed: metrics.checksFailed,
+      overClaim,
+      agent: {
+        completed: agentOut.completed,
+        cappedByTimeout: agentOut.cappedByTimeout,
+        turns: agentOut.num_turns,
+        b123Calls: agentOut.b123Calls,
+        executeCalls: agentOut.executeCalls,
+        cost_usd: agentOut.cost_usd,
+        retries: agentOut.retries,
+        toolErrors: agentOut.toolErrors,
+        result: (agentOut.result || "").slice(0, 300),
+      },
+    },
+    null,
+    2,
+  ),
+);
+process.exit(0);
