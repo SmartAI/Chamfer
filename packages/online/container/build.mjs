@@ -9,11 +9,21 @@
 import { build } from "esbuild";
 import { cpSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { imageTagOf, readWranglerConfig } from "../scripts/wrangler-image.mjs";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
 const runtime = JSON.parse(readFileSync(here("./runtime-package.json"), "utf8"));
 const external = Object.keys(runtime.dependencies).flatMap((d) => [d, `${d}/*`]);
+
+// Version handshake (issue #56): stamp the pinned image tag into the bundle so
+// the running container can report the exact build it is, and the Worker can
+// refuse a turn when its expected version and the container's disagree. The tag
+// in wrangler.jsonc is the single source of truth - container-push.mjs pushes
+// under it, this bakes it in, and CHAMFER_EXPECTED_CONTAINER_VERSION mirrors it
+// - so all three move together on a bump. "unknown" only when the pin is
+// somehow unreadable, which the health gate then treats as skew.
+const imageVersion = imageTagOf(readWranglerConfig(import.meta.url)) ?? "unknown";
 
 rmSync(here("./dist"), { recursive: true, force: true });
 
@@ -25,7 +35,8 @@ await build({
   format: "esm",
   target: "node22",
   external,
+  define: { "process.env.CHAMFER_IMAGE_VERSION": JSON.stringify(imageVersion) },
 });
 
 cpSync(here("../../../patches"), here("./dist/patches"), { recursive: true });
-console.log("container context assembled: dist/server.mjs + dist/patches");
+console.log(`container context assembled: dist/server.mjs + dist/patches (image version ${imageVersion})`);

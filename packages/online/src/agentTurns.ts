@@ -17,6 +17,7 @@ import {
 } from "../../server/src/agent/agentStatus";
 import type { AgentSessionHost } from "../../server/src/routes/agent";
 import type { ArtifactStore } from "../../server/src/agent/artifactStore";
+import { containerVersionSkewMessage } from "./containerVersion";
 
 /** Hosted agent turns (issue #51, ADR 0003 increment 3b): the user Durable
  * Object drives one turn at a time on the user's container and is the only
@@ -151,6 +152,15 @@ export class SseFrameParser {
   }
 }
 
+/** Fire-and-forget trial-funnel signals (#73). The host says when a turn
+ * begins and when it writes an artifact; the DO binds these to the D1 counter
+ * with the authenticated user id. Never awaited on the turn path and idempotent
+ * once-per-user at the D1 layer, so calling on every committed turn is safe. */
+export interface TurnFunnelSink {
+  turnStarted(): void;
+  artifactWritten(): void;
+}
+
 export interface ContainerTurnHostDeps {
   /** The DO's conversation store - the store of record the drain lands in. */
   db: DatabaseSync;
@@ -162,12 +172,20 @@ export interface ContainerTurnHostDeps {
   /** This conversation's per-provider proxy base URL as reachable from inside
    * the container. */
   proxyBaseUrl(provider: Provider, conversationId: string): string;
+  /** The container image version this deployment expects (issue #56). When set,
+   * every turn checks it against the running container's /api/health before
+   * seeding and refuses on skew, so a Worker never exchanges requests with a
+   * mismatched image. Unset disables the handshake (hermetic tests, deployments
+   * that have not pinned it yet). */
+  expectedContainerVersion?: string;
   /** Serialized demo default model (the deployment's pinned anthropic model)
    * when a demo key can fund keyless turns; absent otherwise. */
   demoModelJson?: string;
   /** R2-backed artifact store the drain copies the export into. */
   artifacts: ArtifactStore;
   turnState: TurnStateStore;
+  /** Trial-funnel signals (#73); absent on deployments that do not count. */
+  funnel?: TurnFunnelSink;
   /** The minted tokens' TTL; defaults to the worst-case turn at the default
    * CAD-run cap (turnTokenTtlSeconds). */
   turnTtlSeconds?: number;
@@ -269,6 +287,13 @@ export class ContainerTurnHost implements AgentSessionHost {
           "Another conversation's turn is still running. Hosted turns run one at a time; wait for it to finish.",
         );
       }
+      // Version handshake (issue #56): confirm the running container is the
+      // image this Worker expects before any seed or prompt. A skew (new Worker,
+      // old container, or a rollout still in flight) is refused loudly here
+      // instead of letting the two layers exchange the bodiless 404s the #55
+      // incident produced. Waking the container for the check is fine - the
+      // turn is about to wake it anyway.
+      await this.assertContainerVersion();
       // Turn-start model selection (issue #53): the user's Settings model when
       // its provider is funded, else the demo default - resolved fresh every
       // prompt so a Settings change lands on the very next turn. The container
@@ -324,7 +349,13 @@ export class ContainerTurnHost implements AgentSessionHost {
         if (firstTurn) await this.abandonTurn(conversationId);
         throw new Error(await errorBodyOf(promptResponse));
       }
-      if (firstTurn) await this.commitTurn(conversationId);
+      if (firstTurn) {
+        await this.commitTurn(conversationId);
+        // Funnel stage 2 (#73): a turn actually started on the container.
+        // Once-per-user at the D1 layer, so a follow-up prompt mid-turn (which
+        // never reaches this firstTurn branch) is not double-counted anyway.
+        this.deps.funnel?.turnStarted();
+      }
     });
   }
 
@@ -611,7 +642,39 @@ export class ContainerTurnHost implements AgentSessionHost {
     });
     if (record.updated) {
       this.emit(conversationId, { type: "artifact_updated", revision: record.revision });
+      // Funnel stage 3 (#73): a genuine artifact rewrite reached R2.
+      this.deps.funnel?.artifactWritten();
     }
+  }
+
+  /** Version handshake (issue #56): reads the running container's reported
+   * image version from /api/health and throws an operator-facing error on any
+   * skew, so prompt() refuses before it seeds. Fails closed - an unreachable or
+   * versionless health response cannot confirm a match, so the turn is refused
+   * rather than run against an unidentified image. No-op when no version is
+   * expected. */
+  private async assertContainerVersion(): Promise<void> {
+    const expected = this.deps.expectedContainerVersion;
+    if (!expected) return;
+    let response: Response;
+    try {
+      response = await this.deps.containerFetch("/api/health");
+    } catch (error) {
+      throw new Error(
+        `Cannot verify the hosted agent container image (expected version ${expected}): its health endpoint ` +
+          `was unreachable (${error instanceof Error ? error.message : String(error)}). Refusing the turn.`,
+      );
+    }
+    if (!response.ok) {
+      throw new Error(
+        `Cannot verify the hosted agent container image (expected version ${expected}): health responded ` +
+          `HTTP ${response.status}. Refusing the turn.`,
+      );
+    }
+    const body = (await response.json().catch(() => null)) as { version?: unknown } | null;
+    const actual = typeof body?.version === "string" ? body.version : undefined;
+    const message = containerVersionSkewMessage(expected, actual);
+    if (message) throw new Error(message);
   }
 
   private async remoteStatus(conversationId: string): Promise<AgentRunStatus | undefined> {

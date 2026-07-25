@@ -123,6 +123,13 @@ function writeProbeConfig(tempDir) {
     },
     migrations: [{ tag: "v1", new_sqlite_classes: ["ChamferUserDurableObject"] }],
     r2_buckets: [{ binding: "ATTACHMENTS", bucket_name: "probe-attachments" }],
+    // AUTH_DB must be bound or makeGlobalDemoBudget(undefined) fails CLOSED and
+    // the demo Anthropic path 429s before it ever reaches the proxy (the id is a
+    // placeholder - wrangler dev uses local D1 storage, never the remote). The
+    // global_demo_spend / funnel tables self-create at runtime.
+    d1_databases: [
+      { binding: "AUTH_DB", database_name: "probe-auth", database_id: "probe-auth-local" },
+    ],
     assets: {
       directory: join(PACKAGE_DIR, "client-dist"),
       binding: "ASSETS",

@@ -61,6 +61,15 @@
   button, input, textarea {
     letter-spacing: 0;
   }
+
+  /* The 3D viewer's WebGL canvas owns its touch gestures (issue #54): without
+     this the browser claims one-finger drags for page scroll and pinches for
+     page zoom before OrbitControls sees them, so orbit/pinch-zoom fight the
+     page on phones. touch-action:none hands every gesture that starts on the
+     canvas to the controls. Scoped to the viewer so nothing else is affected. */
+  [data-testid="viewer"] canvas {
+    touch-action: none;
+  }
 }
 
 /* Verification receipt: ticks land one after another as checks are read.

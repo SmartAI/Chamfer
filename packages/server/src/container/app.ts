@@ -144,6 +144,11 @@ export interface ContainerAppOptions {
    * handler so its failure fails the seed - a prompt must never start a turn
    * on stale credentials. */
   applyLlmDelivery?: (delivery: ContainerLlmDelivery) => Promise<void>;
+  /** The image build identity (issue #56), baked in by build.mjs and reported
+   * on /api/health so the Worker can detect Worker/container version skew.
+   * Omitted in tests and local non-image runs; defaults to "unknown", which the
+   * Worker's handshake treats as a legacy image. */
+  imageVersion?: string;
 }
 
 export function createContainerApp(
@@ -169,7 +174,7 @@ export function createContainerApp(
     status: (conversationId) => sessions.status(conversationId),
   };
 
-  app.get("/api/health", (c) => c.json({ ok: true }));
+  app.get("/api/health", (c) => c.json({ ok: true, version: options.imageVersion ?? "unknown" }));
 
   app.post("/api/container/:conversationId/seed", async (c) => {
     const conversationId = c.req.param("conversationId");

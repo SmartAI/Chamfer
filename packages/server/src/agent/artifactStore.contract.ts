@@ -21,6 +21,14 @@ export function describeArtifactStoreContract(
     it("has no current artifact before an export is recorded", async () => {
       const { store } = makeHarness();
       expect(await store.current("conv-1")).toBeUndefined();
+      expect(await store.exists("conv-1")).toBe(false);
+    });
+
+    it("reports existence once an export is recorded, without fetching bytes", async () => {
+      const { store, writeExport } = makeHarness();
+      await store.record("conv-1", await writeExport("conv-1", "solid a"));
+      expect(await store.exists("conv-1")).toBe(true);
+      expect(await store.exists("conv-2")).toBe(false);
     });
 
     it("advances the revision strictly on every recorded rewrite", async () => {

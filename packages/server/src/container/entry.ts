@@ -44,6 +44,10 @@ const app = createContainerApp(db, sessions, artifactStore, {
     applyTurnLlmDelivery(db, delivery);
     await sessions.refreshCredentials();
   },
+  // The image build identity (issue #56). build.mjs replaces this at bundle
+  // time with the pinned wrangler.jsonc tag (esbuild define); an unbundled run
+  // leaves it undefined and /api/health reports "unknown".
+  imageVersion: process.env.CHAMFER_IMAGE_VERSION,
 });
 
 const server = serve({ fetch: app.fetch, hostname: "0.0.0.0", port }, (info) => {

@@ -148,4 +148,40 @@ describe("agentContainerRoutes probe", () => {
       error: "there is no container instance",
     });
   });
+
+  // Version handshake (issue #56): the probe surfaces the same comparison the
+  // turn host refuses on, as a monitoring read.
+  describe("version handshake", () => {
+    it("reports ok with both versions when the running image matches", async () => {
+      const { namespace } = fakeNamespace(() => Response.json({ ok: true, version: "img-7" }));
+      const response = await probe(agentContainerRoutes(namespace, "user:1", "img-7"));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, version: "img-7", expectedVersion: "img-7" });
+    });
+
+    it("reports a 502 skew when the running image is not the expected one", async () => {
+      const { namespace } = fakeNamespace(() => Response.json({ ok: true, version: "img-6" }));
+      const response = await probe(agentContainerRoutes(namespace, "user:1", "img-7"));
+      expect(response.status).toBe(502);
+      const body = (await response.json()) as { ok: boolean; version: string; expectedVersion: string; skew: string };
+      expect(body.ok).toBe(false);
+      expect(body.version).toBe("img-6");
+      expect(body.expectedVersion).toBe("img-7");
+      expect(body.skew).toContain("image skew");
+    });
+
+    it("reports a 502 skew for a legacy image that carries no version", async () => {
+      const { namespace } = fakeNamespace(() => Response.json({ ok: true }));
+      const response = await probe(agentContainerRoutes(namespace, "user:1", "img-7"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ ok: false, version: null, expectedVersion: "img-7" });
+    });
+
+    it("stays ok when no version is expected (handshake unconfigured)", async () => {
+      const { namespace } = fakeNamespace(() => Response.json({ ok: true, version: "img-6" }));
+      const response = await probe(agentContainerRoutes(namespace, "user:1"));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, expectedVersion: null });
+    });
+  });
 });

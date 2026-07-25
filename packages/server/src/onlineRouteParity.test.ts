@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Hono } from "hono";
-import type { ImageBlobStore } from "./imageBlobStore";
 import { openDb } from "./db";
 import { fakeLlm } from "./fakeLlm";
 import { createApp } from "./app";
-import type { AgentSessionHost } from "./routes/agent";
-import type { ArtifactStore } from "./agent/artifactStore";
-import { createOnlineApp, REQUIRED_ONLINE_ROUTES, type OnlineAgentHosting } from "../../online/src/onlineApp";
+import { createOnlineApp, REQUIRED_ONLINE_ROUTES } from "../../online/src/onlineApp";
+import { stubBlobStore as blobStore, stubOnlineHosting } from "./onlineTestSupport";
 
 // The cloud Worker (createOnlineApp) hand-assembles the same route modules as
 // this local server (createApp). When a new feature adds a route to createApp
@@ -29,26 +27,9 @@ const DELIBERATE_ONLINE_OMISSIONS: RegExp[] = [
   /^\/api\/test\//, // fake-LLM test controls (never in a real deployment)
 ];
 
-const blobStore: ImageBlobStore = {
-  write: async () => { throw new Error("unused"); },
-  read: async () => { throw new Error("unused"); },
-  remove: () => {},
-  maintain: () => ({ fileSystemBefore: [], fileSystemAfter: [], removed: [], failed: [] }),
-};
-
-// Route mounting only needs the seams' shapes, not a live container.
-const stubAgent: OnlineAgentHosting = {
-  sessions: {
-    prompt: async () => {},
-    abort: async () => {},
-    subscribe: () => () => {},
-    status: () => ({ running: false }),
-  } satisfies AgentSessionHost,
-  artifacts: {
-    record: async () => ({ revision: 1, updated: true }),
-    current: async () => undefined,
-  } satisfies ArtifactStore,
-};
+// Route mounting only needs the seams' shapes, not a live container; the shared
+// stub reports no artifacts, which is all the parity checks need.
+const stubAgent = stubOnlineHosting();
 
 function mountedPaths(app: Hono): Set<string> {
   return new Set(app.routes.map((route) => route.path));

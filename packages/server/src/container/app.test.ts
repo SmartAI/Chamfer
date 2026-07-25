@@ -19,6 +19,7 @@ function fakeStore(overrides: Partial<ArtifactStore> = {}): ArtifactStore {
   return {
     record: async (_conversationId, exportFile) => ({ revision: Math.floor(exportFile.mtimeMs), updated: false }),
     current: async () => undefined,
+    exists: async () => false,
     ...overrides,
   };
 }
@@ -45,11 +46,16 @@ function setup(
 }
 
 describe("container health", () => {
-  it("responds ok", async () => {
-    const { app } = setup();
+  it("responds ok and reports the baked image version (issue #56)", async () => {
+    const { app } = setup(fakeHost(), fakeStore(), { imageVersion: "abc1234" });
     const response = await app.request("/api/health");
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
+    expect(await response.json()).toEqual({ ok: true, version: "abc1234" });
+  });
+
+  it("reports version 'unknown' for an unbaked (test/local) build", async () => {
+    const { app } = setup();
+    expect(await (await app.request("/api/health")).json()).toEqual({ ok: true, version: "unknown" });
   });
 });
 

@@ -32,6 +32,12 @@ interface D1LikeStatement {
   run(): Promise<unknown>;
 }
 
+/** Fractions of the monthly cap worth alerting on: 80% (draining) and 100%
+ * (exhausted). Shared so the write-time crossing log (spend, below) and the
+ * cron probe's read-time level check (cronProbe.ts) never disagree on where
+ * the lines are. Ascending. */
+export const DEMO_BUDGET_ALERT_FRACTIONS = [0.8, 1] as const;
+
 /** What the debit paths (budgetedLlm, llmProxyRoutes) consume: check before
  * starting a demo turn, debit its cost after. Both are async - a D1 round trip. */
 export interface GlobalDemoBudget {
@@ -39,6 +45,9 @@ export interface GlobalDemoBudget {
   isExhausted(): Promise<boolean>;
   /** Add a turn's cost (micro-USD) to this month's total. No-op for <= 0. */
   spend(microUsd: number): Promise<void>;
+  /** This UTC month's spend so far, micro-USD. The cron probe reads it to alert
+   * on the cap being approached; 0 when no database is bound. */
+  currentSpendMicroUsd(): Promise<number>;
 }
 
 /** Binds a GlobalDemoBudget to the D1 auth database.
@@ -53,7 +62,7 @@ export function makeGlobalDemoBudget(
   monthlyMicroUsdCap: number,
 ): GlobalDemoBudget {
   if (!db) {
-    return { isExhausted: async () => true, spend: async () => {} };
+    return { isExhausted: async () => true, spend: async () => {}, currentSpendMicroUsd: async () => 0 };
   }
 
   let ensured = false;
@@ -79,6 +88,11 @@ export function makeGlobalDemoBudget(
       return (await spentThisMonth(utcMonth())) >= monthlyMicroUsdCap;
     },
 
+    async currentSpendMicroUsd() {
+      await ensureSchema();
+      return spentThisMonth(utcMonth());
+    },
+
     async spend(microUsd) {
       if (microUsd <= 0) return;
       await ensureSchema();
@@ -96,7 +110,7 @@ export function makeGlobalDemoBudget(
       // pick these up; increment 4's cron probe can key an alert on them.
       const after = await spentThisMonth(month);
       const before = after - microUsd;
-      for (const fraction of [0.8, 1]) {
+      for (const fraction of DEMO_BUDGET_ALERT_FRACTIONS) {
         const threshold = monthlyMicroUsdCap * fraction;
         if (before < threshold && after >= threshold) {
           const pct = Math.round(fraction * 100);

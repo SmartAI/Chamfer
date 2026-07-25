@@ -239,6 +239,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Guards against a stale async conversation-switch overwriting a newer one.
   const switchTokenRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
+  // Mirrors agentHostingOffline for the async switchTo/applyAgentEvent paths,
+  // so they gate on the freshest capability the probe has resolved rather than
+  // the value captured when their callback was built.
+  const agentHostingOfflineRef = useRef(false);
   useEffect(() => () => eventSourceRef.current?.close(), []);
   const didRestoreInitialConversationRef = useRef(false);
   // One title-generation attempt per conversation per visit.
@@ -261,6 +265,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       .getRuntimeCapabilities()
       .then((capabilities) => {
         if (cancelled) return;
+        agentHostingOfflineRef.current = !capabilities.agentHosting;
         setAgentHostingOffline(!capabilities.agentHosting);
         setFundingCapabilities({ demoQuota: capabilities.demoQuota, demoModel: capabilities.demoModel });
         // Seed the demo balance once we know this deployment funds keyless turns;
@@ -298,6 +303,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const applyAgentEvent = useCallback((conversationId: string, event: AgentStreamEvent) => {
     if (event.type === "artifact_updated") {
       void loadArtifact?.(conversationId);
+      // The conversation just produced a model; mark it so the sidebar dot turns
+      // green now, without waiting for the next full conversation-list fetch.
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId && !c.hasArtifact ? { ...c, hasArtifact: true } : c)));
       return;
     }
     setSessionState((current) => applyAgentStreamEvent(current, event));
@@ -334,6 +343,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           .sort((a, b) => a.seq - b.seq)
           .map((message) => JSON.parse(message.contentJson) as unknown);
         setSessionState({ messages: priorMessages, streaming: false });
+
+        // Deployments that don't host the agent (agentHosting:false) serve the
+        // conversation as read-only history: the /api/agent/*/events and
+        // /artifact routes 404, so subscribing and fetching would only spend a
+        // DO round-trip to log phantom failures. Skip both entirely there.
+        if (agentHostingOfflineRef.current) return;
 
         // Live-only stream: persisted history above covers everything earlier.
         eventSourceRef.current = openAgentEvents(id, (event) => {

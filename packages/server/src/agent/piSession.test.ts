@@ -370,7 +370,18 @@ describe("model switching (issue #53)", () => {
    * build (agent.state.model), and AgentSession.setModel is the supported,
    * provider-agnostic switch - the next LLM request must carry the new model.
    * This is the mechanism refreshCredentials relies on for a warm container
-   * receiving a different per-turn model. */
+   * receiving a different per-turn model.
+   *
+   * Design: switch BEFORE prompting and drive a SINGLE turn. The earlier form
+   * drove two full prompt -> agent_end round-trips (build-model turn, then a
+   * switched turn) over real localhost sockets; two real turns doubled the
+   * wall-clock and the variance, and under the full server suite's parallel
+   * collect/transform storm the worker's event loop starved enough that even a
+   * 30s deadline blew (issue #71 - the retry backstop this test carries was
+   * only a stopgap). Building with model-x, switching to model-y up front, then
+   * observing that the one outgoing request names model-y (and never model-x)
+   * proves the same contract - "after setModel the next LLM request carries
+   * the new model" - with half the real async work. */
   it("setModel changes which model the next LLM request names", INTEGRATION_TEST_OPTS, async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "chamfer-pi-setmodel-"));
     dataDirs.push(dataDir);
@@ -401,16 +412,13 @@ describe("model switching (issue #53)", () => {
         settingsManager: SettingsManager.inMemory(),
       });
       try {
-        const firstTurn = waitForAgentEnd(session);
-        void session.prompt("hi");
-        await firstTurn;
-        expect(models).toEqual(["model-x"]);
-
+        // Switch off the build-time model-x before any request goes out.
         await session.setModel(stubModel("model-y", baseUrl));
-        const secondTurn = waitForAgentEnd(session);
-        void session.prompt("again");
-        await secondTurn;
-        expect(models).toEqual(["model-x", "model-y"]);
+        const turn = waitForAgentEnd(session);
+        void session.prompt("hi");
+        await turn;
+        // The one outgoing request names the switched model, not model-x.
+        expect(models).toEqual(["model-y"]);
       } finally {
         session.dispose();
       }

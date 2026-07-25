@@ -87,6 +87,9 @@ class FakeContainer {
   artifact: { revision: number; bytes: Uint8Array } | undefined;
   status: { running: boolean } = { running: false };
   transcript404 = false;
+  /** The image version /api/health reports (issue #56 handshake). undefined
+   * reports no version, modelling a legacy image. */
+  healthVersion: string | undefined = "test-image";
   seedBodies: Array<{
     rows?: FakeRow[];
     llm?: { baseUrl: string; token: string; modelJson: string; provider: string };
@@ -106,6 +109,9 @@ class FakeContainer {
   fetch = async (path: string, init?: RequestInit): Promise<Response> => {
     const url = new URL(`https://container${path}`);
     this.callLog.push(url.pathname.split("/").pop() ?? url.pathname);
+    if (url.pathname.endsWith("/health")) {
+      return json({ ok: true, ...(this.healthVersion !== undefined ? { version: this.healthVersion } : {}) });
+    }
     if (url.pathname.endsWith("/seed")) {
       const body = JSON.parse(String(init?.body)) as {
         rows?: FakeRow[];
@@ -195,11 +201,12 @@ function recordingArtifacts() {
       return { revision, updated: true };
     },
     current: async () => undefined,
+    exists: async () => written.length > 0,
   };
   return { store, written };
 }
 
-function setup(options: { seedMessages?: number } = {}) {
+function setup(options: { seedMessages?: number; expectedContainerVersion?: string } = {}) {
   const db = openDb(":memory:");
   const conversation = createConversation(db, "hosted test");
   const seeded = options.seedMessages ?? 0;
@@ -221,6 +228,7 @@ function setup(options: { seedMessages?: number } = {}) {
     artifacts: artifacts.store,
     turnState: turnState.store,
     demoModelJson: DEMO_MODEL_JSON,
+    expectedContainerVersion: options.expectedContainerVersion,
     log: () => {},
   });
   const events: AgentServerEvent[] = [];
@@ -435,6 +443,44 @@ describe("ContainerTurnHost prompt", () => {
     await expect(host.prompt(conversationId, "make a box")).rejects.toThrow(/model not configured/);
     expect(turnState.state.marker).toBeUndefined();
     expect(host.status(conversationId).running).toBe(false);
+  });
+});
+
+// Version handshake (issue #56): the turn host checks the running container's
+// reported image version against the version this deployment expects before it
+// seeds, and refuses on skew instead of exchanging garbage across mismatched
+// layers (the #55 incident).
+describe("ContainerTurnHost version handshake", () => {
+  it("checks /api/health before seeding and proceeds on a match", async () => {
+    const { conversationId, container, host } = setup({ expectedContainerVersion: "test-image" });
+    await host.prompt(conversationId, "make a box");
+    expect(container.callLog[0]).toBe("health");
+    expect(container.callLog.indexOf("health")).toBeLessThan(container.callLog.indexOf("seed"));
+    expect(container.seedBodies).toHaveLength(1);
+  });
+
+  it("refuses the turn and never seeds when the container runs a different image", async () => {
+    const { conversationId, container, turnState, host } = setup({ expectedContainerVersion: "new-image" });
+    container.healthVersion = "old-image";
+    await expect(host.prompt(conversationId, "make a box")).rejects.toThrow(/image skew/i);
+    expect(container.seedBodies).toHaveLength(0);
+    expect(container.promptBodies).toHaveLength(0);
+    expect(turnState.state.marker).toBeUndefined();
+    expect(host.status(conversationId).running).toBe(false);
+  });
+
+  it("refuses a legacy image that reports no version", async () => {
+    const { conversationId, container, host } = setup({ expectedContainerVersion: "new-image" });
+    container.healthVersion = undefined;
+    await expect(host.prompt(conversationId, "make a box")).rejects.toThrow(/legacy image/i);
+    expect(container.seedBodies).toHaveLength(0);
+  });
+
+  it("skips the handshake entirely when no version is expected", async () => {
+    const { conversationId, container, host } = setup();
+    await host.prompt(conversationId, "make a box");
+    expect(container.callLog).not.toContain("health");
+    expect(container.seedBodies).toHaveLength(1);
   });
 });
 

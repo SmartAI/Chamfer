@@ -211,6 +211,15 @@ try {
   check("health lists no degraded capabilities", Array.isArray(health.degraded) && health.degraded.length === 0,
     JSON.stringify(health));
 
+  // Version handshake (issue #56): this stack builds the image fresh from the
+  // branch and expects the pinned tag, so the wake probe must report ok with the
+  // container's reported version equal to the expected one - a matched stack. A
+  // skew would answer 502 here and the turn host would refuse the turn below.
+  const skewProbe = await (await fetch(`${BASE}/api/online/agent-container/health`)).json();
+  check("container version handshake matches on the freshly built image",
+    skewProbe.ok === true && skewProbe.version != null && skewProbe.version === skewProbe.expectedVersion,
+    JSON.stringify(skewProbe));
+
   // --- Browser session -------------------------------------------------------
   try {
     browser = await chromium.launch();

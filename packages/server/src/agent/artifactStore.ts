@@ -47,6 +47,11 @@ export interface CurrentArtifact {
 export interface ArtifactStore {
   record(conversationId: string, exportFile: ArtifactExport): Promise<ArtifactRecord>;
   current(conversationId: string): Promise<CurrentArtifact | undefined>;
+  /** Whether the conversation has a current export, without materializing its
+   * bytes. The conversation list calls this per row to flag produced models, so
+   * backends answer it as cheaply as they can (a stat locally, a metadata HEAD
+   * on R2) rather than fetching the object. */
+  exists(conversationId: string): Promise<boolean>;
 }
 
 /** Observes the contracted export inside a conversation dir; undefined until
@@ -84,5 +89,9 @@ export class LocalArtifactStore implements ArtifactStore {
     const exportFile = observeExport(conversationAgentDir(this.dataDir, conversationId));
     if (!exportFile) return Promise.resolve(undefined);
     return Promise.resolve({ revision: Math.floor(exportFile.mtimeMs), bytes: exportFile.bytes });
+  }
+
+  exists(conversationId: string): Promise<boolean> {
+    return Promise.resolve(observeExport(conversationAgentDir(this.dataDir, conversationId)) !== undefined);
   }
 }

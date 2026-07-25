@@ -249,7 +249,10 @@ export function SettingsModal({ open, onOpenChange, onSaved }: SettingsModalProp
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      {/* Full-screen sheet on phones (issue #54): fill the viewport and scroll
+          the form inside, instead of a centered card that can overflow a short
+          screen. Reverts to the centered dialog at sm and up. */}
+      <DialogContent className="h-dvh max-w-none overflow-y-auto sm:h-auto sm:max-h-[85vh] sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>

@@ -87,6 +87,7 @@ export function createApp(db: DatabaseSync, llm: LlmStreamer = realLlm(), option
     db,
     observeLlm(llm, "conversation-title", agentRunTraceManager),
     attachmentStore,
+    { hasArtifact: (id) => artifactStore.exists(id) },
   ));
   app.route("/", designsRoutes(db));
   app.route("/", evidenceRoutes(db, attachmentStore));

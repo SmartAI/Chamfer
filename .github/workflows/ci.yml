@@ -20,3 +20,67 @@ jobs:
       - run: npm run typecheck --workspaces --if-present
       - run: npm run test --workspaces --if-present
       - run: npm run build
+
+  # Guard 2 of the Worker/container version handshake (issue #56): fail a PR that
+  # moves container-shipped code without bumping the pinned image tag, and keep
+  # the image tag equal to CHAMFER_EXPECTED_CONTAINER_VERSION. The runtime
+  # handshake (containerVersion.ts) is the backstop; this catches the mistake at
+  # review time. PR-only: on a push to main there is no base to diff against.
+  container-image-skew:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Make the base branch's tip available as origin/<base> for the diff
+      # (checkout does not guarantee that remote-tracking ref on a PR).
+      - run: git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: node packages/online/scripts/check-container-skew.mjs
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+
+  # Gate on the hosted (chamferonline.com) path so a broken container image,
+  # LLM proxy, or relay fails a PR instead of surfacing live (#73). This is the
+  # deliberately LIGHTER gate the issue sanctions: the hermetic llm-proxy probe
+  # plus a fake-LLM container boot smoke, NOT the full browser e2e
+  # (e2e:hosted-turns), which docker-builds the image AND boots wrangler dev + a
+  # local container + a real Chromium - too slow and flaky for the default PR
+  # gate. These two together still exercise the real container image build, a
+  # real agent turn, and the real proxy, and go red on a broken stack. Its own
+  # job so a hosted-path failure is attributable and does not slow the fast
+  # typecheck/test/build job above.
+  hosted-path:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Both checks below tolerate a missing Docker by skipping (exit 0) so they
+      # stay runnable on a laptop. CI Docker is always present, so assert it here
+      # up front: a silent skip must never be mistaken for a passing gate.
+      - name: Assert Docker is available (no silent skip)
+        run: docker version --format 'server {{.Server.Version}}'
+      # The llm-proxy probe throws unless client-dist/ exists; build it first.
+      - name: Build the online client bundle
+        run: npm run build:client --workspace @chamfer/online
+      # Hermetic wrangler dev + Node fake upstream, no Docker, ~90s: proves the
+      # container-facing LLM proxy routes, injects the real key, and streams.
+      - name: LLM proxy probe
+        run: npm run probe:llm-proxy --workspace @chamfer/online
+      # Docker-build the agent image, run one CHAMFER_FAKE_LLM=1 turn, and
+      # geometrically verify the exported STL (bbox ~= 10x20x30). No real keys.
+      # The build alone can take several minutes; the job timeout bounds it.
+      - name: Container boot smoke (fake-LLM, verifies exported STL)
+        run: node packages/online/container/smoke.mjs

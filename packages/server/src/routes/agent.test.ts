@@ -24,6 +24,7 @@ function fakeStore(overrides: Partial<ArtifactStore> = {}): ArtifactStore {
   return {
     record: async (_conversationId, exportFile) => ({ revision: Math.floor(exportFile.mtimeMs), updated: false }),
     current: async () => undefined,
+    exists: async () => false,
     ...overrides,
   };
 }

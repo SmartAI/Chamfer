@@ -12,10 +12,10 @@ const NOW = Date.parse("2026-07-23T12:00:00Z");
 // A generous per-account lifetime cap for the happy-path tests ($10 in micro-USD).
 const LIFETIME = 10_000_000;
 function openGlobal(): GlobalDemoBudget {
-  return { isExhausted: async () => false, spend: async () => {} };
+  return { isExhausted: async () => false, spend: async () => {}, currentSpendMicroUsd: async () => 0 };
 }
 function exhaustedGlobal(): GlobalDemoBudget {
-  return { isExhausted: async () => true, spend: async () => {} };
+  return { isExhausted: async () => true, spend: async () => {}, currentSpendMicroUsd: async () => 0 };
 }
 
 // Key resolution reads effective settings, whose env baseline would otherwise
@@ -410,7 +410,11 @@ describe("llmProxyRoutes", () => {
   it("debits the demo spend in dollars from the streamed usage breakdown", async () => {
     const db = openDb();
     const spends: number[] = [];
-    const global: GlobalDemoBudget = { isExhausted: async () => false, spend: async (m) => void spends.push(m) };
+    const global: GlobalDemoBudget = {
+      isExhausted: async () => false,
+      spend: async (m) => void spends.push(m),
+      currentSpendMicroUsd: async () => 0,
+    };
     const { fetchImpl } = fakeUpstream(() => sseResponse(USAGE_SSE));
     const app = llmProxyRoutes(db, {
       demoApiKey: "demo-key",

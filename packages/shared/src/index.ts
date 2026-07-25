@@ -586,8 +586,17 @@ export interface ConversationDto {
   /** New conversations require durable text specifications before their first plan.
    * Older databases leave this false so pre-feature conversations keep their legacy flow. */
   sourceSpecificationsRequired?: boolean;
-  /** Verdict of the most recent verify-gate-bearing run in this conversation. */
+  /** Verdict of the most recent verify-gate-bearing run in this conversation.
+   * Only the pre-pivot verify-gate flow (and Fusion inspection sheets) emit the
+   * `details.gate` this rolls up from; a build123d pi session verifies
+   * informally (measure / inspect_part / render_view) and never sets it, so for
+   * build123d conversations `hasArtifact` - not this - is the success signal. */
   lastGateStatus?: Gate["status"];
+  /** Whether this conversation has a current exported CAD model (the kernel ran
+   * the code and wrote artifact.stl). This is the durable "the agent finished
+   * and produced a model" signal for the build123d flow, which has no gate
+   * verdict; the list route overlays it from the artifact store. */
+  hasArtifact?: boolean;
   /** Active local-server run, when this conversation is driven headlessly. */
   liveRun?: Pick<HeadlessRunDto, "id" | "status" | "modelName" | "updatedAt">;
 }

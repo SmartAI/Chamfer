@@ -7,6 +7,7 @@ import { migrateDbBlobsToR2, R2AttachmentStore } from "./r2AttachmentStore";
 import { R2ArtifactStore } from "./r2ArtifactStore";
 import { budgetedLlm, DEFAULT_DEMO_LIFETIME_USD, DEFAULT_DEMO_MONTHLY_USD } from "./budget";
 import { makeGlobalDemoBudget } from "./globalDemoBudget";
+import { makeFunnelCounter } from "./funnelCounter";
 import { usdToMicroUsd } from "./demoPricing";
 import { createOnlineApp, DEMO_MODEL_ID, type OnlineAgentHosting } from "./onlineApp";
 import { llmProxyRoutes } from "./llmProxy";
@@ -76,6 +77,15 @@ export class ChamferUserDurableObject {
       Number(env.CHAMFER_DEMO_MONTHLY_USD) || DEFAULT_DEMO_MONTHLY_USD,
     );
     const globalBudget = makeGlobalDemoBudget(env.AUTH_DB, monthlyMicroUsd);
+    // Trial-funnel counter (#73), shared D1 aggregate like the global budget.
+    // Signups are counted in auth.ts; this object counts this user's first turn
+    // and first artifact, and the __system_health__ instance reads the summary
+    // into /api/online/health. Fail-safe: a counter write never breaks a turn.
+    const funnel = makeFunnelCounter(env.AUTH_DB);
+    const recordFunnel = (stage: "first_turn" | "artifact"): void => {
+      const userId = this.userId;
+      if (userId) void funnel.record(stage, userId);
+    };
     const llm = budgetedLlm(
       realLlm(),
       db,
@@ -118,7 +128,14 @@ export class ChamferUserDurableObject {
         proxyBaseUrl: (provider, conversationId) => agentContainerProxyBaseUrl(env, provider, conversationId),
         artifacts,
         turnState: durableTurnState(state.storage),
+        funnel: {
+          turnStarted: () => recordFunnel("first_turn"),
+          artifactWritten: () => recordFunnel("artifact"),
+        },
         turnTtlSeconds,
+        // Version handshake (issue #56): refuse a turn when the running
+        // container is not the image this deployment pinned.
+        expectedContainerVersion: env.CHAMFER_EXPECTED_CONTAINER_VERSION,
         // The demo fallback for keyless turns, present only when the demo key
         // can actually fund them - the same pin the chat path defaults to.
         demoModelJson: demoModel && env.CHAMFER_DEMO_ANTHROPIC_KEY ? JSON.stringify(demoModel) : undefined,
@@ -150,6 +167,7 @@ export class ChamferUserDurableObject {
         lifetimeMicroUsd,
         demoQuota: Boolean(env.CHAMFER_DEMO_ANTHROPIC_KEY),
         agent,
+        funnel,
       }),
     );
     // Container-facing LLM proxy (issue #48). Mounted here rather than in
@@ -174,7 +192,10 @@ export class ChamferUserDurableObject {
     // id, the same key the R2 prefix above uses, so compute isolation follows
     // state isolation. Also outside createOnlineApp - the route-parity guard
     // tracks the browser client's surface, and the probe is an operational hook.
-    app.route("/", agentContainerRoutes(env.AGENT_CONTAINER, agentContainerName(doId)));
+    app.route(
+      "/",
+      agentContainerRoutes(env.AGENT_CONTAINER, agentContainerName(doId), env.CHAMFER_EXPECTED_CONTAINER_VERSION),
+    );
     this.app = app;
   }
 

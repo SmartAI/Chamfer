@@ -10,7 +10,7 @@ export interface SidebarProps {
   onSettingsOpenChange: (open: boolean) => void;
 }
 
-type ConversationStatus = "ongoing" | "passed" | "failed" | "error" | "none";
+type ConversationStatus = "ongoing" | "passed" | "built" | "failed" | "error" | "none";
 
 interface ConversationStatusDot {
   status: ConversationStatus;
@@ -22,7 +22,9 @@ interface ConversationStatusDot {
 
 /** Every conversation shows exactly one dot so the list reads as a single
  * consistent status column. An active headless run wins over the stale verdict;
- * otherwise the last verify-gate result speaks; a fresh conversation is neutral. */
+ * then the last verify-gate result speaks (the Fusion / pre-pivot flow); then a
+ * produced model turns the dot green for the build123d flow, which emits no gate
+ * verdict; a conversation with nothing built yet is neutral. */
 function conversationStatusDot(conversation: ConversationDto): ConversationStatusDot {
   const live = conversation.liveRun;
   if (live && (live.status === "starting" || live.status === "running")) {
@@ -39,9 +41,12 @@ function conversationStatusDot(conversation: ConversationDto): ConversationStatu
       return { status: "failed", className: "bg-red-500", label: "Last run failed verification" };
     case "error":
       return { status: "error", className: "bg-amber-500", label: "Last run could not be verified" };
-    default:
-      return { status: "none", className: "border border-muted-foreground/50", label: "No run yet" };
   }
+  // No gate verdict (the build123d flow): a produced model is the success signal.
+  if (conversation.hasArtifact) {
+    return { status: "built", className: "bg-emerald-500", label: "Produced a model" };
+  }
+  return { status: "none", className: "border border-muted-foreground/50", label: "No run yet" };
 }
 
 export function Sidebar({ settingsOpen, onSettingsOpenChange }: SidebarProps) {

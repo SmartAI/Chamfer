@@ -38,6 +38,15 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
+  // Cron health probe (#73): the scheduled handler in worker.ts hits
+  // /api/online/health and the shared demo budget and alerts (Sentry + Workers
+  // Logs) on trouble, no-op when healthy. Every 15 minutes - fast enough to
+  // catch a bad deploy or a draining demo budget, cheap enough to stay well
+  // inside the free cron and D1 budgets (one DO subrequest + at most one D1 read
+  // per tick).
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
   "durable_objects": {
     "bindings": [
       { "name": "USER_DO", "class_name": "ChamferUserDurableObject" },
@@ -61,7 +70,7 @@
   "containers": [
     {
       "class_name": "ChamferAgentContainer",
-      "image": "registry.cloudflare.com/36e31b2d786d99d79f89dc9151b64ea2/chamfer-agent:7ee292c",
+      "image": "registry.cloudflare.com/36e31b2d786d99d79f89dc9151b64ea2/chamfer-agent:9571870",
       "instance_type": "standard-1",
       "max_instances": 10
     }
@@ -95,6 +104,15 @@
     "CHAMFER_DEMO_LIFETIME_USD": "10",
     "CHAMFER_DEMO_MONTHLY_USD": "1000",
     // Sentry environment tag for the Worker (the SENTRY_DSN itself is a secret).
-    "SENTRY_ENVIRONMENT": "production"
+    "SENTRY_ENVIRONMENT": "production",
+    // Version handshake (issue #56): the container image tag this Worker
+    // expects, MUST equal the tag in `containers[].image` above. build.mjs bakes
+    // that same tag into the image; the turn host and wake probe refuse when the
+    // running container reports a different version, catching a new Worker
+    // deployed against an old image (the #55 incident). Bump both together, then
+    // run container-image.yml to push the matching image BEFORE deploying the
+    // Worker - the ci.yml container-image-skew job fails a PR that moves the
+    // container code without moving these. containerVersion.ts holds the compare.
+    "CHAMFER_EXPECTED_CONTAINER_VERSION": "9571870"
   }
 }

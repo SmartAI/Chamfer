@@ -36,12 +36,14 @@ function recordingGlobal(): GlobalDemoBudget & { spends: number[] } {
     spend: async (microUsd: number) => {
       spends.push(microUsd);
     },
+    currentSpendMicroUsd: async () => spends.reduce((total, value) => total + value, 0),
   };
 }
 
 const EXHAUSTED_GLOBAL: GlobalDemoBudget = {
   isExhausted: async () => true,
   spend: async () => {},
+  currentSpendMicroUsd: async () => 0,
 };
 
 function spent(db: DatabaseSync): number | undefined {

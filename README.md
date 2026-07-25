@@ -36,11 +36,36 @@ CAD execution, native geometry and Fusion files, unrelated documents and project
 - Browser-local build123d execution with kernel-enforced checks
 - Live parametric sliders and STEP, STL, 3MF, or Python export
 
-## Benchmarks
+## How it compares to other coding agents
 
-Chamfer's agent is measured, not asserted.
-On a held-out set of mechanical CAD tasks, it produced the same correct parts as Claude Code and Codex driving the same CAD server, at roughly 1/6 of Claude Code's cost and 1/3 of its wall-clock time, with zero over-claims.
-The full methodology, the four-agent head-to-head, and the reproducible run summaries live in [`benchmarks/`](benchmarks/) - start with the [benchmark report](benchmarks/REPORT.md) if you want to see the evidence.
+The same models that power Chamfer (Claude, GPT, Gemini) can already drive a CAD MCP server on their own, so the honest question is whether a purpose-built harness earns its place.
+We measured it rather than asserting it.
+On a held-out set of mechanical CAD parts, Chamfer, Claude Code, and Codex each received the identical prompts and the identical build123d MCP server, and every exported STEP file was graded by a geometry-kernel oracle - never by the agent's own claim of success.
+
+Chamfer built the same correct parts as the generic agents, with far fewer tokens, fewer tool calls, and less money and time to get there:
+
+| Agent | Correctness | Tool calls / task | Context read / task | Output / task | Cost | Wall time |
+|---|---|---|---|---|---|---|
+| **Chamfer v0** | 129/129 | 6.3 | ~53k | 2,232 | **$1.79** | **722 s** |
+| **Chamfer v1** (default) | 129/129 | 5.0 | ~48k | 3,087 | $2.16 | 807 s |
+| Claude Code | 127/129 ¹ | 8.2 | ~433k | 9,849 | $10.50 | 2,283 s |
+| Codex ² | 129/129 | 15.5 | ~1,169k | 4,617 | n/a | 1,754 s |
+
+5 held-out parts, 3 runs each (15 runs per agent).
+Chamfer and Claude Code ran the same model (`claude-opus-4-8`); Codex ran `gpt-5.6-luna`.
+Tool calls, context, and output are per-task means; cost and wall time are totals over the 15 runs.
+That is **5.9x lower cost** and **3.2x lower wall time** than Claude Code for the same or better result, and 2.4x lower wall time than Codex - with zero over-claims (Chamfer never reported a part as done while a check was failing; Claude Code did once).
+
+The gap is not the model (Claude Code ran the identical one) and not the CAD server (identical binary for every arm) - it is the harness around the model:
+
+- **Purpose-scoped context.** Chamfer carries a one-screen CAD prompt and six curated tools; Claude Code carried 59 tool schemas plus general-purpose scaffolding into every turn. That is the ~8x difference in context read, and context is what you pay for.
+- **A verification contract, not verification wandering.** Chamfer measures once and reconciles every requested dimension, hole, and diameter against the request in a single pass, then stops - instead of looping through repeated self-checks.
+- **Terse output.** Output tokens are the expensive, latency-dominating ones; Chamfer emits ~4x fewer than Claude Code, which is most of the wall-clock gap.
+
+Full methodology, the side-by-side artifact gallery, and every reproducible run summary live in [`benchmarks/`](benchmarks/) - start with the [benchmark report](benchmarks/REPORT.md).
+
+¹ One slotted-plate run split cylindrical faces in the exported B-rep in a way the current oracle does not re-merge; the geometry looks correct on inspection, so read this as "at least 127/129." That same run is the single over-claim. The cost and time gaps are unaffected.
+² Codex ran through a proxy that does not report billing, so its cost is not comparable and its row supports the latency comparison only; it read ~22x Chamfer's context to do it.
 
 ## How to use it
 

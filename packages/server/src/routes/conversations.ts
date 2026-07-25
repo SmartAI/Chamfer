@@ -10,6 +10,7 @@ import {
   resolveTurnFunding,
   type AttachmentReferenceBlock,
   type CadEnvironment,
+  type ConversationDto,
   type GenerateTitleDto,
   type HeadlessRunDto,
   type ConversationEvent,
@@ -164,14 +165,31 @@ export function conversationsRoutes(
   options: {
     activeRun?: (conversationId: string) => HeadlessRunDto | undefined;
     stopActiveRun?: (runId: string) => Promise<void>;
+    /** Whether this conversation has a current exported model. Overlaid onto the
+     * DTO so the sidebar can mark a build123d conversation green once it has
+     * produced a model - that flow emits no gate verdict, so `lastGateStatus`
+     * would otherwise leave every successful conversation neutral. Backed by the
+     * artifact store (the export file on disk), so it survives restarts. */
+    hasArtifact?: (conversationId: string) => Promise<boolean>;
     /** Deployment default model backing server-initiated calls (title
      * generation) when the settings table names none - the online demo path. */
     defaultModelJson?: string;
   } = {},
 ): Hono {
-  const { activeRun, stopActiveRun } = options;
+  const { activeRun, stopActiveRun, hasArtifact } = options;
   const app = new Hono();
   const eventStore = new ConversationEventStore(db);
+
+  /** Decorates a stored conversation with its transient run/artifact status. */
+  async function withStatus(conversation: ConversationDto): Promise<ConversationDto> {
+    const run = activeRun?.(conversation.id);
+    const artifact = hasArtifact ? await hasArtifact(conversation.id) : false;
+    return {
+      ...conversation,
+      ...(run ? { liveRun: run } : {}),
+      ...(artifact ? { hasArtifact: true } : {}),
+    };
+  }
 
   app.post("/api/conversations", async (c) => {
     const body = (await c.req.json()) as {
@@ -211,17 +229,13 @@ export function conversationsRoutes(
     return c.json(conversation);
   });
 
-  app.get("/api/conversations", (c) => {
-    return c.json(listConversations(db).map((conversation) => {
-      const run = activeRun?.(conversation.id);
-      return run ? { ...conversation, liveRun: run } : conversation;
-    }));
+  app.get("/api/conversations", async (c) => {
+    return c.json(await Promise.all(listConversations(db).map(withStatus)));
   });
 
-  app.get("/api/conversations/:id", (c) => {
+  app.get("/api/conversations/:id", async (c) => {
     const conversation = getConversation(db, c.req.param("id"));
-    const run = conversation && activeRun?.(conversation.id);
-    return conversation ? c.json(run ? { ...conversation, liveRun: run } : conversation) : c.json({ error: "not found" }, 404);
+    return conversation ? c.json(await withStatus(conversation)) : c.json({ error: "not found" }, 404);
   });
 
   // This is the same subscribe-before-replay, buffer, deduplicate, then-live

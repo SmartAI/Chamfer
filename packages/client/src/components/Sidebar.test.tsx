@@ -69,6 +69,23 @@ describe("Sidebar conversation status dot", () => {
     expect(dot.className).toContain(klass);
   });
 
+  it("marks a build123d conversation that produced a model as built, even with no gate verdict", () => {
+    state.conversations = [convo({ hasArtifact: true })];
+    render(<Sidebar settingsOpen={false} onSettingsOpenChange={vi.fn()} />);
+    const dot = screen.getByTestId("convo-status-dot");
+    expect(dot.getAttribute("data-status")).toBe("built");
+    expect(dot.getAttribute("aria-label")).toBe("Produced a model");
+    expect(dot.className).toContain("bg-emerald-500");
+  });
+
+  it("lets an explicit gate verdict win over a produced model", () => {
+    state.conversations = [convo({ hasArtifact: true, lastGateStatus: "failed" })];
+    render(<Sidebar settingsOpen={false} onSettingsOpenChange={vi.fn()} />);
+    const dot = screen.getByTestId("convo-status-dot");
+    expect(dot.getAttribute("data-status")).toBe("failed");
+    expect(dot.className).toContain("bg-red-500");
+  });
+
   it("gives a conversation with no run a neutral, non-verdict dot", () => {
     state.conversations = [convo({})];
     render(<Sidebar settingsOpen={false} onSettingsOpenChange={vi.fn()} />);

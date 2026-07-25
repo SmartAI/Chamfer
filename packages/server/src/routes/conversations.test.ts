@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -173,6 +173,31 @@ describe("conversations routes", () => {
       .toBeUndefined();
     expect(db.prepare("SELECT 1 FROM conversation_ui_projection WHERE conversation_id = ?").get(conversation.id))
       .toBeUndefined();
+  });
+
+  it("reports hasArtifact once the conversation has exported a model", async () => {
+    const { app, dataDir } = makePersistentApp();
+    const conversation = (await (
+      await app.request("/api/conversations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "Bracket", cadEnvironment: "build123d" }),
+      })
+    ).json()) as ConversationDto;
+
+    // No export yet: the field is absent, so the sidebar shows a neutral dot.
+    const before = (await (await app.request(`/api/conversations/${conversation.id}`)).json()) as ConversationDto;
+    expect(before.hasArtifact).toBeUndefined();
+
+    // The kernel writes ./artifact.stl into the conversation's agent cwd.
+    const agentDir = join(dataDir, "agent", conversation.id);
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "artifact.stl"), "solid model\nendsolid model\n");
+
+    const after = (await (await app.request(`/api/conversations/${conversation.id}`)).json()) as ConversationDto;
+    expect(after.hasArtifact).toBe(true);
+    const list = (await (await app.request("/api/conversations")).json()) as ConversationDto[];
+    expect(list.find((c) => c.id === conversation.id)?.hasArtifact).toBe(true);
   });
 
   it("returns 409 with a structured error on duplicate (conversation_id, seq)", async () => {

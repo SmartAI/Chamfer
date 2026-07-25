@@ -105,7 +105,7 @@ function ProjectionButton({
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex h-11 w-11 touch-manipulation items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-8 md:w-8",
         active && "bg-foreground text-background hover:bg-foreground hover:text-background",
       )}
     >
@@ -211,7 +211,7 @@ export function Viewer({ geometry, artifactData = null, exportName = "model" }: 
           title="Fit model to view"
           disabled={!geometry}
           onClick={() => setFitRequest((value) => value + 1)}
-          className="flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+          className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 md:h-8 md:w-8"
         >
           <Focus className="h-4 w-4" />
         </button>
@@ -255,7 +255,7 @@ export function Viewer({ geometry, artifactData = null, exportName = "model" }: 
           disabled={!geometry || !artifactData}
           onClick={() => setExportOpen((value) => !value)}
           className={cn(
-            "flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+            "flex h-11 w-11 touch-manipulation items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 md:h-8 md:w-8",
             exportOpen && "bg-foreground text-background hover:bg-foreground hover:text-background",
           )}
         >
@@ -299,7 +299,7 @@ export function Viewer({ geometry, artifactData = null, exportName = "model" }: 
                   data-testid={`viewer-export-${format.id}`}
                   disabled={exporting !== null}
                   onClick={() => void exportAs(format.id)}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+                  className="flex w-full touch-manipulation items-center gap-2 rounded-sm px-2 py-2.5 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 md:py-1.5"
                 >
                   {exporting === format.id ? (
                     <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />

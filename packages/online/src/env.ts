@@ -73,6 +73,13 @@ export interface OnlineEnv {
    * Production leaves this unset and boots containers with
    * CHAMFER_APP_ORIGIN. See agentContainerBootEnv. */
   CHAMFER_CONTAINER_LLM_ORIGIN?: string;
+  /** The agent container image version this Worker expects (issue #56), mirroring
+   * the tag pinned in wrangler.jsonc's `containers[].image`. The turn host and the
+   * wake probe compare it against the container's reported /api/health version
+   * and refuse on skew, catching a new Worker deployed against an old image (the
+   * #55 incident). Bump it in lockstep with the image tag; unset disables the
+   * handshake. See containerVersion.ts. */
+  CHAMFER_EXPECTED_CONTAINER_VERSION?: string;
   /** Origin of the marketing/landing host (e.g. https://chamferonline.com).
    * When set, signed-out visitors on the app host are sent there. */
   CHAMFER_LANDING_ORIGIN?: string;

@@ -46,6 +46,16 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      // The phone-viewport eval runs only under the mobile project below.
+      testIgnore: "**/mobile-*.spec.ts",
+    },
+    {
+      // Phone-viewport eval for the responsive work (issue #54): a real touch
+      // device preset (Pixel 5, 393x851, hasTouch) so the mobile layout, touch
+      // targets, and no-horizontal-scroll invariant are gated like a user sees.
+      name: "mobile-chromium",
+      use: { ...devices["Pixel 5"] },
+      testMatch: "**/mobile-*.spec.ts",
     },
   ],
 });

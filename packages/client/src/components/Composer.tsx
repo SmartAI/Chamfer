@@ -104,7 +104,7 @@ export function Composer({ disabled, disabledHint, streaming = false, onStop, on
                 type="button"
                 data-testid="composer-attachment-remove"
                 aria-label={`Remove ${image.file.name}`}
-                className="absolute -right-1.5 -top-1.5 rounded-full border bg-background p-0.5 shadow-sm hover:bg-accent"
+                className="absolute -right-1.5 -top-1.5 touch-manipulation rounded-full border bg-background p-1 shadow-sm hover:bg-accent md:p-0.5"
                 onClick={() => setImages((prev) => prev.filter((p) => p.id !== image.id))}
               >
                 <X className="h-3 w-3" />
@@ -131,12 +131,13 @@ export function Composer({ disabled, disabledHint, streaming = false, onStop, on
           aria-label="Attach image"
           disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
+          className="h-11 w-11 shrink-0 touch-manipulation md:h-9 md:w-9"
         >
           <Paperclip className="h-4 w-4" />
         </Button>
         <textarea
           data-testid="composer-input"
-          className="min-h-[2.5rem] flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+          className="min-h-[2.75rem] flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 md:min-h-[2.5rem]"
           placeholder="Message Chamfer..."
           value={value}
           disabled={disabled}
@@ -154,6 +155,7 @@ export function Composer({ disabled, disabledHint, streaming = false, onStop, on
             aria-label="Stop the agent"
             title="Stop the agent"
             onClick={onStop}
+            className="h-11 w-11 shrink-0 touch-manipulation md:h-9 md:w-9"
           >
             <Square className="h-4 w-4 fill-current" />
           </Button>
@@ -163,6 +165,7 @@ export function Composer({ disabled, disabledHint, streaming = false, onStop, on
           data-testid="composer-send"
           disabled={disabled || value.trim().length === 0}
           onClick={handleSend}
+          className="h-11 shrink-0 touch-manipulation md:h-9"
         >
           {streaming ? "Queue" : "Send"}
         </Button>

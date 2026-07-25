@@ -3,6 +3,10 @@ import * as Sentry from "@sentry/cloudflare";
 import { createAuth } from "./auth";
 import { llmProxyGate } from "./llmProxy";
 import { CHAMFER_USER_ID_HEADER, type OnlineEnv, type SessionUser } from "./env";
+import { fetchOnlineHealth, runCronProbe, HEALTH_DO_NAME, type ProbeAlert } from "./cronProbe";
+import { makeGlobalDemoBudget } from "./globalDemoBudget";
+import { DEFAULT_DEMO_MONTHLY_USD } from "./budget";
+import { usdToMicroUsd } from "./demoPricing";
 
 export { ChamferUserDurableObject } from "./userDo";
 export { ChamferAgentContainer } from "./agentContainerDo";
@@ -77,7 +81,7 @@ app.get("/api/online/config", (c) =>
 // which is exactly the failure a plain GET "/" would miss.
 app.get("/api/online/health", (c) => {
   const namespace = c.env.USER_DO;
-  const stub = namespace.get(namespace.idFromName("__system_health__"));
+  const stub = namespace.get(namespace.idFromName(HEALTH_DO_NAME));
   // This route is public and pre-session: strip the user-id header so a
   // caller-supplied value can never reach a DO (the set-never-append
   // invariant in env.ts holds on every DO ingress path).
@@ -127,6 +131,41 @@ app.all("/api/*", (c) => {
   return stub.fetch(forwarded);
 });
 
+/** The scheduled (cron) health probe (#73). Runs on the wrangler.jsonc cron
+ * trigger: watches /api/online/health and the shared demo budget from outside
+ * and alerts on trouble (Sentry + Workers Logs), no-op when healthy. Kept
+ * inside the Sentry wrapper below so an uncaught probe failure still reports.
+ * Budget-cheap: one DO subrequest plus, on demo-funded deployments, one D1 read
+ * per tick. The demo-budget read is skipped unless a demo key funds turns. */
+async function runScheduledHealthProbe(env: OnlineEnv): Promise<void> {
+  const alert = (probeAlert: ProbeAlert): void => {
+    // console.error so Workers Logs captures it; Sentry so it pages/aggregates.
+    console.error(`[cron-probe] ${probeAlert.severity}: ${probeAlert.message}`);
+    if (probeAlert.severity === "error") {
+      Sentry.captureException(new Error(`[cron-probe] ${probeAlert.message}`));
+    } else {
+      Sentry.captureMessage(`[cron-probe] ${probeAlert.message}`, "warning");
+    }
+  };
+  const capMicroUsd = usdToMicroUsd(Number(env.CHAMFER_DEMO_MONTHLY_USD) || DEFAULT_DEMO_MONTHLY_USD);
+  const budget = makeGlobalDemoBudget(env.AUTH_DB, capMicroUsd);
+  await runCronProbe({
+    fetchHealth: () => fetchOnlineHealth(env.USER_DO),
+    // Only demo-funded deployments have a budget to drain; BYOK-only ones skip
+    // the D1 read entirely. A read hiccup degrades to "no reading", never a throw.
+    readDemoBudget: env.CHAMFER_DEMO_ANTHROPIC_KEY
+      ? async () => {
+          try {
+            return { spentMicroUsd: await budget.currentSpendMicroUsd(), capMicroUsd };
+          } catch {
+            return null;
+          }
+        }
+      : undefined,
+    alert,
+  });
+}
+
 // Wrap the front router so uncaught exceptions - in auth, session resolution,
 // or a rejected Durable Object subrequest - reach Sentry. When SENTRY_DSN is
 // unset (local dev, self-host) the SDK initializes disabled and sends nothing.
@@ -140,5 +179,17 @@ export default Sentry.withSentry(
     enableLogs: true,
     tracesSampleRate: 0.1,
   }),
-  { fetch: (request, env, ctx) => app.fetch(request, env as OnlineEnv, ctx) } as ExportedHandler<OnlineEnv>,
+  {
+    fetch: (request, env, ctx) => app.fetch(request, env as OnlineEnv, ctx),
+    scheduled: async (_controller, env, ctx) => {
+      // The probe owns its own failure handling; guard here too so a bug can
+      // never throw out of the cron invocation unreported.
+      ctx.waitUntil(
+        runScheduledHealthProbe(env as OnlineEnv).catch((error) => {
+          console.error("[cron-probe] probe run failed", error);
+          Sentry.captureException(error);
+        }),
+      );
+    },
+  } as ExportedHandler<OnlineEnv>,
 );

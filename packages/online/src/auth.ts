@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { Kysely } from "kysely";
 import { D1Dialect } from "kysely-d1";
 import type { OnlineEnv } from "./env";
+import { makeFunnelCounter } from "./funnelCounter";
 
 /** better-auth instance over the shared D1 auth database. Social sign-in only:
  * no passwords to store, and Google/GitHub account creation is the bot
@@ -9,10 +10,23 @@ import type { OnlineEnv } from "./env";
  * automated sign-ups). Constructed per request — the Kysely wrapper is cheap
  * and Workers get fresh env bindings each invocation. */
 export function createAuth(env: OnlineEnv, requestOrigin: string) {
+  // The trial-funnel counter's first stage (#73): every account creation is a
+  // signup. The hook is best-effort and fail-safe (makeFunnelCounter swallows
+  // its own errors), so a counter write can never fail an actual sign-up.
+  const funnel = makeFunnelCounter(env.AUTH_DB);
   return betterAuth({
     database: {
       db: new Kysely({ dialect: new D1Dialect({ database: env.AUTH_DB }) }),
       type: "sqlite",
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user) => {
+            await funnel.record("signup", user.id);
+          },
+        },
+      },
     },
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL ?? requestOrigin,

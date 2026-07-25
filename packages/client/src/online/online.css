@@ -527,6 +527,21 @@
   }
 }
 
+/* Narrow phones: the footer's single row crowds once the legal text and the
+   nav links compete for width, so stack them and drop the auto margin that
+   pushes nav to the right (issue #54). */
+@media (max-width: 560px) {
+  .online-landing-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+  }
+  .online-landing-footer nav {
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+}
+
 /* ---- gate loading state ---- */
 
 .online-gate-loading {

@@ -8,16 +8,17 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { imageRefOf } from "./wrangler-image.mjs";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const config = readFileSync(join(packageDir, "wrangler.jsonc"), "utf8");
 
-const match = config.match(/"image":\s*"registry\.cloudflare\.com\/[^/"]+\/([^/":]+):([^"]+)"/);
-if (!match) {
+const image = imageRefOf(config);
+if (!image) {
   console.error("container-push: wrangler.jsonc does not pin a registry.cloudflare.com image with a tag");
   process.exit(1);
 }
-const [, name, tag] = match;
+const { name, tag } = image;
 
 const run = (command, args) => execFileSync(command, args, { cwd: packageDir, stdio: "inherit" });
 run("node", ["container/build.mjs"]);

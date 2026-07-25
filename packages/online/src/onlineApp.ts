@@ -17,6 +17,7 @@ import type { ArtifactStore } from "../../server/src/agent/artifactStore";
 import type { LlmStreamer } from "../../server/src/llm";
 import type { ImageBlobStore } from "../../server/src/attachmentStore";
 import { ensureBudgetSchema, spentMicroUsd } from "./budget";
+import type { FunnelSummary } from "./funnelCounter";
 
 /** Route prefixes whose absence would silently break the deployed client while
  * the origin still answers 200 on "/". The CI route-parity test (routeParity.
@@ -44,6 +45,13 @@ export interface OnlineAgentHosting {
   artifacts: ArtifactStore;
 }
 
+/** Read side of the trial-funnel counter (#73), folded into the health
+ * response so the signup -> turn -> artifact counts are observable to any
+ * monitor (and the cron probe) without a new route to keep in route parity. */
+export interface OnlineFunnelReader {
+  summary(): Promise<FunnelSummary>;
+}
+
 /** The per-user API surface, assembled from the same route modules as the
  * local server's createApp. Every route the deployed client depends on must be
  * mounted here; the only permitted gaps are the deliberate omissions below,
@@ -61,7 +69,13 @@ export function createOnlineApp(
   db: DatabaseSync,
   llm: LlmStreamer,
   attachmentStore: ImageBlobStore,
-  options: { release?: string; lifetimeMicroUsd?: number; demoQuota?: boolean; agent?: OnlineAgentHosting } = {},
+  options: {
+    release?: string;
+    lifetimeMicroUsd?: number;
+    demoQuota?: boolean;
+    agent?: OnlineAgentHosting;
+    funnel?: OnlineFunnelReader;
+  } = {},
 ): Hono {
   const app = new Hono();
   ensureBudgetSchema(db);
@@ -92,12 +106,23 @@ export function createOnlineApp(
   // this Durable Object. Returns 503 (not 200) when a required route is absent
   // so an uptime monitor alerts on functional breakage, not just origin death.
   // `degraded` names the capabilities this deployment knowingly lacks.
-  app.get("/api/online/health", (c) => {
+  app.get("/api/online/health", async (c) => {
     const mounted = new Set(app.routes.map((route) => route.path));
     const missing = REQUIRED_ONLINE_ROUTES.filter((path) => !mounted.has(path));
     const degraded = options.agent ? [] : ["agent-hosting"];
+    // The trial-funnel summary (#73) rides along only when the counter is wired
+    // (the DO wires it; the route-parity harness does not), so the base health
+    // contract stays exactly { ok, service, missing, degraded }. The counter's
+    // own read is fail-safe, so this await cannot break the probe.
+    const funnel = options.funnel ? await options.funnel.summary() : undefined;
     return c.json(
-      { ok: missing.length === 0, service: "chamfer-online", missing, degraded },
+      {
+        ok: missing.length === 0,
+        service: "chamfer-online",
+        missing,
+        degraded,
+        ...(funnel ? { funnel } : {}),
+      },
       missing.length === 0 ? 200 : 503,
     );
   });
@@ -119,7 +144,19 @@ export function createOnlineApp(
   // The demo default model also backs server-initiated calls (title
   // generation): a fresh account has no settings row, and the budget layer
   // injects the demo key exactly like the chat path.
-  app.route("/", conversationsRoutes(db, llm, attachmentStore, { defaultModelJson }));
+  //
+  // hasArtifact reads the hosted artifact store (R2) so the sidebar's status
+  // dot turns - and stays - green on reload for a conversation that produced a
+  // model. Online build123d turns emit no gate verdict, so `hasArtifact` is
+  // their only success signal; without it the list reverts every settled
+  // conversation to a hollow "no run yet" ring after the live artifact_updated
+  // event is gone. Present only when hosting is configured; an unconfigured
+  // deployment produces no artifacts, so the dot stays neutral.
+  const hostedArtifacts = options.agent?.artifacts;
+  app.route("/", conversationsRoutes(db, llm, attachmentStore, {
+    defaultModelJson,
+    ...(hostedArtifacts ? { hasArtifact: (id) => hostedArtifacts.exists(id) } : {}),
+  }));
   app.route("/", designsRoutes(db));
   app.route("/", evidenceRoutes(db, attachmentStore));
   app.route("/", imageDiagnosticsRoutes(db, attachmentStore));

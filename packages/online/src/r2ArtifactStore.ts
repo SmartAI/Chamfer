@@ -62,4 +62,9 @@ export class R2ArtifactStore implements ArtifactStore {
       bytes: async () => new Uint8Array(await object.arrayBuffer()),
     };
   }
+
+  async exists(conversationId: string): Promise<boolean> {
+    // A metadata HEAD, so a list-route existence check never streams the object.
+    return (await this.bucket.head(this.key(conversationId))) !== null;
+  }
 }

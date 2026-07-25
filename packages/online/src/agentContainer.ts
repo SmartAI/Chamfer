@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { DEMO_MODEL_ID } from "./onlineApp";
 import type { Provider } from "@chamfer/shared";
 import { llmProxyPrefix } from "./llmProxy";
+import { containerVersionSkewMessage } from "./containerVersion";
 import type { OnlineEnv } from "./env";
 
 /** Per-user agent container attachment (issue #50, ADR 0003 increment 3a).
@@ -118,13 +119,17 @@ export function agentHostingConfigured(
  *
  * GET /api/online/agent-container/health wakes this user's container and
  * reports its /api/health plus the observed wake latency; increment 4's cron
- * probe hooks in here. `containers` is undefined on deployments without the
- * AGENT_CONTAINER binding (unit tests, hermetic probe configs) - that state
- * is reported as unconfigured, never a crash.
+ * probe hooks in here. It also surfaces the issue #56 version handshake: the
+ * container's reported image version, the version this deployment expects, and
+ * whether they are skewed - the same comparison the turn host refuses on, but
+ * as a monitoring read rather than a turn gate. `containers` is undefined on
+ * deployments without the AGENT_CONTAINER binding (unit tests, hermetic probe
+ * configs) - that state is reported as unconfigured, never a crash.
  */
 export function agentContainerRoutes(
   containers: DurableObjectNamespace | undefined,
   containerName: string,
+  expectedVersion?: string,
 ): Hono {
   const app = new Hono();
   app.get("/api/online/agent-container/health", async (c) => {
@@ -141,11 +146,25 @@ export function agentContainerRoutes(
       // the image's port once ready; the URL host is routing-irrelevant.
       const upstream = await stub.fetch("https://agent-container/api/health");
       const wakeMs = Date.now() - startedAt;
-      const body = (await upstream.json().catch(() => null)) as { ok?: boolean } | null;
+      const body = (await upstream.json().catch(() => null)) as { ok?: boolean; version?: unknown } | null;
       if (!upstream.ok || body?.ok !== true) {
         return c.json({ ok: false, configured: true, status: upstream.status, wakeMs }, 502);
       }
-      return c.json({ ok: true, configured: true, wakeMs });
+      const version = typeof body.version === "string" ? body.version : undefined;
+      const skew = containerVersionSkewMessage(expectedVersion, version);
+      // A skewed image is reported as not-ok with a 502, so the cron probe and
+      // any monitor treat it as an outage - it is one: turns refuse on it.
+      return c.json(
+        {
+          ok: !skew,
+          configured: true,
+          wakeMs,
+          version: version ?? null,
+          expectedVersion: expectedVersion ?? null,
+          ...(skew ? { skew } : {}),
+        },
+        skew ? 502 : 200,
+      );
     } catch (error) {
       return c.json(
         { ok: false, configured: true, error: error instanceof Error ? error.message : String(error) },
