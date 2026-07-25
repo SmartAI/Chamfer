@@ -121,11 +121,11 @@ export function SignInLanding({
             Watch it take shape.
           </h1>
           <p className="online-landing-tagline">
-            Chamfer is an AI CAD designer in your browser. It writes build123d Python, executes it
-            locally, and a geometry kernel verifies every dimension before you see it.
+            Chamfer is an AI CAD designer you drive from your browser. It writes build123d Python,
+            runs it on a real geometry kernel, and verifies every dimension before you see it.
           </p>
           <ul className="online-landing-points">
-            <li>CAD runs in your browser - geometry never leaves your machine.</li>
+            <li>Verified geometry - every model is measured against your request, not just claimed.</li>
             {config.demoQuota ? (
               <li>Free design credits to get started, or bring your own API key for unlimited use.</li>
             ) : (

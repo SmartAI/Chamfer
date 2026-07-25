@@ -2,12 +2,10 @@
 
 **Describe it. Watch it take shape.**
 
-Chamfer turns text and reference images into verified, parametric 3D models.
-For complex requests, it creates an evidence-backed plan, executes it over multiple steps, retrieves build123d guidance as needed, and checks both geometry and visual fidelity before finishing.
-Fine-tune dimensions with live sliders, then export STEP, STL, 3MF, or Python.
+Chamfer turns a sentence or a reference image into a real, parametric 3D model you can inspect and export.
+It writes build123d Python, runs it on a real geometry kernel, and measures what it built - dimensions, holes, body count - against your request before showing it to you.
 
-Prompts and attached images are sent to the model provider you configure.
-CAD execution, geometry, conversations, and settings stay local.
+Try it without installing anything at [chamferonline.com](https://chamferonline.com).
 
 ## Demos
 
@@ -21,12 +19,11 @@ CAD execution, geometry, conversations, and settings stay local.
 
 ## Features
 
+- Two CAD backends, picked per conversation: local build123d, or your live Autodesk Fusion session (auto-detected, no port to configure)
 - Text and image prompts for reference-guided CAD
-- Plan-first execution for long, multi-component builds
-- Retrieval-backed build123d docs and progressive skill loading
-- Context compaction for reliable long-running sessions
-- Multi-view visual self-verification against reference images
-- Browser-local build123d execution with kernel-enforced checks
+- Kernel-verified output: measured and visually inspected against the request before the agent finishes
+- Anthropic, OpenAI, or Google models - bring your own key
+- STL, OBJ, and GLB export from the viewer
 
 ## Quick start
 
@@ -36,8 +33,8 @@ npx chamfer
 
 Open the printed URL, add your API key in Settings, and describe a part, or click one of the preset prompts.
 
-Requires Node.js >= 22.19.
-The first part you build downloads the CAD kernel (build123d + OpenCascade via Pyodide, a few tens of MB) into your browser.
+Requires Node.js >= 22.19 and [uv](https://docs.astral.sh/uv/), which Chamfer uses to spawn the pinned `build123d-mcp` CAD server.
+The first build downloads that server and its CAD kernel, so it takes noticeably longer than the ones after it.
 
 ## Options
 

@@ -35,7 +35,7 @@ const OPTIONS: Array<{
   {
     value: "build123d",
     label: "Local build123d",
-    description: "Build, verify, view, and export geometry entirely in this browser.",
+    description: "Build with build123d on a real CAD kernel, then view and export the result here.",
     icon: Box,
   },
   {
